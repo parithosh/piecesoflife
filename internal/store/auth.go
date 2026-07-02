@@ -90,27 +90,17 @@ func (s *Store) ConsumeAuthToken(ctx context.Context, id int64) error {
 	return nil
 }
 
-// CountRecentLoginTokens counts login tokens created in the last hour for a user.
-func (s *Store) CountRecentLoginTokens(
-	ctx context.Context, userID int64,
-) (int, error) {
-	var count int
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM auth_tokens
-		 WHERE user_id = ? AND type = 'login'
-		 AND created_at > datetime('now', '-1 hour')`,
-		userID,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("counting recent login tokens: %w", err)
-	}
-
-	return count, nil
-}
-
 // CleanupExpiredTokens deletes consumed or expired auth tokens.
 func (s *Store) CleanupExpiredTokens(ctx context.Context) (int64, error) {
+	// Login attempts only matter for the one-hour rate window; a day of
+	// slack keeps the table tiny without racing the limiter.
+	if _, err := s.write.ExecContext(ctx,
+		`DELETE FROM login_attempts
+		 WHERE created_at < datetime('now', '-1 day')`,
+	); err != nil {
+		return 0, fmt.Errorf("cleaning up login attempts: %w", err)
+	}
+
 	result, err := s.write.ExecContext(ctx,
 		`DELETE FROM auth_tokens
 		 WHERE consumed_at IS NOT NULL OR expires_at < CURRENT_TIMESTAMP`,
@@ -201,4 +191,36 @@ func (s *Store) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 	}
 
 	return n, nil
+}
+
+// RecordLoginAttempt notes a magic-link request for a (hashed) email
+// address — known or unknown alike, so rate-limit behaviour can't be used
+// to probe which addresses have accounts.
+func (s *Store) RecordLoginAttempt(ctx context.Context, emailHash string) error {
+	_, err := s.write.ExecContext(ctx,
+		`INSERT INTO login_attempts (email_hash) VALUES (?)`, emailHash)
+	if err != nil {
+		return fmt.Errorf("recording login attempt: %w", err)
+	}
+
+	return nil
+}
+
+// CountRecentLoginAttempts counts magic-link requests for a (hashed) email
+// address in the last hour.
+func (s *Store) CountRecentLoginAttempts(
+	ctx context.Context, emailHash string,
+) (int, error) {
+	var count int
+
+	err := s.read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM login_attempts
+		 WHERE email_hash = ? AND created_at > datetime('now', '-1 hour')`,
+		emailHash,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting recent login attempts: %w", err)
+	}
+
+	return count, nil
 }

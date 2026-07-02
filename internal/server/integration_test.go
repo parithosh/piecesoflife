@@ -185,54 +185,37 @@ func TestCSRFEnforcement(t *testing.T) {
 }
 
 // TestLoginFormNoJS exercises the form-encoded POST /login fallback, which is
-// exempt from CSRF and must never reveal whether an email address exists.
+// exempt from CSRF and must never reveal whether an email address exists —
+// including through the rate limiter: known and unknown addresses must
+// produce the identical response sequence (3× sent, then rate_limited).
 func TestLoginFormNoJS(t *testing.T) {
 	env := newIntegrationEnv(t)
-	ctx := context.Background()
 
-	// A user with 3 recent login tokens is over the per-hour rate limit.
-	limited := env.createUser(t, "Dave", "dave@example.com")
-	for i := 0; i < 3; i++ {
-		_, hash, err := auth.GenerateRandomToken(32)
-		require.NoError(t, err)
-		require.NoError(t, env.store.CreateAuthToken(
-			ctx, limited.ID, hash, "login", time.Now().Add(30*time.Minute)))
+	env.createUser(t, "Dave", "dave@example.com")
+
+	post := func(email string) string {
+		form := url.Values{"email": {email}}
+		req := httptest.NewRequest(http.MethodPost, "/login",
+			strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		rr := env.do(t, req)
+		require.Equal(t, http.StatusSeeOther, rr.Code)
+
+		return rr.Header().Get("Location")
 	}
 
-	tests := []struct {
-		name         string
-		email        string
-		wantLocation string
-	}{
-		{
-			name:         "malformed email",
-			email:        "invalid",
-			wantLocation: "/login?error=email",
-		},
-		{
-			name:         "unknown email never reveals existence",
-			email:        "ghost@example.com",
-			wantLocation: "/login?sent=1",
-		},
-		{
-			name:         "rate limited after three recent tokens",
-			email:        "dave@example.com",
-			wantLocation: "/login?error=rate_limited",
-		},
-	}
+	assert.Equal(t, "/login?error=email", post("invalid"), "malformed email")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			form := url.Values{"email": {tt.email}}
-			req := httptest.NewRequest(http.MethodPost, "/login",
-				strings.NewReader(form.Encode()))
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-			rr := env.do(t, req)
-
-			require.Equal(t, http.StatusSeeOther, rr.Code)
-			assert.Equal(t, tt.wantLocation, rr.Header().Get("Location"))
-		})
+	// Identical distribution for a real account and a ghost: three sends,
+	// then the rate limiter — indistinguishable from the outside.
+	for _, email := range []string{"dave@example.com", "ghost@example.com"} {
+		for i := 1; i <= 3; i++ {
+			assert.Equal(t, "/login?sent=1", post(email),
+				"%s attempt %d should read as sent", email, i)
+		}
+		assert.Equal(t, "/login?error=rate_limited", post(email),
+			"%s attempt 4 should rate limit", email)
 	}
 }
 

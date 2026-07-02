@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -167,6 +168,26 @@ func (s *Server) requestMagicLink(ctx context.Context, email string) (magicLinkO
 		return magicLinkInvalidEmail, nil
 	}
 
+	// Rate limit: max 3 magic-link requests per address per hour. The
+	// counter is keyed by a hash of the submitted address and runs BEFORE
+	// the account lookup, so known, unknown, and deactivated addresses all
+	// produce the same response sequence (3× sent, then rate_limited) —
+	// the rate-limit boundary can't be used to enumerate accounts.
+	emailHash := fmt.Sprintf("%x", sha256.Sum256([]byte(email)))
+
+	attempts, err := s.store.CountRecentLoginAttempts(ctx, emailHash)
+	if err != nil {
+		return magicLinkSent, fmt.Errorf("counting login attempts: %w", err)
+	}
+
+	if attempts >= 3 {
+		return magicLinkRateLimited, nil
+	}
+
+	if err := s.store.RecordLoginAttempt(ctx, emailHash); err != nil {
+		return magicLinkSent, fmt.Errorf("recording login attempt: %w", err)
+	}
+
 	user, err := s.store.GetUserByEmail(ctx, email)
 	if err != nil {
 		s.logger.InfoContext(ctx, "Login attempt for unknown email",
@@ -182,16 +203,6 @@ func (s *Server) requestMagicLink(ctx context.Context, email string) (magicLinkO
 		)
 
 		return magicLinkSent, nil
-	}
-
-	// Rate limit: max 3 login tokens per hour.
-	count, err := s.store.CountRecentLoginTokens(ctx, user.ID)
-	if err != nil {
-		return magicLinkSent, fmt.Errorf("counting recent login tokens: %w", err)
-	}
-
-	if count >= 3 {
-		return magicLinkRateLimited, nil
 	}
 
 	raw, hash, err := auth.GenerateRandomToken(32)
