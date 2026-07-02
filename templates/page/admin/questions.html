@@ -1,0 +1,94 @@
+{{define "title"}}Question bank — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--admin">
+    <div class="pl-admin">
+
+      <div class="pl-admin-head">
+        <div>
+          <p class="pl-eyebrow pl-eyebrow--peacock">The Loom</p>
+          <h1 class="pl-admin-title">Question bank</h1>
+        </div>
+        <nav class="pl-tabs" aria-label="Admin sections">
+          <a href="/admin"           class="pl-tab">Dashboard</a>
+          <a href="/admin/members"   class="pl-tab">Members</a>
+          <a href="/admin/questions" class="pl-tab is-active" aria-current="page">Questions</a>
+          <a href="/admin/settings"  class="pl-tab">Settings</a>
+        </nav>
+      </div>
+
+      <div class="zari pl-admin-rule" aria-hidden="true"></div>
+
+      <div class="pl-qbank-head">
+        <p class="pl-eyebrow">{{.Total}} questions in the bank</p>
+        <button type="button" id="add-q-btn" class="pl-btn pl-btn--gold">＋ Add question</button>
+      </div>
+
+      <div id="question-bank-list" class="pl-qbank">
+        {{range .Questions}}
+        <div class="pl-q-row" data-id="{{.ID}}">
+          <div class="pl-q-row-text">
+            <p class="pl-q-row-prompt">{{.Text}}</p>
+            <span class="pl-q-chip">{{categoryLabel .Category}}</span>
+            {{if .Used}}<span class="pl-q-chip pl-q-chip--used">Used</span>{{end}}
+          </div>
+          <div class="pl-q-row-actions">
+            <button type="button" class="pl-chip-btn edit-q"
+                    data-id="{{.ID}}" data-text="{{.Text}}" data-category="{{.Category}}">Edit</button>
+            <button type="button" class="pl-chip-btn pl-chip-btn--danger delete-q"
+                    data-id="{{.ID}}">Delete</button>
+          </div>
+        </div>
+        {{end}}
+      </div>
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken };
+
+document.getElementById('add-q-btn').addEventListener('click', async () => {
+    const text = prompt('Question text:');
+    if (!text) return;
+    const category = prompt('Category (life_updates, deep_thoughts, fun_silly, memories, goals, recommendations, hypotheticals):') || 'life_updates';
+    const res = await fetch('/api/question-bank', {
+        method: 'POST', headers: apiHeaders,
+        body: JSON.stringify({ text, category }),
+    });
+    if (res.ok) location.reload();
+    else alert('Failed to add question.');
+});
+
+document.querySelectorAll('.edit-q').forEach(btn => {
+    btn.addEventListener('click', async function() {
+        const id = this.dataset.id;
+        const text = prompt('Edit question:', this.dataset.text);
+        if (!text) return;
+        const category = prompt('Category:', this.dataset.category) || this.dataset.category;
+        const res = await fetch(`/api/question-bank/${id}`, {
+            method: 'PATCH', headers: apiHeaders,
+            body: JSON.stringify({ text, category }),
+        });
+        if (res.ok) location.reload();
+    });
+});
+
+document.querySelectorAll('.delete-q').forEach(btn => {
+    btn.addEventListener('click', async function() {
+        if (!confirm('Delete this question?')) return;
+        const res = await fetch(`/api/question-bank/${this.dataset.id}`, {
+            method: 'DELETE', headers: { 'X-CSRF-Token': csrfToken },
+        });
+        if (res.ok) location.reload();
+    });
+});
+</script>
+{{end}}

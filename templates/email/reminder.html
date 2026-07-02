@@ -1,0 +1,26 @@
+{{define "email_title"}}{{if .IsFinal}}Last chance{{else}}Reminder{{end}} — {{.LoopName}} {{.Month}}{{end}}
+
+{{define "email_content"}}
+<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">
+  {{if .IsFinal}}Last chance to share{{else}}Just a friendly nudge{{end}}
+</h2>
+<p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
+<p style="margin:0 0 16px;">
+  This issue of <strong>{{.LoopName}}</strong> is still open. Here are the questions:
+</p>
+
+<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#333;">
+  {{range .Questions}}
+  <li style="margin:6px 0;">{{.}}</li>
+  {{end}}
+</ul>
+
+{{if gt .DaysLeft 0}}
+<p style="margin:0 0 16px;color:#666;">
+  There {{if eq .DaysLeft 1}}is 1 day{{else}}are {{.DaysLeft}} days{{end}} left until this issue closes.
+  So far {{.Responded}} of {{.Total}} members have shared.
+</p>
+{{end}}
+
+{{template "cta_button" .CTA}}
+{{end}}

@@ -1,0 +1,94 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{block "title" .}}PiecesOfLife{{end}}</title>
+
+    <link rel="preload" href="/static/fonts/marcellus-400-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/fonts/newsreader-400-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/fonts/mukta-600-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/static/oat.css?v={{assetVersion}}">
+    <link rel="stylesheet" href="/static/app.css?v={{assetVersion}}">
+    <link rel="stylesheet" href="/static/pallu.css?v={{assetVersion}}">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/static/img/icon-192.png">
+    <meta name="theme-color" content="#7a0f38">
+
+    {{if and .Settings .Settings.AccentColor}}
+    <style>
+    :root { --accent: {{.Settings.AccentColor}}; }
+    </style>
+    {{end}}
+
+    {{block "head" .}}{{end}}
+</head>
+<body>
+    {{block "nav" .}}
+    {{if .Settings}}
+    <nav class="pl-nav">
+        <a href="/" class="pl-nav-brand">
+            <img src="/static/img/logo.svg" alt="" class="pl-nav-logo">
+            <span class="pl-nav-wordmark">{{if .Settings.LoopName}}{{.Settings.LoopName}}{{else}}PiecesOfLife{{end}}</span>
+        </a>
+        {{if .User}}
+        <div class="pl-nav-links">
+            <a href="/issues" data-nav="/issues">Issues</a>
+            <a href="/albums" data-nav="/albums">Media</a>
+            {{if eq .User.Role "admin"}}
+                <a href="/admin" data-nav="/admin">Admin</a>
+            {{end}}
+            <a href="/profile" data-nav="/profile" class="pl-nav-user" aria-label="Profile: {{.User.Name}}">
+                <span class="pl-nav-ava">{{letterAvatar .User.Name}}</span>
+            </a>
+        </div>
+        {{end}}
+    </nav>
+    {{end}}
+    {{end}}
+
+    <main class="{{block "mainClass" .}}{{end}}">
+        {{block "content" .}}{{end}}
+    </main>
+
+    <script>
+    /* Mark the current section in the Pallu nav (marigold + underline). */
+    (function () {
+        var path = window.location.pathname;
+        document.querySelectorAll('nav.pl-nav a[data-nav]').forEach(function (a) {
+            var base = a.getAttribute('data-nav');
+            if (path === base || path.indexOf(base + '/') === 0) {
+                a.classList.add('is-active');
+                a.setAttribute('aria-current', 'page');
+            }
+        });
+    })();
+    </script>
+    <script type="speculationrules">
+    {
+        "prefetch": [{
+            "where": { "and": [
+                { "href_matches": "/*" },
+                { "not": { "href_matches": "/auth/*" } },
+                { "not": { "href_matches": "/dev/*" } },
+                { "not": { "href_matches": "/api/*" } },
+                { "not": { "href_matches": "/uploads/*" } }
+            ]},
+            "eagerness": "moderate"
+        }]
+    }
+    </script>
+    <script src="/static/oat.js?v={{assetVersion}}"></script>
+    <script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function() {
+            navigator.serviceWorker.register('/static/sw.js?v={{assetVersion}}').catch(function() {});
+        });
+    }
+    </script>
+    {{block "scripts" .}}{{end}}
+</body>
+</html>
+{{end}}

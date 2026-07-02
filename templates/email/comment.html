@@ -1,0 +1,16 @@
+{{define "email_title"}}{{.CommenterName}} commented on your response{{end}}
+
+{{define "email_content"}}
+<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">
+  {{.CommenterName}} commented on your response
+</h2>
+<p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
+<p style="margin:0 0 8px;">On the question:</p>
+<p style="margin:0 0 16px;font-style:italic;color:#555;">{{.QuestionText}}</p>
+
+<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #7a0f38;background:#fbf4e3;color:#333;">
+  {{.CommentExcerpt}}
+</blockquote>
+
+{{template "cta_button" .CTA}}
+{{end}}

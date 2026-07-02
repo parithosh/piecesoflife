@@ -1,0 +1,199 @@
+{{define "title"}}Media — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+<section class="pl-albums">
+    <header class="pl-albums-head">
+        <div>
+            <p class="pl-eyebrow pl-eyebrow--peacock">{{.Settings.LoopName}}</p>
+            <h1 class="pl-display pl-albums-title">Media</h1>
+            <p class="pl-albums-sub" data-album-subtitle>Every photo, video, and audio ever shared.</p>
+        </div>
+        <div class="album-view-toggle" role="group" aria-label="Media view">
+            <button type="button" class="album-view-btn is-active" data-view="issue" aria-pressed="true">By issue</button>
+            <button type="button" class="album-view-btn" data-view="all" aria-pressed="false">All media</button>
+        </div>
+    </header>
+
+    <div id="album-grid">
+        <p class="pl-album-quiet">Loading media…</p>
+    </div>
+</section>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/lightbox.js?v={{assetVersion}}"></script>
+<script>
+const MONTHS = ['January','February','March','April','May','June',
+    'July','August','September','October','November','December'];
+const VIEW_KEY = 'pol-album-view';
+let albumItems = [];
+
+function currentView() {
+    const v = localStorage.getItem(VIEW_KEY);
+    return v === 'all' ? 'all' : 'issue';
+}
+
+function ts(item) {
+    const t = Date.parse(item.created_at || '');
+    return Number.isNaN(t) ? 0 : t;
+}
+
+function cardHtml(item) {
+    const caption = escapeHtml(item.caption || '');
+    const name = escapeHtml(item.user_name || '');
+    const url = escapeHtml(item.url || '');
+    const month = `${item.year}-${String(item.month).padStart(2, '0')}`;
+    const dumpTag = item.from_dump ? '<span class="album-dump-tag">dump</span>' : '';
+    const captionHtml = caption ? `<div class="album-caption">${caption}</div>` : '';
+    const meta = `
+            <figcaption>
+                <span>${name}${dumpTag}</span>
+                <span>${month}</span>
+            </figcaption>
+            ${captionHtml}`;
+
+    if (item.kind === 'video') {
+        return `
+        <figure class="album-card album-card--video">
+            <video src="${url}" controls preload="metadata" playsinline></video>
+            ${meta}
+        </figure>
+        `;
+    }
+
+    if (item.kind === 'audio') {
+        return `
+        <figure class="album-card album-card--audio">
+            <div class="album-audio-face" aria-hidden="true">◉</div>
+            <audio src="${url}" controls preload="metadata"></audio>
+            ${meta}
+        </figure>
+        `;
+    }
+
+    return `
+        <figure class="album-card"
+                data-lightbox
+                data-lightbox-src="${url}"
+                data-lightbox-caption="${caption} — ${name}"
+                tabindex="0" role="button"
+                aria-label="View photo${caption ? ': ' + caption : ''} by ${name}">
+            <img src="${url}" alt="${caption}" loading="lazy">
+            ${meta}
+        </figure>
+    `;
+}
+
+function issueLabel(item) {
+    const m = MONTHS[(item.month - 1)] || '';
+    return item.title ? escapeHtml(item.title) : `${m} ${item.year}`;
+}
+
+function render() {
+    const grid = document.getElementById('album-grid');
+    const subtitle = document.querySelector('[data-album-subtitle]');
+    const view = currentView();
+
+    // Sync toggle UI.
+    document.querySelectorAll('.album-view-btn').forEach(btn => {
+        const active = btn.dataset.view === view;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-pressed', String(active));
+    });
+
+    if (!albumItems.length) {
+        grid.innerHTML = '<p class="pl-album-quiet">No media yet.</p>';
+        return;
+    }
+
+    if (view === 'all') {
+        subtitle.textContent = 'Every photo, video, and audio — newest first.';
+        const items = albumItems.slice().sort((a, b) => ts(b) - ts(a));
+        grid.innerHTML = `<div class="album-grid">${items.map(cardHtml).join('')}</div>`;
+    } else {
+        subtitle.textContent = 'Every photo, video, and audio — grouped by issue, newest first.';
+        // Group by issue, order groups newest issue first.
+        const groups = new Map();
+        for (const item of albumItems) {
+            if (!groups.has(item.issue_id)) groups.set(item.issue_id, []);
+            groups.get(item.issue_id).push(item);
+        }
+        const ordered = [...groups.values()].sort((ga, gb) => {
+            const a = ga[0], b = gb[0];
+            return (b.year - a.year) || (b.month - a.month);
+        });
+        grid.innerHTML = ordered.map(items => {
+            const sorted = items.slice().sort((a, b) => ts(b) - ts(a));
+            const count = sorted.length;
+            return `
+                <section class="album-issue-group">
+                    <div class="album-issue-head">
+                        <h2 class="album-issue-title">${issueLabel(sorted[0])}</h2>
+                        <span class="album-issue-count">${count} item${count === 1 ? '' : 's'}</span>
+                    </div>
+                    <div class="album-grid">${sorted.map(cardHtml).join('')}</div>
+                </section>
+            `;
+        }).join('');
+    }
+
+    if (window.__polLightbox) window.__polLightbox.attach();
+}
+
+async function loadAlbums() {
+    const grid = document.getElementById('album-grid');
+    grid.innerHTML = '<p class="pl-album-quiet">Loading media…</p>';
+
+    function showAlbumError() {
+        grid.innerHTML = `
+            <div class="pl-alert pl-alert--error pl-album-error" role="alert">
+                <span>Couldn't load media.</span>
+                <button type="button" class="pl-btn pl-btn--outline" data-album-retry>Retry</button>
+            </div>`;
+        grid.querySelector('[data-album-retry]').addEventListener('click', loadAlbums);
+    }
+
+    try {
+        const res = await fetch('/api/albums');
+        if (!res.ok) {
+            showAlbumError();
+            return;
+        }
+        const data = await res.json();
+        albumItems = data.items || [];
+        render();
+    } catch {
+        showAlbumError();
+    }
+}
+
+document.querySelectorAll('.album-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        localStorage.setItem(VIEW_KEY, btn.dataset.view);
+        render();
+    });
+});
+
+// Keyboard access: Enter / Space on a focused photo opens the lightbox by
+// re-dispatching the click the lightbox already listens for.
+document.getElementById('album-grid').addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const fig = ev.target.closest('[data-lightbox]');
+    if (!fig) return;
+    ev.preventDefault();
+    fig.click();
+});
+
+function escapeHtml(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+loadAlbums();
+</script>
+{{end}}

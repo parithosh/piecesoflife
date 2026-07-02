@@ -1,0 +1,45 @@
+# ⚠ DEVELOPMENT ONLY — do not deploy this file.
+#
+# DEV_MODE=true disables real email delivery (magic links are printed to the
+# container logs instead), enables /dev/login?email=... for instant sessions,
+# and hot-reloads templates. The session secret below is public and the SMTP
+# credentials are fakes.
+#
+#   docker compose -f docker-compose.dev.yml up --build
+#   open http://localhost:8090  (log in with admin@example.com — grab the
+#   magic link from `docker compose logs`, or use /dev/login?email=...)
+services:
+  app:
+    build: .
+    ports:
+      - "8090:8090"
+    environment:
+      PORT: "8090"
+      BASE_URL: "http://localhost:8090"
+      DEV_MODE: "true"
+      DATABASE_PATH: "/data/db/piecesoflife.db"
+      UPLOAD_PATH: "/data/uploads"
+      EMAIL_PROVIDER: "smtp"
+      SMTP_HOST: "smtp.example.com"
+      SMTP_PORT: "465"
+      SMTP_USER: "dev"
+      SMTP_PASS: "dev"
+      JMAP_SESSION_URL: "https://api.fastmail.com/jmap/session"
+      JMAP_API_TOKEN: ""
+      FROM_EMAIL: "noreply@example.com"
+      FROM_NAME: "PiecesOfLife Dev"
+      ADMIN_EMAIL: "admin@example.com"
+      SESSION_SECRET: "dev-only-change-me"
+      LOG_LEVEL: "info"
+      LOG_FORMAT: "json"
+    volumes:
+      - app-data:/data
+      # Hot-reload: templates re-parse per request in DEV_MODE, and static
+      # assets are served from disk — edit and refresh.
+      - ./templates:/templates:ro
+      - ./static:/static:ro
+    working_dir: /
+    restart: unless-stopped
+
+volumes:
+  app-data:

@@ -1,0 +1,21 @@
+{{define "email_title"}}{{.LoopName}} — {{.Month}} is open{{end}}
+
+{{define "email_content"}}
+<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">
+  {{.LoopName}} — {{.Month}} Edition
+</h2>
+<p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
+<p style="margin:0 0 16px;">A new issue is open. Here's what we're answering this round:</p>
+
+<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#333;">
+  {{range .Questions}}
+  <li style="margin:6px 0;">{{.}}</li>
+  {{end}}
+</ul>
+
+{{template "cta_button" .CTA}}
+
+<p style="margin:24px 0 0;color:#666;font-size:14px;">
+  You can answer any or all of the questions, add photos or recordings, and come back to edit before the deadline.
+</p>
+{{end}}

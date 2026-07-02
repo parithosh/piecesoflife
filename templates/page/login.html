@@ -1,0 +1,123 @@
+{{define "title"}}Log in — PiecesOfLife{{end}}
+
+{{define "nav"}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page pl-login-page">
+<section class="pl-login">
+<div class="pl-card pl-card--login">
+    <div class="zari" aria-hidden="true"></div>
+    <div class="pl-login-body">
+        <div class="mango pl-login-motif" aria-hidden="true"></div>
+        <div class="pl-login-inner">
+            <header>
+                <img src="/static/img/logo.svg" alt="" class="pl-login-logo">
+                <p class="pl-eyebrow pl-eyebrow--peacock">{{if and .Settings .Settings.LoopName}}{{.Settings.LoopName}}{{else}}PiecesOfLife{{end}}</p>
+                <h1 class="pl-login-title">Welcome back</h1>
+                <p class="pl-login-sub">We'll email you a one-time link to sign in.</p>
+            </header>
+
+            {{if .Error}}
+            <div class="pl-alert pl-alert--error" role="alert">
+                {{if eq .Error "invalid"}}That link is invalid. Please request a new one.
+                {{else if eq .Error "used"}}That link has already been used. Please request a new one.
+                {{else if eq .Error "expired"}}Your link expired — we've sent you a fresh one.
+                {{else if eq .Error "email"}}Please enter a valid email address.
+                {{else if eq .Error "rate_limited"}}Too many login attempts. Please wait a few minutes and try again.
+                {{else if eq .Error "server"}}Something went wrong on our end. Please try again.
+                {{else}}{{.Error}}
+                {{end}}
+            </div>
+            {{end}}
+
+            {{if .Success}}
+            <div class="pl-alert pl-alert--success" role="alert">
+                Check your email for a login link. It may take a minute to arrive.
+            </div>
+            {{end}}
+
+            <div class="pl-alert pl-alert--error" id="login-error" role="alert" hidden></div>
+
+            <form id="login-form" method="post" action="/login">
+                <label for="email" class="pl-login-label">Email address</label>
+                <input type="email" id="email" name="email" required
+                       class="pl-field pl-login-input"
+                       placeholder="you@example.com"
+                       value="{{.Email}}"
+                       autocomplete="email"
+                       autofocus>
+                <button type="submit" id="login-btn" class="pl-btn pl-btn--rani pl-login-submit">Send magic link</button>
+            </form>
+        </div>
+    </div>
+</div>
+</section>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('login-btn');
+    const email = document.getElementById('email').value;
+    const errorBox = document.getElementById('login-error');
+    errorBox.hidden = true;
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+
+    function showError(message) {
+        errorBox.textContent = message;
+        errorBox.hidden = false;
+    }
+
+    try {
+        const csrfToken = document.cookie
+            .split('; ')
+            .find(row => row.startsWith('csrf_token='))
+            ?.split('=')[1] || '';
+
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken,
+            },
+            body: JSON.stringify({ email: email }),
+        });
+
+        if (res.ok) {
+            const inner = document.querySelector('.pl-login-inner');
+            const title = document.createElement('h1');
+            const body = document.createElement('p');
+            const strong = document.createElement('strong');
+            const hint = document.createElement('p');
+            const retry = document.createElement('a');
+
+            title.className = 'pl-login-title';
+            title.textContent = 'Check your email';
+            body.className = 'pl-login-sub';
+            strong.textContent = email;
+            body.append('We sent a login link to ', strong, '.');
+            hint.className = 'pl-login-hint';
+            retry.href = '/login';
+            retry.textContent = 'try again';
+            hint.append("Didn't get it? Check your spam folder or ", retry, '.');
+            inner.replaceChildren(title, body, hint);
+        } else if (res.status === 429) {
+            showError('Too many login attempts. Please wait a few minutes and try again.');
+        } else {
+            const data = await res.json().catch(() => ({}));
+            showError(data.error?.message || 'Something went wrong. Please try again.');
+        }
+    } catch (err) {
+        showError('Network error. Please check your connection and try again.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send magic link';
+    }
+});
+</script>
+{{end}}

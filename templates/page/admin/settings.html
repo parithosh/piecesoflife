@@ -1,0 +1,194 @@
+{{define "title"}}Settings — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--admin">
+    <div class="pl-admin">
+
+      <div class="pl-admin-head">
+        <div>
+          <p class="pl-eyebrow pl-eyebrow--peacock">The Loom</p>
+          <h1 class="pl-admin-title">Settings</h1>
+        </div>
+        <nav class="pl-tabs" aria-label="Admin sections">
+          <a href="/admin"           class="pl-tab">Dashboard</a>
+          <a href="/admin/members"   class="pl-tab">Members</a>
+          <a href="/admin/questions" class="pl-tab">Questions</a>
+          <a href="/admin/settings"  class="pl-tab is-active" aria-current="page">Settings</a>
+        </nav>
+      </div>
+
+      <div class="zari pl-admin-rule" aria-hidden="true"></div>
+
+      <form id="settings-form" class="pl-settings">
+        <section class="pl-settings-section">
+          <h2 class="pl-display pl-settings-title">Basics</h2>
+
+          <div class="pl-form-field">
+            <label for="loop-name" class="pl-login-label">Newsletter name</label>
+            <input type="text" id="loop-name" class="pl-field pl-login-input"
+                   value="{{.Settings.LoopName}}" required>
+          </div>
+
+          <div class="pl-form-field">
+            <label for="tagline" class="pl-login-label">Tagline</label>
+            <input type="text" id="tagline" class="pl-field pl-login-input"
+                   value="{{if .Settings.Tagline}}{{.Settings.Tagline}}{{end}}">
+          </div>
+
+          <div class="pl-form-field">
+            <label for="frequency" class="pl-login-label">Frequency</label>
+            <select id="frequency" class="pl-field pl-login-input">
+              <option value="biweekly" {{if eq .Settings.Frequency "biweekly"}}selected{{end}}>Every 2 weeks</option>
+              <option value="monthly" {{if eq .Settings.Frequency "monthly"}}selected{{end}}>Monthly</option>
+              <option value="quarterly" {{if eq .Settings.Frequency "quarterly"}}selected{{end}}>Quarterly</option>
+            </select>
+          </div>
+
+          <div class="pl-form-field">
+            <label for="window-days" class="pl-login-label">Submission window</label>
+            <input type="number" id="window-days" class="pl-field pl-login-input"
+                   value="{{.Settings.SubmissionWindowDays}}" min="3" max="21">
+            <p class="pl-field-help">Days members have to respond.</p>
+          </div>
+
+          <div class="pl-form-field">
+            <label for="timezone" class="pl-login-label">Timezone</label>
+            <input type="text" id="timezone" class="pl-field pl-login-input"
+                   value="{{.Settings.Timezone}}" placeholder="Europe/Berlin">
+          </div>
+        </section>
+
+        <section class="pl-settings-section">
+          <h2 class="pl-display pl-settings-title">Automation</h2>
+
+          <label class="pl-check-row">
+            <input type="checkbox" id="auto-create-enabled"
+                   {{if .Settings.AutoCreateEnabled}}checked{{end}}>
+            <span>Auto-create the next issue when one is published</span>
+          </label>
+
+          <label class="pl-check-row">
+            <input type="checkbox" id="allow-public-mementos"
+                   {{if .Settings.AllowPublicMementos}}checked{{end}}>
+            <span>Allow members to share individual responses as public memento pages</span>
+          </label>
+        </section>
+
+        <section class="pl-settings-section">
+          <h2 class="pl-display pl-settings-title">Email delivery</h2>
+          <p class="pl-settings-sub">
+            Sending via <b>{{.EmailProvider}}</b> as <b>{{.EmailFrom}}</b>
+            (configured through environment variables). Send yourself a test
+            email to confirm delivery works end to end.
+          </p>
+          <div class="pl-export-row">
+            <button type="button" id="test-email-btn" class="pl-btn pl-btn--outline">Send test email</button>
+            <span id="test-email-status" style="font-family:var(--font-ui);font-size:12px;color:var(--ink-soft);"></span>
+          </div>
+        </section>
+
+        <section class="pl-settings-section">
+          <h2 class="pl-display pl-settings-title">Data export</h2>
+          <p class="pl-settings-sub">
+            Download a snapshot of your loop — settings, members, issues, answers, and comments.
+            The ZIP archive also bundles every uploaded photo, audio, and video file.
+          </p>
+          <div class="pl-export-row">
+            <a href="/api/admin/export.zip" download class="pl-btn pl-btn--gold">
+              Download ZIP archive
+            </a>
+            <a href="/api/admin/export" download class="pl-btn pl-btn--outline">
+              Download JSON only
+            </a>
+          </div>
+        </section>
+
+        <div class="pl-form-actions">
+          <button type="submit" class="pl-btn pl-btn--rani">Save settings</button>
+          <span id="settings-status" class="pl-form-status" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+
+function setStatus(msg, ok) {
+    const el = document.getElementById('settings-status');
+    el.textContent = msg || '';
+    el.style.color = ok === false ? 'var(--sindoor)' : (ok ? 'var(--peacock)' : 'var(--ink-soft)');
+}
+
+document.getElementById('test-email-btn').addEventListener('click', async function() {
+    const btn = this;
+    const status = document.getElementById('test-email-status');
+    btn.disabled = true;
+    status.style.color = 'var(--ink-soft)';
+    status.textContent = 'Sending…';
+
+    try {
+        const res = await fetch('/api/admin/email/test', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrfToken },
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (res.ok) {
+            status.style.color = 'var(--peacock)';
+            status.textContent = 'Sent to ' + (data.to || 'you') + ' via ' + (data.provider || 'email') + ' — check your inbox.';
+        } else {
+            status.style.color = 'var(--sindoor)';
+            status.textContent = data?.error?.message || 'Send failed';
+        }
+    } catch {
+        status.style.color = 'var(--sindoor)';
+        status.textContent = 'Network error';
+    } finally {
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('settings-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const tagline = document.getElementById('tagline').value.trim() || null;
+    const body = {
+        loop_name: document.getElementById('loop-name').value.trim(),
+        tagline: tagline,
+        frequency: document.getElementById('frequency').value,
+        submission_window_days: parseInt(document.getElementById('window-days').value),
+        timezone: document.getElementById('timezone').value.trim(),
+        auto_create_enabled: document.getElementById('auto-create-enabled').checked,
+        allow_public_mementos: document.getElementById('allow-public-mementos').checked,
+    };
+
+    setStatus('Saving…');
+
+    try {
+        const res = await fetch('/api/admin/settings', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify(body),
+        });
+
+        if (res.ok) {
+            setStatus('Saved', true);
+            return;
+        }
+
+        const data = await res.json().catch(() => ({}));
+        setStatus(data?.error?.message || 'Save failed', false);
+    } catch {
+        setStatus('Network error', false);
+    }
+});
+</script>
+{{end}}

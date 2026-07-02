@@ -1,0 +1,12 @@
+{
+  "name": "piecesoflife-ui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "snap": "node crawl.mjs",
+    "snap:open": "node crawl.mjs && open screenshots/index.html"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

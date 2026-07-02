@@ -1,0 +1,130 @@
+{{define "title"}}{{.Member.Name}} — submission preview — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--issue">
+    <div class="zari" aria-hidden="true"></div>
+    <div class="pl-msub">
+
+      <header class="pl-msub-head">
+        <div class="pl-msub-who">
+          <span class="pl-msub-ava">
+            {{if .Member.AvatarURL}}
+            <img src="{{.Member.AvatarURL}}" alt="">
+            {{else}}
+            {{letterAvatar .Member.Name}}
+            {{end}}
+          </span>
+          <div class="pl-msub-id">
+            <h1 class="pl-msub-name">{{.Member.Name}}</h1>
+            <p class="pl-msub-email">{{.Member.Email}}</p>
+          </div>
+        </div>
+        <a href="/admin" class="pl-tab">← Dashboard</a>
+      </header>
+
+      {{if not .Issue}}
+      <p class="pl-msub-empty">No active issue right now — there's nothing in progress to preview.</p>
+      {{else}}
+      <section class="pl-msub-issue">
+        <p class="pl-eyebrow pl-eyebrow--peacock">Current issue</p>
+        <h2 class="pl-msub-issue-title">{{formatDate .Issue.OpensAt}}</h2>
+        <div class="pl-msub-issue-meta">
+          {{if eq .Issue.Status "collecting"}}
+            <span class="pl-pill pl-pill--collecting">● Collecting</span>
+          {{else if eq .Issue.Status "draft"}}
+            <span class="pl-pill pl-pill--waiting">● Draft</span>
+          {{else}}
+            <span class="pl-pill pl-pill--published">▲ {{.Issue.Status}}</span>
+          {{end}}
+          {{if .Issue.Deadline}}
+          <span>Closes {{formatRelative .Issue.Deadline}}</span>
+          {{end}}
+        </div>
+        <p class="pl-msub-note">Admin preview — drafts shown below are not visible to other members.</p>
+      </section>
+
+      {{range .Questions}}
+      {{$answer := index $.Answers .ID}}
+      <section class="pl-msub-q">
+        <h3 class="pl-msub-q-title">{{.Text}}</h3>
+
+        {{if not $answer.Response.ID}}
+          <p class="pl-msub-empty">No answer yet.</p>
+        {{else}}
+          <div class="pl-msub-status">
+            {{if $answer.Response.IsDraft}}
+              <span class="pl-pill pl-pill--waiting">● Draft</span>
+            {{else}}
+              <span class="pl-pill pl-pill--submitted">✓ Submitted</span>
+            {{end}}
+            <span>Updated {{formatRelative $answer.Response.UpdatedAt}}</span>
+          </div>
+
+          {{if not $answer.Blocks}}
+            <p class="pl-msub-empty">Started but empty.</p>
+          {{else}}
+            <div class="response-blocks pl-msub-body">
+            {{range $answer.Blocks}}
+                {{if eq .Type "text"}}
+                    {{if .Content}}<p>{{.Content}}</p>{{end}}
+                {{else if eq .Type "photo"}}
+                    {{if .FilePath}}
+                    <figure data-lightbox
+                            data-lightbox-src="{{.FilePath | uploadURL}}"
+                            data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
+                        <img src="{{.FilePath | uploadURL}}"
+                             alt="{{if .Caption}}{{.Caption}}{{end}}">
+                        {{if .Caption}}
+                        <figcaption>{{.Caption}}</figcaption>
+                        {{end}}
+                    </figure>
+                    {{end}}
+                {{else if eq .Type "audio"}}
+                    {{if .FilePath}}
+                    <figure>
+                        <audio controls preload="metadata">
+                            <source src="{{.FilePath | uploadURL}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                        </audio>
+                        <figcaption>Audio recording</figcaption>
+                    </figure>
+                    {{end}}
+                {{else if eq .Type "video"}}
+                    {{if .FilePath}}
+                    <figure>
+                        <video controls preload="metadata" playsinline>
+                            <source src="{{.FilePath | uploadURL}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                        </video>
+                        <figcaption>Video recording</figcaption>
+                    </figure>
+                    {{end}}
+                {{else if eq .Type "link"}}
+                    {{if .LinkURL}}
+                        {{$embed := linkEmbed .LinkURL}}
+                        {{if $embed}}
+                            {{$embed}}
+                        {{else}}
+                            <div class="pl-msub-link">
+                                🔗 <a href="{{.LinkURL}}" rel="noopener" target="_blank">{{.LinkURL}}</a>
+                            </div>
+                        {{end}}
+                    {{end}}
+                {{end}}
+            {{end}}
+            </div>
+          {{end}}
+        {{end}}
+      </section>
+      {{end}}
+      {{end}}
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/lightbox.js?v={{assetVersion}}"></script>
+{{end}}

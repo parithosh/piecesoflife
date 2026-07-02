@@ -1,0 +1,122 @@
+{{define "title"}}{{.OGTitle}} — {{.Settings.LoopName}}{{end}}
+
+{{define "head"}}
+<link rel="canonical" href="{{.Canonical}}">
+<meta property="og:type" content="article">
+<meta property="og:url" content="{{.Canonical}}">
+<meta property="og:title" content="{{.OGTitle}}">
+<meta property="og:site_name" content="{{.Settings.LoopName}}">
+{{if .OGDescription}}
+<meta property="og:description" content="{{.OGDescription}}">
+<meta name="description" content="{{.OGDescription}}">
+{{end}}
+{{if .OGImage}}
+<meta property="og:image" content="{{.OGImage}}">
+<meta name="twitter:card" content="summary_large_image">
+{{else}}
+<meta name="twitter:card" content="summary">
+{{end}}
+<meta name="twitter:title" content="{{.OGTitle}}">
+{{if .OGDescription}}<meta name="twitter:description" content="{{.OGDescription}}">{{end}}
+{{if .OGImage}}<meta name="twitter:image" content="{{.OGImage}}">{{end}}
+<meta name="robots" content="{{if .Public}}index, follow{{else}}noindex{{end}}">
+{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+<article class="pl-memento">
+    <nav class="pl-memento-back">
+        <a href="{{if .User}}/issues/{{.Issue.Year}}/{{printf "%02d" .Issue.Month}}{{else}}/{{end}}">
+            ← {{.Issue.OpensAt | formatDate}} edition
+        </a>
+    </nav>
+
+    <div class="pl-card pl-card--memento">
+        <div class="zari" aria-hidden="true"></div>
+        <div class="pl-memento-body">
+            <header class="pl-memento-head">
+                <p class="pl-eyebrow pl-eyebrow--peacock">{{.Settings.LoopName}} · {{.Issue.OpensAt | formatDate}}</p>
+                <h1 class="pl-memento-question">{{.Question.Text}}</h1>
+            </header>
+
+            <div class="pl-memento-author">
+                <span class="pl-memento-ava">
+                    {{if .Author.AvatarURL}}
+                    <img src="{{.Author.AvatarURL}}" alt="">
+                    {{else}}
+                    {{letterAvatar .Author.Name}}
+                    {{end}}
+                </span>
+                <div>
+                    <div class="pl-memento-author-name">{{.Author.Name}}</div>
+                    {{if .Author.Bio}}<div class="pl-memento-author-bio">{{.Author.Bio}}</div>{{end}}
+                </div>
+            </div>
+
+            <div class="pl-memento-content">
+                {{range .Blocks}}
+                    {{if eq .Type "text"}}
+                        {{if .Content}}<p>{{.Content}}</p>{{end}}
+                    {{else if eq .Type "photo"}}
+                        {{$src := mementoFileURL $.Response.ID .FilePath}}
+                        <figure class="pl-memento-photo" data-lightbox
+                                data-lightbox-src="{{$src}}"
+                                data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
+                            <img src="{{$src}}"
+                                 alt="{{if .Caption}}{{.Caption}}{{end}}">
+                            {{if .Caption}}
+                            <figcaption>{{.Caption}}</figcaption>
+                            {{end}}
+                        </figure>
+                    {{else if eq .Type "audio"}}
+                        {{$src := mementoFileURL $.Response.ID .FilePath}}
+                        <figure class="pl-memento-media">
+                            <audio controls preload="metadata">
+                                <source src="{{$src}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                            </audio>
+                            <figcaption>Audio recording</figcaption>
+                        </figure>
+                    {{else if eq .Type "video"}}
+                        {{$src := mementoFileURL $.Response.ID .FilePath}}
+                        <figure class="pl-memento-media">
+                            <video controls preload="metadata" playsinline>
+                                <source src="{{$src}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                            </video>
+                            <figcaption>Video recording</figcaption>
+                        </figure>
+                    {{else if eq .Type "link"}}
+                        {{if .LinkURL}}
+                            {{$embed := linkEmbed .LinkURL}}
+                            {{if $embed}}
+                                {{$embed}}
+                            {{else}}
+                                <div class="pl-memento-link">
+                                    🔗 <a href="{{.LinkURL}}" rel="noopener" target="_blank">{{.LinkURL}}</a>
+                                </div>
+                            {{end}}
+                        {{end}}
+                    {{end}}
+                {{end}}
+            </div>
+
+            <footer class="pl-memento-foot">
+                <span>A memento from <strong>{{.Settings.LoopName}}</strong>.</span>
+            </footer>
+        </div>
+    </div>
+
+    {{if .Public}}
+    <p class="pl-memento-note">
+        {{.Settings.LoopName}} is a small private newsletter shared between friends.
+        You're reading this because the author chose to share this moment.
+    </p>
+    {{end}}
+</article>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/lightbox.js?v={{assetVersion}}"></script>
+{{end}}

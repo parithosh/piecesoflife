@@ -1,0 +1,203 @@
+{{define "title"}}Profile — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+<div class="pl-card pl-card--profile">
+    <div class="zari" aria-hidden="true"></div>
+    <div class="pl-profile">
+        <header class="pl-profile-head">
+            <p class="pl-eyebrow pl-eyebrow--peacock">{{.Settings.LoopName}}</p>
+            <h1 class="pl-display pl-profile-title">Your profile</h1>
+        </header>
+
+        <div class="pl-profile-summary">
+            <span class="pl-profile-ava" id="profile-avatar-preview">
+                {{if .User.AvatarURL}}
+                <img src="{{.User.AvatarURL}}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">
+                {{else}}
+                {{letterAvatar .User.Name}}
+                {{end}}
+            </span>
+            <div>
+                <h2 class="pl-profile-name" id="profile-name-display">{{.User.Name}}</h2>
+                <p class="pl-profile-email">{{.User.Email}}</p>
+            </div>
+        </div>
+
+        <form id="profile-form">
+            <div class="pl-form-field">
+                <label for="profile-name" class="pl-login-label">Display name</label>
+                <input type="text" id="profile-name" class="pl-field pl-login-input"
+                       value="{{.User.Name}}" required maxlength="80">
+            </div>
+
+            <div class="pl-form-field">
+                <label for="profile-avatar" class="pl-login-label">Profile photo link</label>
+                <input type="url" id="profile-avatar" class="pl-field pl-login-input"
+                       value="{{if .User.AvatarURL}}{{.User.AvatarURL}}{{end}}"
+                       placeholder="https://example.com/avatar.jpg">
+            </div>
+
+            <div class="pl-form-field">
+                <label for="profile-bio" class="pl-login-label">Bio</label>
+                <textarea id="profile-bio" class="pl-field" rows="3" maxlength="500">{{if .User.Bio}}{{.User.Bio}}{{end}}</textarea>
+            </div>
+
+            <div class="pl-form-actions">
+                <button type="submit" class="pl-btn pl-btn--rani">Save changes</button>
+                <span id="profile-status" class="pl-form-status" role="status" aria-live="polite"></span>
+            </div>
+        </form>
+
+        <section class="pl-profile-section">
+            <h3 class="pl-display pl-profile-subhead">Email notifications</h3>
+            <div id="notification-prefs">
+                <p class="pl-quiet">Loading preferences…</p>
+            </div>
+        </section>
+
+        <div class="pl-profile-logout">
+            <button type="button" id="logout-btn" class="pl-btn pl-btn--outline">Log out</button>
+        </div>
+    </div>
+</div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+const userID = {{.User.ID}};
+const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken };
+
+function setProfileStatus(msg, ok) {
+    const el = document.getElementById('profile-status');
+    el.textContent = msg || '';
+    el.style.color = ok === false ? 'var(--sindoor)' : (ok ? 'var(--peacock)' : 'var(--ink-soft)');
+}
+
+document.getElementById('profile-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const name = document.getElementById('profile-name').value.trim();
+    const bio = document.getElementById('profile-bio').value.trim() || null;
+    const avatar = document.getElementById('profile-avatar').value.trim() || null;
+
+    setProfileStatus('Saving…');
+
+    try {
+        const res = await fetch(`/api/users/${userID}`, {
+            method: 'PATCH',
+            headers: apiHeaders,
+            body: JSON.stringify({ name, bio, avatar_url: avatar }),
+        });
+
+        if (res.ok) {
+            setProfileStatus('Saved', true);
+            document.getElementById('profile-name-display').textContent = name;
+
+            // Update avatar preview optimistically.
+            const preview = document.getElementById('profile-avatar-preview');
+            if (avatar) {
+                const img = document.createElement('img');
+                img.src = avatar;
+                img.alt = '';
+                img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:50%;';
+                preview.replaceChildren(img);
+            } else if (name) {
+                preview.textContent = name[0].toUpperCase();
+            } else {
+                preview.textContent = '';
+            }
+            return;
+        }
+
+        const data = await res.json().catch(() => ({}));
+        setProfileStatus(data?.error?.message || 'Save failed', false);
+    } catch {
+        setProfileStatus('Network error', false);
+    }
+});
+
+document.getElementById('logout-btn').addEventListener('click', async function() {
+    await fetch('/api/auth/logout', { method: 'POST', headers: apiHeaders });
+    window.location.href = '/login';
+});
+
+// Load notification preferences and wire change handlers. On failure the
+// error state offers a Retry button that re-runs this loader in place.
+async function loadPrefs() {
+    const container = document.getElementById('notification-prefs');
+    container.innerHTML = '<p class="pl-quiet">Loading preferences…</p>';
+
+    function showPrefsError() {
+        container.innerHTML = `
+            <div class="pl-alert pl-alert--error pl-prefs-error" role="alert">
+                <span>Failed to load preferences.</span>
+                <button type="button" class="pl-btn pl-btn--outline" data-prefs-retry>Retry</button>
+            </div>`;
+        container.querySelector('[data-prefs-retry]').addEventListener('click', loadPrefs);
+    }
+
+    try {
+        const res = await fetch(`/api/users/${userID}/preferences`);
+        if (!res.ok) {
+            showPrefsError();
+            return;
+        }
+
+        const data = await res.json();
+        const fields = [
+            { key: 'issue_open', label: 'When a new issue opens' },
+            { key: 'reminders', label: 'Reminder before the deadline' },
+            { key: 'published', label: 'When an issue is published' },
+            { key: 'comment_notify', label: 'When someone comments on my response' },
+        ];
+
+        container.innerHTML = `<div class="preference-list">${fields.map(f => `
+            <label class="preference-row">
+                <input type="checkbox" class="pref-toggle" data-key="${f.key}"
+                       ${data[f.key] ? 'checked' : ''}>
+                <span>${f.label}</span>
+                <span class="pref-status" data-for="${f.key}"></span>
+            </label>
+        `).join('')}</div>`;
+
+        container.querySelectorAll('.pref-toggle').forEach(cb => {
+            cb.addEventListener('change', async function() {
+                const key = this.dataset.key;
+                const statusEl = container.querySelector(`.pref-status[data-for="${key}"]`);
+                statusEl.textContent = 'saving…';
+                statusEl.style.color = 'var(--ink-soft)';
+
+                const update = {};
+                update[key] = this.checked;
+
+                try {
+                    const res = await fetch(`/api/users/${userID}/preferences`, {
+                        method: 'PATCH',
+                        headers: apiHeaders,
+                        body: JSON.stringify(update),
+                    });
+                    statusEl.textContent = res.ok ? 'saved' : 'failed';
+                    statusEl.style.color = res.ok ? 'var(--peacock)' : 'var(--sindoor)';
+                    if (res.ok) {
+                        setTimeout(() => { statusEl.textContent = ''; }, 1200);
+                    } else {
+                        this.checked = !this.checked; // revert
+                    }
+                } catch {
+                    statusEl.textContent = 'failed';
+                    statusEl.style.color = 'var(--sindoor)';
+                    this.checked = !this.checked;
+                }
+            });
+        });
+    } catch {
+        showPrefsError();
+    }
+}
+loadPrefs();
+</script>
+{{end}}

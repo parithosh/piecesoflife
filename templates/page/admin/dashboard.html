@@ -1,0 +1,679 @@
+{{define "title"}}Admin — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--admin">
+    <div class="pl-admin">
+
+      <div class="pl-admin-head">
+        <div>
+          <p class="pl-eyebrow pl-eyebrow--peacock">The Loom</p>
+          <h1 class="pl-admin-title">{{.Settings.LoopName}}</h1>
+        </div>
+        <nav class="pl-tabs" aria-label="Admin sections">
+          <a href="/admin"           class="pl-tab is-active" aria-current="page">Dashboard</a>
+          <a href="/admin/members"   class="pl-tab">Members</a>
+          <a href="/admin/questions" class="pl-tab">Questions</a>
+          <a href="/admin/settings"  class="pl-tab">Settings</a>
+        </nav>
+      </div>
+
+      {{if .CurrentIssue}}
+      {{$total := 0}}{{if .Progress}}{{$total = .Progress.TotalMembers}}{{end}}
+      {{$resp := 0}}{{if .Progress}}{{$resp = .Progress.Responded}}{{end}}
+
+      <div class="pl-frame">
+        {{/* ---- rani header row -------------------------------- */}}
+        <div class="pl-frame-head">
+          <div class="pl-frame-head-left">
+            <span class="pl-frame-month">
+              {{if .CurrentIssue.Title}}{{.CurrentIssue.Title}}{{else}}{{formatDate .CurrentIssue.OpensAt}}{{end}}
+            </span>
+            {{if eq .CurrentIssue.Status "collecting"}}
+              <span class="pl-pill pl-pill--collecting">● Collecting</span>
+              {{if .CurrentIssue.Deadline}}
+              <span class="pl-countdown" data-countdown="{{.CurrentIssue.Deadline.Format "2006-01-02T15:04:05Z07:00"}}">Closes {{formatRelative .CurrentIssue.Deadline}}</span>
+              {{end}}
+            {{else if eq .CurrentIssue.Status "draft"}}
+              <span class="pl-pill pl-pill--waiting">● Draft</span>
+            {{else}}
+              <span class="pl-pill pl-pill--published">▲ {{.CurrentIssue.Status}}</span>
+            {{end}}
+          </div>
+          {{if eq .CurrentIssue.Status "collecting"}}
+          <div class="pl-submitbar-actions">
+            <button type="button" class="pl-btn pl-btn--danger"
+                    data-extend-trigger
+                    data-issue-id="{{.CurrentIssue.ID}}"
+                    data-deadline="{{.CurrentIssue.Deadline.Format "2006-01-02T15:04:05Z07:00"}}">⚠ Extend deadline</button>
+            <button type="button" class="pl-btn pl-btn--ghost" onclick="sendReminder({{.CurrentIssue.ID}})">Send reminder</button>
+            <button type="button" class="pl-btn pl-btn--gold"
+                    data-publish-trigger
+                    data-issue-id="{{.CurrentIssue.ID}}"
+                    data-issue-title="{{if .CurrentIssue.Title}}{{.CurrentIssue.Title}}{{else}}{{formatDate .CurrentIssue.OpensAt}}{{end}}"
+                    data-issue-date="{{formatDate .CurrentIssue.OpensAt}}"
+                    data-responded="{{$resp}}"
+                    data-total="{{$total}}">▲ Publish now</button>
+          </div>
+          {{end}}
+        </div>
+
+        {{/* ---- stat cells ------------------------------------- */}}
+        <div class="pl-stats">
+          <div class="pl-stat pl-stat--wide">
+            <p class="pl-eyebrow">Members responded</p>
+            <div class="pl-stat-big">
+              <span class="pl-num">{{$resp}}</span>
+              <span class="pl-denom">/ {{$total}}</span>
+            </div>
+            <div class="pl-progress" role="img" aria-label="{{$resp}} of {{$total}} responded">
+              {{if gt $total 0}}
+                {{range $i := seq $total}}<span class="pl-progress-seg {{if lt $i $resp}}is-filled{{end}}"></span>{{end}}
+              {{else}}
+                <span class="pl-progress-seg"></span>
+              {{end}}
+            </div>
+            <label class="pl-switch">
+              <input type="checkbox" id="count-admin-toggle"
+                     data-issue-id="{{.CurrentIssue.ID}}"
+                     {{if and .Progress .Progress.CountAdminIn}}checked{{end}}>
+              <span class="pl-switch-track" aria-hidden="true"></span>
+              Count me in this round
+            </label>
+            <p class="pl-switch-note">Admins are left out of progress unless this is on.</p>
+          </div>
+
+          <div class="pl-stat">
+            <p class="pl-eyebrow">Cadence</p>
+            <div class="pl-stat-val" style="text-transform:capitalize;">{{.Settings.Frequency}}</div>
+            <p class="pl-stat-sub">{{.Settings.SubmissionWindowDays}}-day window</p>
+          </div>
+
+          <div class="pl-stat">
+            <p class="pl-eyebrow">Started</p>
+            <div class="pl-stat-val">{{formatDate .CurrentIssue.OpensAt}}</div>
+            {{if .CurrentIssue.Deadline}}<p class="pl-stat-sub">Deadline {{formatDate .CurrentIssue.Deadline}}</p>{{end}}
+          </div>
+        </div>
+
+        {{/* ---- questions in this round: editable in place ----- */}}
+        {{if and .Questions (ne .CurrentIssue.Status "published")}}
+        <div class="pl-qadmin" data-issue-id="{{.CurrentIssue.ID}}">
+          <p class="pl-eyebrow">Questions in this round</p>
+          {{range $idx, $q := .Questions}}
+          {{$n := index $.QuestionAnswers $q.ID}}
+          <div class="pl-qadmin-row" data-question-id="{{$q.ID}}" data-answers="{{$n}}">
+            <span class="pl-qadmin-num" aria-hidden="true">{{printf "%02d" (add $idx 1)}}</span>
+            <div class="pl-qadmin-main">
+              <p class="pl-qadmin-text" data-q-text>{{$q.Text}}</p>
+              <p class="pl-qadmin-meta">
+                {{$q.Source}}{{if gt $n 0}} · <b>{{$n}} member{{if ne $n 1}}s{{end}} already answered</b>{{end}}
+              </p>
+            </div>
+            <div class="pl-qadmin-actions">
+              <button type="button" class="pl-btn pl-btn--outline" data-q-edit>Edit</button>
+              {{if eq $n 0}}
+              <button type="button" class="pl-btn pl-btn--outline" data-q-remove>Remove</button>
+              {{else}}
+              <button type="button" class="pl-btn pl-btn--outline" disabled
+                      title="Members have answered — reword it instead of removing it">Remove</button>
+              {{end}}
+            </div>
+          </div>
+          {{end}}
+
+          <form id="add-question-form" class="pl-qadmin-add">
+            <input type="text" id="add-question-text" class="pl-field"
+                   placeholder="Add a question to this round…" maxlength="500" required>
+            <button type="submit" class="pl-btn pl-btn--outline">Add</button>
+          </form>
+          <p id="qadmin-status" class="pl-qadmin-status" role="status" aria-live="polite"></p>
+        </div>
+
+        <dialog class="pl-dialog" id="qwarn-dialog" aria-label="Question edit warning">
+          <div class="pl-dialog-body">
+            <h3 class="pl-dialog-title">⚠ Already answered</h3>
+            <p id="qwarn-message" style="font-family:var(--font-read);color:var(--ink-soft);"></p>
+            <div class="pl-dialog-actions">
+              <button type="button" class="pl-btn pl-btn--outline" data-qwarn-cancel>Cancel</button>
+              <button type="button" class="pl-btn pl-btn--gold" data-qwarn-continue>Change it anyway</button>
+            </div>
+          </div>
+        </dialog>
+        {{end}}
+
+        {{/* ---- who has responded ------------------------------ */}}
+        {{if .Progress}}
+        <div class="pl-ledger-admin">
+          <p class="pl-eyebrow">Who has responded</p>
+          {{range .Progress.Members}}
+          <div class="pl-member-row {{if eq .User.Role "admin"}}is-admin{{end}}">
+            <span class="pl-member-ava" aria-hidden="true">{{letterAvatar .User.Name}}</span>
+            <div class="pl-member-main">
+              <div class="pl-member-name">
+                <a href="/admin/members/{{.User.ID}}/submission" style="color:inherit;text-decoration:none;">{{.User.Name}}</a>
+                {{if eq .User.ID $.User.ID}} · you{{end}}{{if eq .User.Role "admin"}} (admin){{end}}
+              </div>
+              <div class="pl-member-email">{{.User.Email}}</div>
+            </div>
+            {{if .Responded}}
+              <span class="pl-pill pl-pill--submitted">✓ Submitted</span>
+            {{else}}
+              <span class="pl-pill pl-pill--waiting">● Waiting</span>
+              <button type="button" class="pl-btn pl-btn--nudge" onclick="nudge({{$.CurrentIssue.ID}}, this)">Nudge</button>
+            {{end}}
+          </div>
+          {{end}}
+        </div>
+        {{end}}
+      </div>
+
+      <dialog id="publish-dialog" class="pl-dialog pl-dialog--publish" aria-labelledby="publish-dialog-title">
+        <header>
+          <h3 id="publish-dialog-title" class="pl-dialog-title" style="margin:0;">▲ Publish this issue?</h3>
+          <p class="pl-dialog-sub">This sends the newsletter and locks responses. It can't be undone.</p>
+        </header>
+        <section>
+          <div class="card card--quiet" style="margin:0 0 var(--space-3);">
+            <p class="step-eyebrow" style="margin:0;color:var(--rani);">Issue</p>
+            <p style="margin:var(--space-1) 0 0;font-weight:600;font-size:var(--text-5);" data-publish-issue-title></p>
+            <p class="muted mb-0" style="font-size:var(--text-7);" data-publish-issue-date></p>
+          </div>
+          <div class="publish-stats-grid">
+            <div class="card card--quiet" style="margin:0;">
+              <p class="step-eyebrow" style="margin:0;">Submitted</p>
+              <p class="stat-value" style="margin:var(--space-1) 0 0;">
+                <span data-publish-responded></span><span class="muted" style="font-weight:400;font-size:var(--text-5);"> / <span data-publish-total></span></span>
+              </p>
+              <p class="muted mb-0" style="font-size:var(--text-8);" data-publish-stragglers></p>
+            </div>
+            <div class="card card--quiet" style="margin:0;">
+              <p class="step-eyebrow" style="margin:0;">Will notify</p>
+              <p class="stat-value" style="margin:var(--space-1) 0 0;"><span data-publish-total></span></p>
+              <p class="muted mb-0" style="font-size:var(--text-8);">members with publish notifications on</p>
+            </div>
+          </div>
+          <p id="publish-error" class="alert alert-error" style="margin:var(--space-4) 0 0;display:none;"></p>
+        </section>
+        <footer class="pl-dialog-actions">
+          <button type="button" class="pl-btn pl-btn--outline" data-publish-cancel>Cancel</button>
+          <button type="button" id="confirm-publish-btn" class="pl-btn pl-btn--gold" data-default-label="▲ Publish issue">▲ Publish issue</button>
+        </footer>
+      </dialog>
+
+      {{else}}
+      <div class="pl-frame" style="padding:34px 28px;">
+        <p class="pl-eyebrow pl-eyebrow--peacock">Current issue</p>
+        <h2 class="pl-display" style="font-size:28px;margin:0 0 6px;">No active issue</h2>
+        {{if .NextIssueOpens}}
+        <p style="font-family:var(--font-read);color:var(--ink-soft);">
+          The next round is on the loom — it opens automatically on
+          <b style="color:var(--ink);">{{.NextIssueOpens}}</b> with questions
+          picked from the bank. Or start it right now.
+        </p>
+        {{else if .Settings.AutoCreateEnabled}}
+        <p style="font-family:var(--font-read);color:var(--ink-soft);">
+          Auto-create is on, but no round is scheduled yet — the next one is
+          queued each time an issue is published. Open a round now to get the
+          rhythm going.
+        </p>
+        {{else}}
+        <p style="font-family:var(--font-read);color:var(--ink-soft);">
+          Open a new round and we'll auto-pick questions, schedule reminders,
+          and notify members. Auto-create is off — turn it on in
+          <a href="/admin/settings">Settings</a> and new rounds will open
+          themselves after each publish.
+        </p>
+        {{end}}
+        <div style="margin-top:18px;">
+          <button type="button" class="pl-btn pl-btn--gold" onclick="openCreateIssueDialog()">{{if .NextIssueOpens}}Start it now{{else}}Create new issue{{end}}</button>
+        </div>
+      </div>
+
+      <dialog id="create-issue-dialog" class="pl-dialog pl-dialog--publish" aria-labelledby="create-issue-title-heading">
+        <h3 id="create-issue-title-heading" class="pl-dialog-title" style="margin:0;">Create new issue</h3>
+        <div style="margin-top:14px;">
+          <label for="create-issue-title" class="pl-field-label">Issue name</label>
+          <input type="text" id="create-issue-title" class="pl-field" maxlength="120" autocomplete="off" style="margin-top:6px;">
+          <p class="pl-dialog-sub" style="margin-top:8px;">We pre-fill the current month — feel free to rename it.</p>
+        </div>
+        <div class="pl-dialog-actions">
+          <button type="button" class="pl-btn pl-btn--outline" onclick="document.getElementById('create-issue-dialog').close()">Cancel</button>
+          <button type="button" id="confirm-create-issue-btn" class="pl-btn pl-btn--gold">Create issue</button>
+        </div>
+      </dialog>
+      {{end}}
+
+      {{if .RecentEmails}}
+      <section class="card" style="margin-top:24px;">
+        <div class="card-header">
+          <h3 style="margin:0;">Recent activity</h3>
+          <a href="/admin/settings#email-log" class="muted" style="font-size:var(--text-8);">View log →</a>
+        </div>
+        <div class="activity-strip" title="Last 30 email events">
+          {{range .RecentEmails}}
+          <span class="dot {{if eq .Status "sent"}}event{{else if eq .Status "failed"}}error{{end}}" title="{{.Type}} — {{.Status}}"></span>
+          {{end}}
+        </div>
+        <table style="width:100%;margin-top:var(--space-3);font-size:var(--text-7);">
+          <thead>
+            <tr style="text-align:left;color:var(--muted-foreground);">
+              <th style="font-weight:500;padding:6px 0;">Type</th>
+              <th style="font-weight:500;">Status</th>
+              <th style="font-weight:500;">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .RecentEmails}}
+            <tr style="border-top:1px solid var(--border);">
+              <td style="padding:8px 0;text-transform:capitalize;">{{.Type}}</td>
+              <td><span class="badge {{if eq .Status "sent"}}badge-green{{else if eq .Status "failed"}}badge-yellow{{else}}badge-gray{{end}}">{{.Status}}</span></td>
+              <td class="muted">{{formatRelative .CreatedAt}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </section>
+      {{end}}
+
+      {{if .PastIssues}}
+      <section class="pl-past">
+        <h2 class="pl-display pl-past-title">Past issues</h2>
+        <div class="pl-archive-grid">
+          {{range .PastIssues}}
+          <a href="/issues/{{.Year}}/{{printf "%02d" .Month}}" class="pl-issue-card">
+            <div class="pl-issue-cover pl-issue-cover--empty">No photos yet</div>
+            <div class="pl-issue-card-meta">
+              <p class="pl-issue-card-month">{{formatDate .OpensAt}}</p>
+              <p class="pl-issue-card-foot">
+                <span class="pl-pill pl-pill--published">▲ {{.Status}}</span>
+              </p>
+            </div>
+          </a>
+          {{end}}
+        </div>
+      </section>
+      {{end}}
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken };
+
+// --- Live question editing --------------------------------------------
+// Admins may reword or remove the round's questions while it collects.
+// When members have already answered, a warning dialog spells out the
+// consequence first — but the admin has the final say.
+
+(function () {
+    const container = document.querySelector('.pl-qadmin');
+    if (!container) return;
+
+    const warnDialog = document.getElementById('qwarn-dialog');
+    const status = document.getElementById('qadmin-status');
+
+    const setStatus = (msg, isError) => {
+        status.textContent = msg || '';
+        status.style.color = isError ? 'var(--sindoor)' : 'var(--peacock)';
+    };
+
+    // Resolves true when the admin confirms (or no warning is needed).
+    function warnIfAnswered(count, verb) {
+        if (!count || !warnDialog) return Promise.resolve(true);
+
+        const plural = count === 1 ? 'member has' : 'members have';
+        document.getElementById('qwarn-message').textContent =
+            `${count} ${plural} already answered this question. ` +
+            `If you ${verb} it now, their existing answers may read like they ` +
+            `belong to a different prompt. They won't be notified.`;
+
+        return new Promise(resolve => {
+            const done = ok => { warnDialog.close(); resolve(ok); };
+            warnDialog.querySelector('[data-qwarn-continue]').onclick = () => done(true);
+            warnDialog.querySelector('[data-qwarn-cancel]').onclick = () => done(false);
+            warnDialog.onclick = ev => { if (ev.target === warnDialog) done(false); };
+            warnDialog.showModal();
+        });
+    }
+
+    function startEdit(row) {
+        if (row.querySelector('.pl-qadmin-editor')) return;
+
+        const textEl = row.querySelector('[data-q-text]');
+        const actions = row.querySelector('.pl-qadmin-actions');
+
+        const editor = document.createElement('div');
+        editor.className = 'pl-qadmin-editor';
+
+        const input = document.createElement('textarea');
+        input.className = 'pl-field';
+        input.maxLength = 500;
+        input.value = textEl.textContent.trim();
+
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'pl-btn pl-btn--gold';
+        save.textContent = 'Save';
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'pl-btn pl-btn--outline';
+        cancel.textContent = 'Cancel';
+
+        const btnRow = document.createElement('div');
+        btnRow.className = 'pl-qadmin-editor-actions';
+        btnRow.append(save, cancel);
+        editor.append(input, btnRow);
+
+        textEl.hidden = true;
+        actions.hidden = true;
+        row.appendChild(editor);
+        input.focus();
+
+        cancel.onclick = () => {
+            editor.remove();
+            textEl.hidden = false;
+            actions.hidden = false;
+        };
+
+        save.onclick = async () => {
+            const text = input.value.trim();
+            if (!text) return;
+
+            const answered = Number(row.dataset.answers || '0');
+            if (!(await warnIfAnswered(answered, 'change'))) return;
+
+            save.disabled = true;
+            try {
+                const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
+                    method: 'PATCH',
+                    headers: apiHeaders,
+                    body: JSON.stringify({ text }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data?.error?.message || 'Save failed');
+
+                textEl.textContent = text;
+                cancel.onclick();
+                setStatus('Question updated ✓');
+            } catch (err) {
+                setStatus(err.message, true);
+                save.disabled = false;
+            }
+        };
+    }
+
+    container.addEventListener('click', async ev => {
+        const row = ev.target.closest('.pl-qadmin-row');
+
+        if (ev.target.closest('[data-q-edit]')) {
+            startEdit(row);
+            return;
+        }
+
+        if (ev.target.closest('[data-q-remove]')) {
+            const btn = ev.target.closest('[data-q-remove]');
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
+                    method: 'DELETE',
+                    headers: { 'X-CSRF-Token': csrfToken },
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data?.error?.message || 'Remove failed');
+                }
+                row.remove();
+                setStatus('Question removed');
+            } catch (err) {
+                setStatus(err.message, true);
+                btn.disabled = false;
+            }
+        }
+    });
+
+    document.getElementById('add-question-form').addEventListener('submit', async ev => {
+        ev.preventDefault();
+
+        const input = document.getElementById('add-question-text');
+        const text = input.value.trim();
+        if (!text) return;
+
+        setStatus('Adding…');
+        try {
+            const res = await fetch(`/api/issues/${container.dataset.issueId}/questions`, {
+                method: 'POST',
+                headers: apiHeaders,
+                body: JSON.stringify({ text }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data?.error?.message || 'Add failed');
+
+            // Simplest correct refresh: new row needs numbering + wiring.
+            window.location.reload();
+        } catch (err) {
+            setStatus(err.message, true);
+        }
+    });
+})();
+
+// Publish flow: themed dialog + inline status.
+const publishDialog = document.getElementById('publish-dialog');
+const publishConfirmBtn = document.getElementById('confirm-publish-btn');
+const publishError = document.getElementById('publish-error');
+
+function setText(selector, value) {
+    publishDialog?.querySelectorAll(selector).forEach((el) => { el.textContent = value; });
+}
+
+function openPublishDialog(trigger) {
+    if (!publishDialog) return;
+    const responded = Number(trigger.dataset.responded || 0);
+    const total = Number(trigger.dataset.total || 0);
+    const missing = Math.max(total - responded, 0);
+
+    setText('[data-publish-issue-title]', trigger.dataset.issueTitle || 'Current issue');
+    setText('[data-publish-issue-date]', trigger.dataset.issueDate || '');
+    setText('[data-publish-responded]', String(responded));
+    setText('[data-publish-total]', String(total));
+    setText(
+        '[data-publish-stragglers]',
+        missing === 0 ? 'Everyone has responded.'
+            : missing === 1 ? '1 member hasn\'t responded yet.'
+            : `${missing} members haven't responded yet.`,
+    );
+
+    publishError.style.display = 'none';
+    publishError.textContent = '';
+    publishConfirmBtn.disabled = false;
+    publishConfirmBtn.textContent = publishConfirmBtn.dataset.defaultLabel;
+    publishConfirmBtn.dataset.issueId = trigger.dataset.issueId;
+
+    publishDialog.showModal();
+}
+
+async function runPublish() {
+    const id = publishConfirmBtn.dataset.issueId;
+    if (!id) return;
+
+    publishError.style.display = 'none';
+    publishConfirmBtn.disabled = true;
+    publishConfirmBtn.textContent = 'Publishing…';
+
+    try {
+        const res = await fetch(`/api/issues/${id}/publish`, { method: 'POST', headers: apiHeaders });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+            window.location.assign(data.redirect || '/issues');
+            return;
+        }
+        let detail = 'Failed to publish.';
+        if (data.error?.message) detail = data.error.message;
+        publishError.textContent = detail;
+        publishError.style.display = '';
+    } catch (err) {
+        publishError.textContent = err.message || 'Network error while publishing.';
+        publishError.style.display = '';
+    } finally {
+        publishConfirmBtn.disabled = false;
+        publishConfirmBtn.textContent = publishConfirmBtn.dataset.defaultLabel;
+    }
+}
+
+document.querySelectorAll('[data-publish-trigger]').forEach((btn) => {
+    btn.addEventListener('click', () => openPublishDialog(btn));
+});
+publishDialog?.querySelector('[data-publish-cancel]')?.addEventListener('click', () => publishDialog.close());
+publishConfirmBtn?.addEventListener('click', runPublish);
+
+async function sendReminder(id) {
+    const res = await fetch(`/api/admin/send-reminder/${id}`, { method: 'POST', headers: apiHeaders });
+    if (res.ok) alert('Reminders sent!');
+    else alert('Failed to send reminders.');
+}
+
+// Extend deadline — deliberately scary: it delays the issue for everyone
+// and reschedules the reminder emails.
+document.querySelector('[data-extend-trigger]')?.addEventListener('click', async function () {
+    const issueID = this.dataset.issueId;
+    const current = new Date(this.dataset.deadline);
+
+    const input = prompt('Extend the deadline by how many days?', '7');
+    if (input === null) return;
+
+    const days = parseInt(input, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 90) {
+        alert('Enter a number of days between 1 and 90.');
+        return;
+    }
+
+    const newDeadline = new Date(current.getTime() + days * 86400000);
+    const scary = `⚠ This delays the issue for EVERYONE.\n\n` +
+        `New deadline: ${newDeadline.toLocaleString()}\n` +
+        `Reminder emails will be rescheduled around the new date.\n\nExtend by ${days} day${days === 1 ? '' : 's'}?`;
+    if (!confirm(scary)) return;
+
+    this.disabled = true;
+    this.textContent = 'Extending…';
+    try {
+        const res = await fetch(`/api/issues/${issueID}/extend`, {
+            method: 'POST',
+            headers: apiHeaders,
+            body: JSON.stringify({ new_deadline: newDeadline.toISOString() }),
+        });
+        if (res.ok) {
+            window.location.reload();
+            return;
+        }
+        const data = await res.json().catch(() => ({}));
+        alert(data.error?.message || 'Failed to extend the deadline.');
+    } catch {
+        alert('Network error — the deadline was not extended.');
+    }
+    this.disabled = false;
+    this.textContent = '⚠ Extend deadline';
+});
+
+// Per-member nudge — reuses the issue reminder, with inline feedback.
+async function nudge(id, btn) {
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Nudging…';
+    try {
+        const res = await fetch(`/api/admin/send-reminder/${id}`, { method: 'POST', headers: apiHeaders });
+        btn.textContent = res.ok ? 'Nudged ✓' : 'Failed';
+    } catch {
+        btn.textContent = 'Failed';
+    }
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2500);
+}
+
+// "Count me in this round" — persists the per-issue flag, then reloads so
+// the responded ratio and roster reflect the new denominator.
+const countAdminToggle = document.getElementById('count-admin-toggle');
+countAdminToggle?.addEventListener('change', async function () {
+    const id = this.dataset.issueId;
+    this.disabled = true;
+    try {
+        const res = await fetch(`/api/issues/${id}/count-admin`, {
+            method: 'POST',
+            headers: apiHeaders,
+            body: JSON.stringify({ on: this.checked }),
+        });
+        if (res.ok) { location.reload(); return; }
+        this.checked = !this.checked;
+        alert('Could not update the setting.');
+    } catch {
+        this.checked = !this.checked;
+        alert('Network error while updating the setting.');
+    } finally {
+        this.disabled = false;
+    }
+});
+
+function defaultIssueTitle() {
+    return new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function openCreateIssueDialog() {
+    const dlg = document.getElementById('create-issue-dialog');
+    const input = document.getElementById('create-issue-title');
+    if (!dlg || !input) return;
+    input.value = defaultIssueTitle();
+    dlg.showModal();
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+}
+
+async function createIssue(title) {
+    const body = title ? JSON.stringify({ title }) : undefined;
+    const res = await fetch('/api/issues', { method: 'POST', headers: apiHeaders, body });
+    if (res.ok) { location.reload(); return; }
+    let detail = '';
+    try {
+        const data = await res.json();
+        const msg = data.error?.message;
+        const fields = data.error?.fields;
+        const lines = fields ? Object.entries(fields).map(([k, v]) => `• ${k}: ${v}`) : [];
+        detail = [msg, ...lines].filter(Boolean).join('\n');
+    } catch (_) {}
+    alert(detail || 'Failed to create issue.');
+}
+
+document.getElementById('confirm-create-issue-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('create-issue-title');
+    const title = (input?.value || '').trim();
+    document.getElementById('create-issue-dialog')?.close();
+    createIssue(title);
+});
+
+document.getElementById('create-issue-title')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('confirm-create-issue-btn')?.click();
+    }
+});
+
+// Live countdown next to the collecting chip.
+(function liveCountdown() {
+    const el = document.querySelector('[data-countdown]');
+    if (!el) return;
+    const deadline = new Date(el.dataset.countdown);
+    function tick() {
+        const ms = deadline - new Date();
+        if (ms <= 0) { el.textContent = 'Past deadline'; return; }
+        const days  = Math.floor(ms / 86400000);
+        const hours = Math.floor((ms % 86400000) / 3600000);
+        el.textContent = days > 0 ? `Closes in ${days}d ${hours}h` : `Closes in ${hours}h`;
+    }
+    tick();
+    setInterval(tick, 60000);
+})();
+</script>
+{{end}}

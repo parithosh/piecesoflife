@@ -1,0 +1,344 @@
+{{define "title"}}Setup — PiecesOfLife{{end}}
+
+{{define "nav"}}{{end}}
+
+{{define "mainClass"}}container--narrow{{end}}
+
+{{define "content"}}
+<div class="wizard">
+    <header style="text-align:center;margin-bottom:var(--space-6);">
+        <h1 style="margin:0;">Welcome to PiecesOfLife</h1>
+        <p class="muted" style="margin-top:var(--space-2);">A few quick steps and your group newsletter is live.</p>
+    </header>
+
+    <div class="wizard-progress" aria-hidden="true">
+        <div class="wizard-progress-step active" data-step-marker="1"></div>
+        <div class="wizard-progress-step" data-step-marker="2"></div>
+        <div class="wizard-progress-step" data-step-marker="3"></div>
+        <div class="wizard-progress-step" data-step-marker="4"></div>
+    </div>
+
+    <!-- Step 1: About you -->
+    <section class="wizard-step" data-step="1">
+        <p class="step-eyebrow">Step 1 of 4</p>
+        <h2>About you</h2>
+        <p class="step-help">This is the name members will see on emails from you.</p>
+
+        <div class="field">
+            <label for="admin-name">Your name</label>
+            <input type="text" id="admin-name" placeholder="e.g., Pari" required autocomplete="name">
+            <span class="error" data-error="admin_name"></span>
+        </div>
+    </section>
+
+    <!-- Step 2: The newsletter -->
+    <section class="wizard-step" data-step="2" style="display:none;">
+        <p class="step-eyebrow">Step 2 of 4</p>
+        <h2>Your newsletter</h2>
+        <p class="step-help">Name it, set a cadence, and pick the day to start.</p>
+
+        <div class="field">
+            <label for="loop-name">Newsletter name</label>
+            <input type="text" id="loop-name" placeholder="e.g., Chaos Crew" required>
+            <span class="error" data-error="loop_name"></span>
+        </div>
+
+        <div class="field">
+            <label for="tagline">Tagline <span class="muted">— optional</span></label>
+            <input type="text" id="tagline" placeholder="e.g., Monthly dispatches from the friend zone">
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label for="frequency">Cadence</label>
+                <select id="frequency">
+                    <option value="monthly" selected>Monthly</option>
+                    <option value="biweekly">Every 2 weeks</option>
+                    <option value="quarterly">Quarterly</option>
+                </select>
+                <span class="error" data-error="frequency"></span>
+            </div>
+
+            <div class="field">
+                <label for="window-days">Days to respond</label>
+                <input type="number" id="window-days" value="7" min="3" max="21">
+                <span class="helper">Between 3 and 21 days.</span>
+                <span class="error" data-error="submission_window_days"></span>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label for="timezone">Timezone</label>
+                <select id="timezone">
+                    <option value="UTC">UTC</option>
+                    <option value="America/New_York">Eastern (US)</option>
+                    <option value="America/Chicago">Central (US)</option>
+                    <option value="America/Denver">Mountain (US)</option>
+                    <option value="America/Los_Angeles">Pacific (US)</option>
+                    <option value="Europe/London">London</option>
+                    <option value="Europe/Berlin">Berlin</option>
+                    <option value="Europe/Paris">Paris</option>
+                    <option value="Asia/Tokyo">Tokyo</option>
+                    <option value="Asia/Kolkata">India</option>
+                    <option value="Australia/Sydney">Sydney</option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label for="start-datetime">First issue opens at</label>
+                <input type="datetime-local" id="start-datetime" required>
+                <span class="error" data-error="start_datetime"></span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Step 3: Questions -->
+    <section class="wizard-step" data-step="3" style="display:none;">
+        <p class="step-eyebrow">Step 3 of 4</p>
+        <h2>Pick questions</h2>
+        <p class="step-help">Choose 3–7 prompts for the first issue. Edit them or write your own.</p>
+
+        <div id="question-list"></div>
+
+        <div class="btn-row" style="margin-top:var(--space-4);">
+            <button type="button" id="add-custom-q" class="btn-secondary">+ Add custom</button>
+            <button type="button" id="reroll-q" class="btn-ghost">↻ Reshuffle suggestions</button>
+        </div>
+
+        <span class="error" data-error="questions"></span>
+    </section>
+
+    <!-- Step 4: Invite -->
+    <section class="wizard-step" data-step="4" style="display:none;">
+        <p class="step-eyebrow">Step 4 of 4</p>
+        <h2>Invite friends</h2>
+        <p class="step-help">Add anyone you want to write the newsletter with. You can invite more later.</p>
+
+        <div id="invite-list">
+            <div class="field">
+                <input type="email" class="invite-email" placeholder="friend@example.com">
+            </div>
+        </div>
+        <button type="button" id="add-invite" class="btn-ghost">+ Add another</button>
+
+        <div class="field" style="margin-top:var(--space-5);">
+            <label for="invite-note">Personal note <span class="muted">— optional</span></label>
+            <textarea id="invite-note" rows="3" placeholder="Hey! I'm starting a group newsletter..."></textarea>
+        </div>
+    </section>
+
+    <div class="wizard-nav">
+        <button type="button" id="wizard-prev" class="btn-ghost" style="visibility:hidden;">Back</button>
+        <span class="spacer"></span>
+        <button type="button" id="wizard-next">Next →</button>
+        <button type="button" id="wizard-finish" style="display:none;">Launch</button>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+    let suggestedQuestions = {{jsonMarshal .SuggestedQuestions}} || [];
+    const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+
+    let currentStep = 1;
+    const totalSteps = 4;
+
+    // Prefill start datetime to tomorrow 09:00 local so the field is never
+    // empty on submit. datetime-local needs "YYYY-MM-DDTHH:MM" with no tz.
+    (function prefillStart() {
+        const d = new Date();
+        d.setDate(d.getDate() + 1);
+        d.setHours(9, 0, 0, 0);
+        const pad = n => String(n).padStart(2, '0');
+        const v = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        document.getElementById('start-datetime').value = v;
+    })();
+
+    // Best-effort default timezone from the browser.
+    (function autoTz() {
+        try {
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const sel = document.getElementById('timezone');
+            for (const opt of sel.options) {
+                if (opt.value === tz) { sel.value = tz; return; }
+            }
+        } catch (_) {}
+    })();
+
+    function showStep(n) {
+        document.querySelectorAll('.wizard-step').forEach(el => el.style.display = 'none');
+        document.querySelector(`[data-step="${n}"]`).style.display = 'block';
+        document.getElementById('wizard-prev').style.visibility = n > 1 ? '' : 'hidden';
+        document.getElementById('wizard-next').style.display = n < totalSteps ? '' : 'none';
+        document.getElementById('wizard-finish').style.display = n === totalSteps ? '' : 'none';
+
+        document.querySelectorAll('.wizard-progress-step').forEach((el, i) => {
+            el.classList.toggle('done',   i + 1 < n);
+            el.classList.toggle('active', i + 1 === n);
+        });
+
+        currentStep = n;
+
+        if (n === 3 && document.getElementById('question-list').children.length === 0) {
+            renderQuestions();
+        }
+    }
+
+    function renderQuestions() {
+        const list = document.getElementById('question-list');
+        list.innerHTML = '';
+        (suggestedQuestions || []).forEach(q => list.appendChild(buildQuestionRow(q)));
+        wireQuestionRows();
+    }
+
+    function buildQuestionRow(q) {
+        const div = document.createElement('label');
+        div.className = 'question-pick checked';
+        if (q.id) div.dataset.bankId = q.id;
+        div.innerHTML = `
+            <div style="display:flex;align-items:center;gap:var(--space-2);">
+                <input type="checkbox" class="q-check" checked>
+                <span class="q-cat">${q.category || 'custom'}</span>
+            </div>
+            <input type="text" class="q-text" value="${(q.text || '').replace(/"/g, '&quot;')}" placeholder="Type your question...">
+        `;
+        return div;
+    }
+
+    function wireQuestionRows() {
+        document.querySelectorAll('.question-pick .q-check').forEach(cb => {
+            cb.addEventListener('change', () => {
+                cb.closest('.question-pick').classList.toggle('checked', cb.checked);
+            });
+        });
+    }
+
+    document.getElementById('wizard-next').addEventListener('click', () => {
+        if (currentStep < totalSteps) showStep(currentStep + 1);
+    });
+
+    document.getElementById('wizard-prev').addEventListener('click', () => {
+        if (currentStep > 1) showStep(currentStep - 1);
+    });
+
+    document.getElementById('add-invite').addEventListener('click', () => {
+        const wrap = document.createElement('div');
+        wrap.className = 'field';
+        wrap.innerHTML = '<input type="email" class="invite-email" placeholder="friend@example.com">';
+        document.getElementById('invite-list').appendChild(wrap);
+        wrap.querySelector('input').focus();
+    });
+
+    document.getElementById('add-custom-q').addEventListener('click', () => {
+        const row = buildQuestionRow({ text: '', category: 'custom' });
+        document.getElementById('question-list').appendChild(row);
+        wireQuestionRows();
+        row.querySelector('.q-text').focus();
+    });
+
+    document.getElementById('reroll-q').addEventListener('click', async () => {
+        try {
+            const res = await fetch('/api/question-bank?used=false&per_page=30', {
+                headers: { 'X-CSRF-Token': csrfToken },
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            const pool = (data.items || []).slice();
+            for (let i = pool.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [pool[i], pool[j]] = [pool[j], pool[i]];
+            }
+            suggestedQuestions = pool.slice(0, 5);
+            renderQuestions();
+        } catch (_) {}
+    });
+
+    function clearErrors() {
+        document.querySelectorAll('[data-error]').forEach(el => el.textContent = '');
+    }
+
+    function showErrors(fields) {
+        if (!fields) return;
+        for (const [k, v] of Object.entries(fields)) {
+            const el = document.querySelector(`[data-error="${k}"]`);
+            if (el) el.textContent = v;
+        }
+        // Jump to step that owns the first failing field.
+        const stepOf = {
+            admin_name: 1,
+            loop_name: 2, frequency: 2, submission_window_days: 2, start_datetime: 2,
+            questions: 3,
+        };
+        const firstField = Object.keys(fields)[0];
+        if (stepOf[firstField]) showStep(stepOf[firstField]);
+    }
+
+    document.getElementById('wizard-finish').addEventListener('click', async () => {
+        const btn = document.getElementById('wizard-finish');
+        btn.disabled = true;
+        btn.textContent = 'Launching...';
+        clearErrors();
+
+        const questions = [];
+        document.querySelectorAll('.q-check:checked').forEach(cb => {
+            const row = cb.closest('.question-pick');
+            const text = row.querySelector('.q-text').value.trim();
+            if (text) {
+                questions.push({
+                    text,
+                    category: null,
+                    bank_id: row.dataset.bankId ? parseInt(row.dataset.bankId) : null,
+                });
+            }
+        });
+
+        const inviteEmails = [];
+        document.querySelectorAll('.invite-email').forEach(input => {
+            const email = input.value.trim();
+            if (email) inviteEmails.push(email);
+        });
+
+        const body = {
+            admin_name: document.getElementById('admin-name').value.trim(),
+            loop_name: document.getElementById('loop-name').value.trim(),
+            tagline: document.getElementById('tagline').value.trim() || null,
+            frequency: document.getElementById('frequency').value,
+            submission_window_days: parseInt(document.getElementById('window-days').value),
+            start_datetime: document.getElementById('start-datetime').value,
+            timezone: document.getElementById('timezone').value,
+            questions,
+            invite_emails: inviteEmails,
+            invite_note: document.getElementById('invite-note').value.trim() || null,
+        };
+
+        try {
+            const res = await fetch('/api/onboarding/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                body: JSON.stringify(body),
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                window.location.href = data.redirect || '/admin';
+                return;
+            }
+
+            const data = await res.json().catch(() => ({}));
+            showErrors(data.error?.fields);
+            if (!data.error?.fields) {
+                alert(data.error?.message || 'Something went wrong.');
+            }
+        } catch (err) {
+            alert('Network error. Please try again.');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Launch';
+        }
+    });
+
+    showStep(1);
+</script>
+{{end}}
