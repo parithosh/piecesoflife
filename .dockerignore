@@ -1,0 +1,10 @@
+.git
+.gitignore
+_local/
+docs/
+tests/
+*.md
+.env
+.env.*
+.claude/
+docker-compose*.yml

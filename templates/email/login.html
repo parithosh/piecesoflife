@@ -1,0 +1,13 @@
+{{define "email_title"}}Log in to {{.LoopName}}{{end}}
+
+{{define "email_content"}}
+<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">Log in to {{.LoopName}}</h2>
+<p style="margin:0 0 16px;">Hi {{.Name}},</p>
+<p style="margin:0 0 16px;">Click the button below to sign in. This link is single-use and expires in 30 minutes.</p>
+
+{{template "cta_button" .CTA}}
+
+<p style="margin:24px 0 0;color:#666;font-size:14px;">
+  If you didn't request this, you can safely ignore the email — nothing will happen.
+</p>
+{{end}}

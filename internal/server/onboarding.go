@@ -1,0 +1,551 @@
+package server
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/parithosh/piecesoflife/internal/auth"
+	"github.com/parithosh/piecesoflife/internal/store"
+)
+
+// SetupWizardData is the template data for the onboarding setup page.
+type SetupWizardData struct {
+	PageData
+	SuggestedQuestions []store.QuestionBank
+}
+
+// handleAdminSetup renders the onboarding wizard page.
+// GET /admin/setup
+func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
+	setupComplete, err := s.store.IsSetupComplete(r.Context())
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to check setup status",
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if setupComplete {
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+
+	questions, err := s.store.SelectRandomUnusedQuestions(r.Context(), 5)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to select suggested questions",
+			slog.String("error", err.Error()))
+	}
+
+	user := UserFromContext(r.Context())
+	settings, _ := s.store.GetSettings(r.Context())
+
+	data := SetupWizardData{
+		PageData: PageData{
+			User:     user,
+			Settings: settings,
+		},
+		SuggestedQuestions: questions,
+	}
+
+	s.renderPage(w, "setup.html", data)
+}
+
+// onboardingRequest is the expected JSON body for POST /api/onboarding/complete.
+type onboardingRequest struct {
+	AdminName            string               `json:"admin_name"`
+	LoopName             string               `json:"loop_name"`
+	Tagline              *string              `json:"tagline"`
+	Frequency            string               `json:"frequency"`
+	SubmissionWindowDays int                  `json:"submission_window_days"`
+	StartDatetime        string               `json:"start_datetime"`
+	Timezone             string               `json:"timezone"`
+	Questions            []onboardingQuestion `json:"questions"`
+	InviteEmails         []string             `json:"invite_emails"`
+	InviteNote           *string              `json:"invite_note"`
+}
+
+type onboardingQuestion struct {
+	Text     string  `json:"text"`
+	Category *string `json:"category"`
+	BankID   *int64  `json:"bank_id"`
+}
+
+// handleCompleteOnboarding processes the setup wizard submission.
+// POST /api/onboarding/complete
+func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request) {
+	// Idempotency check.
+	setupComplete, err := s.store.IsSetupComplete(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
+		return
+	}
+
+	if setupComplete {
+		writeJSON(w, http.StatusOK, map[string]string{"redirect": "/admin"})
+		return
+	}
+
+	var req onboardingRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	// Validate required fields.
+	errors := make(map[string]string, 4)
+	if strings.TrimSpace(req.AdminName) == "" {
+		errors["admin_name"] = "Name is required"
+	}
+	if strings.TrimSpace(req.LoopName) == "" {
+		errors["loop_name"] = "Newsletter name is required"
+	}
+	if req.StartDatetime == "" {
+		errors["start_datetime"] = "Start date is required"
+	}
+
+	validFreq := map[string]bool{"biweekly": true, "monthly": true, "quarterly": true}
+	if !validFreq[req.Frequency] {
+		errors["frequency"] = "Must be biweekly, monthly, or quarterly"
+	}
+
+	if req.SubmissionWindowDays < 3 || req.SubmissionWindowDays > 21 {
+		errors["submission_window_days"] = "Must be between 3 and 21 days"
+	}
+
+	if len(req.Questions) == 0 {
+		errors["questions"] = "At least one question is required"
+	}
+
+	if len(errors) > 0 {
+		writeValidationError(w, errors)
+		return
+	}
+
+	// Parse start datetime in the provided timezone. An unknown zone is a
+	// validation error — silently falling back to UTC would skew every
+	// scheduled reminder for the life of the loop.
+	loc, err := time.LoadLocation(req.Timezone)
+	if err != nil {
+		writeValidationError(w, map[string]string{
+			"timezone": "Unknown timezone — use an IANA name like Asia/Kolkata or Europe/Berlin",
+		})
+
+		return
+	}
+
+	localTime, err := time.ParseInLocation("2006-01-02T15:04:05", req.StartDatetime, loc)
+	if err != nil {
+		localTime, err = time.ParseInLocation("2006-01-02T15:04", req.StartDatetime, loc)
+		if err != nil {
+			writeValidationError(w, map[string]string{
+				"start_datetime": "Invalid date format",
+			})
+			return
+		}
+	}
+
+	utcStart := localTime.UTC()
+	deadline := utcStart.Add(time.Duration(req.SubmissionWindowDays) * 24 * time.Hour)
+
+	user := UserFromContext(r.Context())
+	ctx := r.Context()
+	month := int(utcStart.Month())
+	year := utcStart.Year()
+
+	// The sequence below is written to be *resumable*. If an earlier attempt
+	// failed partway through, submitting the wizard again converges to the
+	// same state instead of creating duplicates. Each step either:
+	//   (a) is already idempotent at the SQL level (UPDATE / UPSERT), or
+	//   (b) reuses existing rows when it finds them (issue lookup), or
+	//   (c) deletes-and-recreates a self-contained slice of state
+	//       (questions, scheduler events) that is safe to rewrite because
+	//       no downstream rows can exist before setup_complete is set.
+	// setup_complete is flipped last — until then, the wizard stays open.
+
+	// Step 1: Update admin name. Idempotent (UPDATE).
+	if err := s.store.SetUserName(ctx, user.ID, req.AdminName); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to set admin name",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update name")
+		return
+	}
+
+	// Step 2: Update settings. Idempotent (single-row UPSERT-ish).
+	currentSettings, _ := s.store.GetSettings(ctx)
+	accentColor := "#2d5016"
+	autoCreateEnabled := false
+	allowPublicMementos := true
+	if currentSettings != nil {
+		if currentSettings.AccentColor != "" {
+			accentColor = currentSettings.AccentColor
+		}
+		autoCreateEnabled = currentSettings.AutoCreateEnabled
+		allowPublicMementos = currentSettings.AllowPublicMementos
+	}
+
+	settings := &store.Settings{
+		LoopName:             req.LoopName,
+		Tagline:              req.Tagline,
+		Frequency:            req.Frequency,
+		SubmissionWindowDays: req.SubmissionWindowDays,
+		StartDatetime:        &utcStart,
+		Timezone:             req.Timezone,
+		InviteNote:           req.InviteNote,
+		AccentColor:          accentColor,
+		AutoCreateEnabled:    autoCreateEnabled,
+		AllowPublicMementos:  allowPublicMementos,
+	}
+
+	if err := s.store.UpdateSettings(ctx, settings); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to update settings",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update settings")
+		return
+	}
+
+	// Step 3: Mark chosen bank questions as used. Idempotent (UPDATE WHERE id=).
+	for _, q := range req.Questions {
+		if q.BankID != nil {
+			if err := s.store.MarkBankQuestionUsed(ctx, *q.BankID); err != nil {
+				s.logger.ErrorContext(ctx, "Failed to mark bank question used",
+					slog.Int64("bank_id", *q.BankID),
+					slog.String("error", err.Error()))
+			}
+		}
+	}
+
+	// Step 4: Get-or-create the setup issue. On retry, reuse the issue from
+	// a previous partial attempt instead of creating a second one for the
+	// same (month, year).
+	issueID, err := s.getOrCreateSetupIssue(ctx, month, year, utcStart, deadline)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to get or create setup issue",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create issue")
+		return
+	}
+
+	// Step 5: Ensure status is "collecting". Idempotent.
+	if err := s.store.SetIssueStatus(ctx, issueID, "collecting"); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to set issue status",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to set issue status")
+		return
+	}
+
+	// Step 6: Replace questions for the issue. Delete any stale ones left
+	// from a prior attempt, then insert the current set. Safe because
+	// setup_complete has not been set yet, so no responses exist.
+	if err := s.store.DeleteQuestionsByIssue(ctx, issueID); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to clear existing questions",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to reset questions")
+		return
+	}
+
+	for i, q := range req.Questions {
+		source := "bank"
+		if q.BankID == nil {
+			source = "friend"
+		}
+
+		if _, err := s.store.CreateQuestion(
+			ctx, issueID, q.Text, q.Category, source, nil, i,
+		); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to create question",
+				slog.String("text", q.Text),
+				slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create question")
+			return
+		}
+	}
+
+	// Step 7: Replace scheduler events. Delete any pending ones for this
+	// issue and recreate — deadline/window may have changed between attempts,
+	// and the UNIQUE(issue_id, event_type, scheduled_at) constraint would
+	// otherwise make naive re-insertion fail.
+	if err := s.store.DeleteEventsForIssue(ctx, issueID); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to clear scheduler events",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to reset scheduler")
+		return
+	}
+
+	windowDays := time.Duration(req.SubmissionWindowDays) * 24 * time.Hour
+	reminder1At := utcStart.Add(windowDays / 2)
+	reminder2At := deadline.Add(-2 * 24 * time.Hour)
+
+	for _, ev := range []struct {
+		eventType   string
+		scheduledAt time.Time
+	}{
+		{"reminder_1", reminder1At},
+		{"reminder_2", reminder2At},
+		{"auto_close", deadline},
+	} {
+		if err := s.store.CreateSchedulerEvent(
+			ctx, &issueID, ev.eventType, ev.scheduledAt,
+		); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to create scheduler event",
+				slog.String("event_type", ev.eventType),
+				slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create scheduler event")
+			return
+		}
+	}
+
+	// Step 8: Invite friends. Each invite self-guards against existing
+	// active users, so retries don't create duplicates at the user level.
+	// The side effect — extra invite emails on retry — is preferred over
+	// leaving new members uninvited.
+	for _, email := range req.InviteEmails {
+		email = strings.TrimSpace(strings.ToLower(email))
+		if email == "" || !strings.Contains(email, "@") {
+			continue
+		}
+
+		existingUser, err := s.store.GetUserByEmail(ctx, email)
+		if err == nil {
+			if existingUser.IsActive {
+				// Active from a prior attempt — re-send the invite so the
+				// friend still gets a working CTA link.
+				s.sendInviteEmail(ctx, existingUser.ID, email,
+					req.LoopName, req.AdminName, req.InviteNote, &issueID)
+				continue
+			}
+
+			if err := s.store.ReactivateUser(ctx, existingUser.ID); err != nil {
+				s.logger.ErrorContext(ctx, "Failed to reactivate user",
+					slog.String("email", email),
+					slog.String("error", err.Error()))
+			}
+
+			s.sendInviteEmail(ctx, existingUser.ID, email,
+				req.LoopName, req.AdminName, req.InviteNote, &issueID)
+
+			continue
+		}
+
+		// Create new user.
+		name := strings.Split(email, "@")[0]
+
+		newUserID, err := s.store.CreateUser(ctx, name, email, "member")
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to create invited user",
+				slog.String("email", email),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		if err := s.store.EnsureNotificationPreferences(ctx, newUserID); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to create notification prefs",
+				slog.Int64("user_id", newUserID),
+				slog.String("error", err.Error()))
+		}
+
+		s.sendInviteEmail(ctx, newUserID, email,
+			req.LoopName, req.AdminName, req.InviteNote, &issueID)
+	}
+
+	// Step 9: Mark setup complete. This is the commit point — until it
+	// succeeds, the wizard remains open and resubmission re-converges.
+	if err := s.store.CompleteSetup(ctx); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to complete setup",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to complete setup")
+		return
+	}
+
+	s.logger.InfoContext(ctx, "Onboarding completed",
+		slog.String("loop_name", req.LoopName),
+		slog.Int64("issue_id", issueID),
+		slog.Int("invite_count", len(req.InviteEmails)),
+	)
+
+	writeJSON(w, http.StatusOK, map[string]string{"redirect": "/admin"})
+}
+
+// getOrCreateSetupIssue returns the issue for (month, year) if one already
+// exists from a prior onboarding attempt; otherwise it creates a fresh one.
+// On reuse it also refreshes opens_at/deadline so wizard edits take effect.
+func (s *Server) getOrCreateSetupIssue(
+	ctx context.Context,
+	month, year int,
+	opensAt, deadline time.Time,
+) (int64, error) {
+	existing, err := s.store.GetIssueByMonthYear(ctx, month, year)
+	if err == nil {
+		// Refresh schedule in case the admin changed start/window on retry.
+		// UpdateIssue uses COALESCE so passing non-nil deadline updates it;
+		// opens_at is not exposed by UpdateIssue and is acceptable as-is
+		// because the UI does not allow back-dating a started issue.
+		if updErr := s.store.UpdateIssue(ctx, existing.ID, nil, &deadline); updErr != nil {
+			return 0, fmt.Errorf("refreshing setup issue deadline: %w", updErr)
+		}
+
+		return existing.ID, nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("looking up existing setup issue: %w", err)
+	}
+
+	return s.store.CreateIssue(ctx, nil, month, year, opensAt, deadline)
+}
+
+// sendInviteEmail generates a CTA token and sends an invite email to a user.
+func (s *Server) sendInviteEmail(
+	ctx context.Context,
+	userID int64, email, loopName, adminName string,
+	inviteNote *string, issueID *int64,
+) {
+	raw, hash, err := auth.GenerateRandomToken(32)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to generate invite token",
+			slog.String("error", err.Error()))
+		return
+	}
+
+	expiresAt := time.Now().Add(30 * 24 * time.Hour)
+	if err := s.store.CreateAuthToken(ctx, userID, hash, "email_cta", expiresAt); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to create invite token",
+			slog.String("error", err.Error()))
+		return
+	}
+
+	authURL := s.config.BaseURL + "/?auth=" + raw
+	note := ""
+	if inviteNote != nil {
+		note = *inviteNote
+	}
+
+	subject := fmt.Sprintf("You're invited to %s!", loopName)
+	body := s.renderInviteEmail(loopName, adminName, note, authURL)
+
+	// Log the email attempt.
+	logID, _ := s.store.LogEmail(ctx, &userID, issueID, "invite", "pending", nil)
+
+	// Detach ctx so the SMTP dial + DB log update survive after this request.
+	bgCtx := context.WithoutCancel(ctx)
+
+	go func() {
+		sendCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
+		defer cancel()
+
+		sendErr := s.emailer.Send(sendCtx, email, subject, body)
+		if sendErr != nil {
+			errStr := sendErr.Error()
+			if logID > 0 {
+				_ = s.store.UpdateEmailLog(sendCtx, logID, "failed", nil, &errStr)
+			}
+			s.logger.ErrorContext(sendCtx, "Failed to send invite email",
+				slog.String("email", email),
+				slog.String("error", errStr))
+		} else {
+			now := time.Now()
+			if logID > 0 {
+				_ = s.store.UpdateEmailLog(sendCtx, logID, "sent", &now, nil)
+			}
+		}
+	}()
+}
+
+// renderInviteEmail builds the invite email using the invite.html template.
+// html/template auto-escapes every data field — no manual escaping needed.
+func (s *Server) renderInviteEmail(loopName, adminName, note, authURL string) string {
+	return s.renderEmail("invite.html", map[string]any{
+		"LoopName":  loopName,
+		"AdminName": adminName,
+		"Note":      note,
+		"CTA": map[string]any{
+			"URL":   authURL,
+			"Label": "Join " + loopName,
+		},
+	})
+}
+
+// sendIssueOpenEmail sends the "new issue" notification to a user.
+func (s *Server) sendIssueOpenEmail(
+	ctx context.Context,
+	user *store.User, issue *store.Issue,
+	settings *store.Settings, questions []store.Question,
+) {
+	// Check notification preferences.
+	prefs, err := s.store.GetNotificationPreferences(ctx, user.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+
+	if prefs != nil && !prefs.IssueOpen {
+		return
+	}
+
+	raw, hash, err := auth.GenerateRandomToken(32)
+	if err != nil {
+		return
+	}
+
+	expiresAt := time.Now().Add(30 * 24 * time.Hour)
+	if err := s.store.CreateAuthToken(ctx, user.ID, hash, "email_cta", expiresAt); err != nil {
+		return
+	}
+
+	authURL := fmt.Sprintf("%s/issues/%d/respond?auth=%s", s.config.BaseURL, issue.ID, raw)
+	monthStr := issue.OpensAt.Format("January 2006")
+
+	questionTexts := make([]string, 0, len(questions))
+	for _, q := range questions {
+		questionTexts = append(questionTexts, q.Text)
+	}
+
+	subject := fmt.Sprintf("%s — %s is open!", settings.LoopName, monthStr)
+	body := s.renderIssueOpenEmail(settings.LoopName, user.Name, monthStr, questionTexts, authURL)
+
+	logID, _ := s.store.LogEmail(ctx, &user.ID, &issue.ID, "open", "pending", nil)
+
+	bgCtx := context.WithoutCancel(ctx)
+
+	go func() {
+		sendCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
+		defer cancel()
+
+		sendErr := s.emailer.Send(sendCtx, user.Email, subject, body)
+		if sendErr != nil {
+			errStr := sendErr.Error()
+			if logID > 0 {
+				_ = s.store.UpdateEmailLog(sendCtx, logID, "failed", nil, &errStr)
+			}
+		} else {
+			now := time.Now()
+			if logID > 0 {
+				_ = s.store.UpdateEmailLog(sendCtx, logID, "sent", &now, nil)
+			}
+		}
+	}()
+}
+
+// renderIssueOpenEmail builds the "issue is open" email using the
+// issue_open.html template.
+func (s *Server) renderIssueOpenEmail(
+	loopName, recipientName, month string,
+	questions []string, authURL string,
+) string {
+	return s.renderEmail("issue_open.html", map[string]any{
+		"LoopName":      loopName,
+		"RecipientName": recipientName,
+		"Month":         month,
+		"Questions":     questions,
+		"CTA": map[string]any{
+			"URL":   authURL,
+			"Label": "Share Your Answers",
+		},
+	})
+}

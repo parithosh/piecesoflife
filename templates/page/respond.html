@@ -1,0 +1,813 @@
+{{define "title"}}Respond — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--editor">
+    <div class="pl-editor">
+
+      {{/* ---- left ledger --------------------------------------- */}}
+      <aside class="pl-ledger" aria-label="This round">
+        <div class="mango" aria-hidden="true"></div>
+        <div class="pl-ledger-inner">
+          <p class="pl-eyebrow">{{if .Submitted}}Open now · submitted{{else}}Open now · your turn{{end}}</p>
+          <h1 class="pl-ledger-month">{{.Issue.OpensAt.Format "January"}}<br>{{.Issue.OpensAt.Format "2006"}}</h1>
+          <p class="pl-ledger-context">
+            {{len .Questions}} prompt{{if ne (len .Questions) 1}}s{{end}} ·
+            closes in <b>{{.DaysLeft}} day{{if ne .DaysLeft 1}}s{{end}}</b>.
+            Private until the issue is woven.
+          </p>
+          <div class="pl-ledger-rule"></div>
+
+          <p class="pl-ledger-sub">Progress — {{.Answered}} of {{len .Questions}}</p>
+          <div class="pl-segbar" role="img"
+               aria-label="{{.Answered}} of {{len .Questions}} prompts answered">
+            {{range $i, $q := .Questions}}
+            <span class="pl-seg {{if lt $i $.Answered}}is-filled{{end}}"></span>
+            {{end}}
+          </div>
+
+          {{if .Progress}}
+          <p class="pl-ledger-sub">In this round</p>
+          {{range .Progress.Members}}
+          <div class="pl-roster-row {{if eq .User.ID $.User.ID}}is-you{{end}}">
+            <span class="pl-roster-ava" aria-hidden="true">{{letterAvatar .User.Name}}</span>
+            <span class="pl-roster-name">{{.User.Name}}{{if eq .User.ID $.User.ID}} · you{{end}}</span>
+            {{if eq .User.ID $.User.ID}}
+              {{if $.Submitted}}
+              <span class="pl-roster-status is-done">Done</span>
+              {{else}}
+              <span class="pl-roster-status is-writing">Writing</span>
+              {{end}}
+            {{else if .Responded}}
+              <span class="pl-roster-status is-done">Done</span>
+            {{else}}
+              <span class="pl-roster-status">Waiting</span>
+            {{end}}
+          </div>
+          {{end}}
+          {{end}}
+        </div>
+      </aside>
+
+      {{/* ---- right column: the prompts ------------------------- */}}
+      <div class="pl-questions">
+        {{if .Questions}}
+        <div id="response-editor">
+          {{range $idx, $q := .Questions}}
+          <div class="pl-q question-section" data-question-id="{{$q.ID}}">
+            <div class="pl-q-num" aria-hidden="true">{{printf "%02d" (add $idx 1)}}</div>
+            <div class="pl-q-body">
+              <div class="pl-q-head">
+                <h3 class="pl-q-prompt">{{$q.Text}}</h3>
+                {{if $.Responses}}{{with index $.Responses $q.ID}}
+                <span class="save-status saved">Saved</span>
+                {{else}}<span class="save-status"></span>{{end}}
+                {{else}}<span class="save-status"></span>{{end}}
+              </div>
+
+              {{if $.Responses}}
+                {{with index $.Responses $q.ID}}
+                <div class="response-area" data-response-id="{{.Response.ID}}" data-version="{{.Response.Version}}">
+                  <div class="blocks">
+                  {{range .Blocks}}
+                    <div class="block" data-block-id="{{.ID}}" data-type="{{.Type}}">
+                      <button type="button" class="drag-handle" aria-label="Drag to reorder" tabindex="-1">⋮⋮</button>
+                      {{if eq .Type "text"}}
+                      <textarea class="response-text" placeholder="Share your thoughts…"
+                                data-block-id="{{.ID}}">{{if .Content}}{{.Content}}{{end}}</textarea>
+                      {{else if eq .Type "photo"}}
+                      <div class="photo-block">
+                        <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" style="max-width:100%;border-radius:4px;">
+                        {{if .Caption}}<p class="caption">{{.Caption}}</p>{{end}}
+                      </div>
+                      {{else if eq .Type "audio"}}
+                      <div class="media-block media-block--audio">
+                        {{if .FilePath}}
+                        <audio controls preload="metadata" src="{{.FilePath | uploadURL}}"></audio>
+                        {{end}}
+                        <p class="caption">Audio recording</p>
+                      </div>
+                      {{else if eq .Type "video"}}
+                      <div class="media-block media-block--video">
+                        {{if .FilePath}}
+                        <video controls preload="metadata" playsinline src="{{.FilePath | uploadURL}}"></video>
+                        {{end}}
+                        <p class="caption">Video recording</p>
+                      </div>
+                      {{else if eq .Type "link"}}
+                      <div class="link-block">
+                        {{if .LinkURL}}
+                          {{$embed := linkEmbed .LinkURL}}
+                          {{if $embed}}{{$embed}}{{else}}
+                            <div style="padding:10px 12px;background:var(--ivory-2);border-left:3px solid var(--marigold);margin:8px 0;">
+                              🔗 <a href="{{.LinkURL}}" rel="noopener" target="_blank">{{.LinkURL}}</a>
+                            </div>
+                          {{end}}
+                        {{end}}
+                      </div>
+                      {{end}}
+                    </div>
+                  {{end}}
+                  </div>
+                </div>
+                {{else}}
+                <div class="response-area" data-question-id="{{$q.ID}}">
+                  <textarea class="response-text" placeholder="Share your thoughts…"></textarea>
+                </div>
+                {{end}}
+              {{else}}
+              <div class="response-area" data-question-id="{{$q.ID}}">
+                <textarea class="response-text" placeholder="Share your thoughts…"></textarea>
+              </div>
+              {{end}}
+
+              <div class="pl-q-actions">
+                <input type="file" accept="image/*" class="pl-photo-input" data-question-id="{{$q.ID}}" hidden>
+                <button type="button" class="pl-chip-btn pl-photo-btn" data-question-id="{{$q.ID}}">＋ Photo</button>
+                <button type="button" class="pl-chip-btn pl-link-btn" data-question-id="{{$q.ID}}">🔗 Link</button>
+                <button type="button" class="pl-chip-btn pl-record-btn" data-kind="audio" data-question-id="{{$q.ID}}">● Audio record</button>
+                <button type="button" class="pl-chip-btn pl-record-btn" data-kind="video" data-question-id="{{$q.ID}}">▣ Video record</button>
+              </div>
+            </div>
+          </div>
+          {{end}}
+        </div>
+
+        {{/* ---- photo & video dump: the issue's collage closer ---- */}}
+        <section class="pl-dump" aria-label="Photo and video dump">
+          <div class="pl-dump-head">
+            <div class="pl-q-num pl-dump-num" aria-hidden="true">✦</div>
+            <div class="pl-dump-head-body">
+              <h3 class="pl-q-prompt">The photo &amp; video dump</h3>
+              <p class="pl-dump-sub">
+                One last page for everything that didn't fit a question — the
+                odd screenshots, the blurry dinners, the good light. It closes
+                the issue as a collage. Files up to 200&nbsp;MB.
+              </p>
+            </div>
+          </div>
+
+          <div class="pl-dump-grid{{if not .DumpItems}} is-empty{{end}}" id="dump-grid"
+               data-issue-id="{{.Issue.ID}}">
+            {{range .DumpItems}}
+            <figure class="pl-dump-thumb" data-dump-id="{{.ID}}">
+              {{if eq .Kind "video"}}
+              <video src="{{.FilePath | uploadURL}}" preload="metadata" muted playsinline></video>
+              <span class="pl-dump-thumb-kind" aria-hidden="true">▶</span>
+              {{else}}
+              <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}">
+              {{end}}
+              <button type="button" class="pl-dump-remove" data-dump-remove="{{.ID}}"
+                      aria-label="Remove from dump">✕</button>
+            </figure>
+            {{end}}
+            <p class="pl-dump-empty">Nothing dumped yet — it's optional, but the collage is better with you in it.</p>
+          </div>
+
+          <div class="pl-q-actions">
+            <input type="file" accept="image/*" id="dump-photo-input" multiple hidden>
+            <input type="file" accept="video/*" id="dump-video-input" hidden>
+            <button type="button" class="pl-chip-btn" id="dump-photo-btn">＋ Photos</button>
+            <button type="button" class="pl-chip-btn" id="dump-video-btn">▣ Video</button>
+            <span class="pl-dump-status" id="dump-status" role="status" aria-live="polite"></span>
+          </div>
+        </section>
+
+        <div class="pl-submitbar">
+          <p class="pl-submitbar-note">
+            {{if .Submitted}}
+            <b>✓ Submitted.</b> You can keep editing until the issue is <b>woven &amp; posted</b>.
+            {{else}}
+            Edit anytime until {{.Issue.OpensAt | formatDate}} is <b>woven &amp; posted</b>.
+            {{end}}
+          </p>
+          <div class="pl-submitbar-actions">
+            <span id="submit-error" class="pl-submit-error" role="alert" hidden></span>
+            <button type="button" id="submit-all-btn" class="pl-btn pl-btn--gold"
+                    data-label="{{if .Submitted}}Update my answers →{{else}}Submit to the issue →{{end}}">
+              {{if .Submitted}}Update my answers →{{else}}Submit to the issue →{{end}}
+            </button>
+          </div>
+        </div>
+        <div class="save-status-sticky" id="global-save-status" role="status" aria-live="polite" hidden>All drafts saved</div>
+
+        {{else}}
+        <div class="pl-empty" style="text-align:center;padding:40px 20px;">
+          <h3 class="pl-display" style="font-size:24px;margin:0 0 6px;">No questions yet</h3>
+          <p style="font-family:var(--font-read);color:var(--ink-soft);margin:0;">This issue is open, but questions haven't been added yet.</p>
+        </div>
+        {{end}}
+
+        {{/* ---- suggest a question ------------------------------ */}}
+        <section class="pl-suggest">
+          <h3>Suggest a question for this issue</h3>
+          <p>Got a prompt you'd love to hear everyone answer? It'll appear in this issue right away.</p>
+          <form id="friend-question-form">
+            <textarea id="friend-question-text" class="pl-field"
+                      placeholder="e.g. What's the best meal you ate this month?"
+                      style="min-height:80px;margin-top:0;" maxlength="500" required
+                      aria-describedby="friend-question-count"></textarea>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:12px;">
+              <button type="submit" id="friend-question-submit" class="pl-btn pl-btn--outline">Send suggestion</button>
+              <span id="friend-question-status" style="font-family:var(--font-ui);font-size:12px;color:var(--ink-soft);"></span>
+              <span id="friend-question-count" style="margin-left:auto;font-family:var(--font-ui);font-size:11px;color:var(--muted);" hidden></span>
+            </div>
+          </form>
+        </section>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/sortable.min.js?v={{assetVersion}}"></script>
+<script src="/static/editor.js?v={{assetVersion}}"></script>
+<script>
+const issueID = {{.Issue.ID}};
+
+let autosaveTimers = {};
+
+function updateGlobalSave() {
+    const bar = document.getElementById('global-save-status');
+    if (!bar) return;
+    const states = [...document.querySelectorAll('.save-status')].map(s => s.className);
+    if (states.some(s => s.includes('saving'))) bar.textContent = 'Saving…';
+    else if (states.some(s => s.includes('error'))) bar.textContent = 'Save failed — retrying';
+    else bar.textContent = 'All drafts saved';
+}
+const _globalSaveObserver = new MutationObserver(updateGlobalSave);
+document.querySelectorAll('.save-status').forEach(el => _globalSaveObserver.observe(el, { attributes: true, childList: true }));
+
+document.querySelectorAll('.response-text').forEach(textarea => {
+    textarea.addEventListener('input', function() {
+        const section = this.closest('.question-section');
+        const qID = section.dataset.questionId;
+        clearTimeout(autosaveTimers[qID]);
+        const status = section.querySelector('.save-status');
+        if (status) { status.className = 'save-status'; status.textContent = ''; }
+        autosaveTimers[qID] = setTimeout(() => autosave(section), 2000);
+    });
+});
+
+async function autosave(section) {
+    const qID = section.dataset.questionId;
+    const area = section.querySelector('.response-area');
+    let responseID = area?.dataset.responseId;
+    const status = section.querySelector('.save-status');
+
+    if (!responseID) {
+        // Create the response first. The server returns either a freshly
+        // created row (201) or an existing one (200) — either way `version`
+        // is authoritative; assuming 0 here triggers a 409 + retry on the
+        // very first autosave because the responses table defaults version
+        // to 1.
+        try {
+            const res = await fetch('/api/responses', {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify({ question_id: parseInt(qID) }),
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            responseID = data.id;
+            area.dataset.responseId = responseID;
+            area.dataset.version = String(data.version ?? 0);
+        } catch { return; }
+    }
+
+    const version = parseInt(area.dataset.version || '0');
+    const blocks = [];
+    section.querySelectorAll('.response-text').forEach(t => {
+        blocks.push({ type: 'text', content: t.value });
+    });
+
+    if (status) { status.className = 'save-status saving'; status.textContent = 'Saving…'; }
+
+    try {
+        const res = await fetch(`/api/responses/${responseID}/autosave`, {
+            method: 'PUT',
+            headers: apiHeaders(),
+            body: JSON.stringify({ version, blocks }),
+        });
+        if (res.ok) {
+            const data = await res.json();
+            area.dataset.version = data.version;
+            if (status) { status.className = 'save-status saved'; status.textContent = 'Saved'; }
+        } else if (res.status === 409) {
+            const data = await res.json();
+            area.dataset.version = data.current_version;
+            if (status) { status.className = 'save-status error'; status.textContent = 'Conflict — retrying…'; }
+            setTimeout(() => autosave(section), 500);
+        }
+    } catch {
+        if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
+    }
+}
+
+// Expose autosave to editor.js link-paste logic so the shared helper can
+// trigger a save before inserting a link block.
+window.autosave = autosave;
+
+const submitAllButton = document.getElementById('submit-all-btn');
+if (submitAllButton) {
+submitAllButton.addEventListener('click', async function() {
+    const errorBox = document.getElementById('submit-error');
+    if (errorBox) errorBox.hidden = true;
+    this.disabled = true;
+    this.textContent = 'Submitting…';
+
+    // Autosave all first.
+    for (const section of document.querySelectorAll('.question-section')) {
+        await autosave(section);
+    }
+
+    // Submit each response. Questions the user never touched have no
+    // response row yet — there is nothing to submit for those.
+    let ok = true;
+    let submittedCount = 0;
+    for (const area of document.querySelectorAll('[data-response-id]')) {
+        const rid = area.dataset.responseId;
+        if (!rid) continue;
+        try {
+            const res = await fetch(`/api/responses/${rid}/submit`, {
+                method: 'POST', headers: apiHeaders(),
+            });
+            if (res.ok) submittedCount++;
+            else ok = false;
+        } catch { ok = false; }
+    }
+
+    if (ok && submittedCount > 0) {
+        this.textContent = '✓ Submitted!';
+        setTimeout(() => { window.location.href = '/'; }, 1000);
+    } else {
+        this.textContent = this.dataset.label || 'Submit to the issue →';
+        this.disabled = false;
+        if (errorBox) {
+            errorBox.textContent = ok
+                ? 'Nothing to submit yet — write an answer first.'
+                : 'Some answers failed to submit. Check your connection and try again.';
+            errorBox.hidden = false;
+        }
+    }
+});
+}
+
+// --- Media / link chip buttons -----------------------------------------
+//
+// Media uses the editor's shared upload helper; links reuse the existing
+// paste-to-embed flow, so the button just focuses the field and nudges.
+async function ensureResponse(section) {
+    const area = section.querySelector('.response-area');
+    if (area?.dataset.responseId) return area.dataset.responseId;
+    await autosave(section);
+    return section.querySelector('.response-area')?.dataset.responseId;
+}
+
+document.querySelectorAll('.pl-photo-btn').forEach(btn => {
+    const input = btn.parentElement.querySelector('.pl-photo-input');
+    btn.addEventListener('click', () => input?.click());
+    input?.addEventListener('change', async function() {
+        const file = this.files && this.files[0];
+        if (!file) return;
+        const section = this.closest('.question-section');
+        const helper = window.__polEditor;
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '⏳ Uploading…';
+        try {
+            const rid = await ensureResponse(section);
+            if (!rid) throw new Error('Could not create a response to attach to.');
+            await helper.uploadPhoto(rid, file);
+            btn.textContent = '✓ Added';
+            helper.showToast('Photo added — reloading');
+            setTimeout(() => window.location.reload(), 600);
+        } catch (err) {
+            helper.showToast(err.message || 'Upload failed');
+            btn.disabled = false;
+            btn.textContent = label;
+        } finally {
+            this.value = '';
+        }
+    });
+});
+
+document.querySelectorAll('.pl-link-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+        const section = this.closest('.question-section');
+        const helper = window.__polEditor;
+        const raw = prompt('Paste the link to add (YouTube, Spotify, or any web page):');
+        if (raw === null) return;
+
+        let parsed;
+        try { parsed = new URL(raw.trim()); } catch { parsed = null; }
+        if (!parsed || !['http:', 'https:'].includes(parsed.protocol)) {
+            helper?.showToast("That doesn't look like a web link");
+            return;
+        }
+
+        const label = this.textContent;
+        this.disabled = true;
+        this.textContent = '⏳ Adding…';
+        try {
+            const rid = await ensureResponse(section);
+            if (!rid) throw new Error('Could not create a response to attach to.');
+            const res = await helper.createLinkBlock(rid, parsed.href);
+            if (!res.ok) throw new Error('Could not add the link');
+            helper.showToast('Link added — reloading');
+            setTimeout(() => window.location.reload(), 600);
+        } catch (err) {
+            helper.showToast(err.message || 'Could not add the link');
+            this.disabled = false;
+            this.textContent = label;
+        }
+    });
+});
+
+function preferredRecorderType(kind) {
+    const candidates = kind === 'video'
+        ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+        : ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+    if (!window.MediaRecorder) return '';
+    return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+}
+
+function recorderExtension(type, kind) {
+    if (type.includes('mp4')) return kind === 'audio' ? 'm4a' : 'mp4';
+    if (type.includes('ogg')) return 'ogg';
+    return 'webm';
+}
+
+function recorderDialog() {
+    let dialog = document.getElementById('record-dialog');
+    if (dialog) return dialog;
+
+    dialog = document.createElement('dialog');
+    dialog.id = 'record-dialog';
+    dialog.className = 'record-dialog';
+    dialog.innerHTML = `
+      <div class="record-dialog-body">
+        <h3 data-record-title>Record</h3>
+        <p class="record-status" data-record-status role="status" aria-live="polite">Waiting for permission…</p>
+        <div class="record-stage">
+          <video class="record-preview" data-record-preview autoplay muted playsinline hidden></video>
+          <div class="record-playback" data-record-playback hidden></div>
+        </div>
+        <div class="record-readout">
+          <span class="record-dot" data-record-dot aria-hidden="true"></span>
+          <span class="record-timer" data-record-timer>0:00</span>
+        </div>
+        <div class="record-meter" aria-hidden="true"><span></span></div>
+        <div class="record-dialog-actions">
+          <button type="button" class="pl-btn pl-btn--outline" data-record-cancel>Cancel</button>
+          <button type="button" class="pl-btn pl-btn--outline" data-record-discard hidden>Discard &amp; redo</button>
+          <button type="button" class="pl-btn pl-btn--outline" data-record-pause hidden>Pause</button>
+          <button type="button" class="pl-btn pl-btn--gold" data-record-start disabled>● Start recording</button>
+          <button type="button" class="pl-btn pl-btn--gold" data-record-stop hidden>■ Stop</button>
+          <button type="button" class="pl-btn pl-btn--gold" data-record-save hidden>Save recording</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+    return dialog;
+}
+
+function formatDuration(ms) {
+    const total = Math.floor(ms / 1000);
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+// A single recording session: opens the dialog, requests permission, then
+// waits for the user to Start / Pause / Stop. Nothing is uploaded until the
+// user explicitly hits Save, and Discard & redo throws the current take away
+// so re-recording never leaves a stray second file behind.
+async function recordMedia(section, kind) {
+    const helper = window.__polEditor;
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        helper?.showToast('Recording is not supported in this browser');
+        return;
+    }
+
+    const dialog = recorderDialog();
+    const el = sel => dialog.querySelector(sel);
+    const title = el('[data-record-title]');
+    const status = el('[data-record-status]');
+    const preview = el('[data-record-preview]');
+    const playback = el('[data-record-playback]');
+    const timer = el('[data-record-timer]');
+    const startBtn = el('[data-record-start]');
+    const pauseBtn = el('[data-record-pause]');
+    const stopBtn = el('[data-record-stop]');
+    const saveBtn = el('[data-record-save]');
+    const discardBtn = el('[data-record-discard]');
+    const cancelBtn = el('[data-record-cancel]');
+
+    let stream;
+    let recorder;
+    let chunks = [];
+    let mimeType = preferredRecorderType(kind);
+    let saveType = '';
+    let savedBlockId = null;   // block uploaded for review but not yet kept
+    let savedBlockURL = '';
+    let elapsed = 0;
+    let segmentStart = 0;
+    let ticker = null;
+    let closed = false;
+
+    title.textContent = kind === 'video' ? 'Record video' : 'Record audio';
+
+    function setState(state) {
+        dialog.dataset.recordState = state;
+        startBtn.hidden = state !== 'idle';
+        pauseBtn.hidden = state !== 'recording' && state !== 'paused';
+        stopBtn.hidden = state !== 'recording' && state !== 'paused';
+        saveBtn.hidden = state !== 'recorded';
+        discardBtn.hidden = state !== 'recorded';
+    }
+
+    function startTicker() {
+        segmentStart = performance.now();
+        stopTicker();
+        ticker = setInterval(() => {
+            timer.textContent = formatDuration(elapsed + (performance.now() - segmentStart));
+        }, 200);
+    }
+
+    function stopTicker() {
+        if (ticker) {
+            clearInterval(ticker);
+            ticker = null;
+        }
+    }
+
+    function clearPlayback() {
+        playback.hidden = true;
+        playback.replaceChildren();
+        chunks = [];
+    }
+
+    // Fire-and-forget delete of an uploaded-but-unkept take.
+    function deleteBlock(id) {
+        if (id == null) return;
+        fetch(`/api/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() }).catch(() => {});
+    }
+
+    async function deleteSavedBlock() {
+        const id = savedBlockId;
+        savedBlockId = null;
+        savedBlockURL = '';
+        if (id == null) return;
+        try {
+            await fetch(`/api/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() });
+        } catch {}
+    }
+
+    function teardown() {
+        closed = true;
+        stopTicker();
+        clearPlayback();
+        if (preview.srcObject) preview.srcObject = null;
+        stream?.getTracks().forEach(track => track.stop());
+        // A take that was uploaded for review but never saved must not linger.
+        deleteBlock(savedBlockId);
+        savedBlockId = null;
+    }
+
+    function close() {
+        teardown();
+        if (dialog.open) dialog.close();
+    }
+
+    function resetToIdle() {
+        clearPlayback();
+        elapsed = 0;
+        timer.textContent = '0:00';
+        if (kind === 'video' && stream) {
+            preview.srcObject = stream;
+            preview.hidden = false;
+        }
+        status.textContent = kind === 'video'
+            ? 'Ready — press Start when the frame looks right.'
+            : 'Ready — press Start when you are.';
+        setState('idle');
+        if (!startBtn.disabled) startBtn.focus();
+    }
+
+    dialog.oncancel = ev => {
+        ev.preventDefault();
+        cancelBtn.click();
+    };
+    cancelBtn.onclick = () => close();
+
+    startBtn.onclick = () => {
+        chunks = [];
+        recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        recorder.addEventListener('dataavailable', ev => {
+            if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+        });
+        recorder.addEventListener('stop', async () => {
+            if (closed) return;
+            stopTicker();
+            timer.textContent = formatDuration(elapsed);
+
+            // Drop the ";codecs=…" suffix so the stored file gets a clean
+            // container MIME (matches what the server serves back).
+            const rawType = recorder.mimeType || mimeType || (kind === 'video' ? 'video/webm' : 'audio/webm');
+            saveType = rawType.split(';')[0].trim() || (kind === 'video' ? 'video/webm' : 'audio/webm');
+            const take = new Blob(chunks, { type: saveType });
+
+            if (preview.srcObject) preview.srcObject = null;
+            preview.hidden = true;
+
+            // Upload the take now and preview it over HTTP. A MediaRecorder
+            // clip played from a blob: URL frequently fails to decode inline
+            // ("No video with a supported format…"), while the same bytes
+            // served with range support play fine — that's why the recording
+            // only appeared after saving before. Discard/Cancel delete the
+            // block again, so an unkept take never lingers.
+            status.textContent = 'Processing your recording…';
+            setState('processing');
+            try {
+                const rid = await ensureResponse(section);
+                if (!rid) throw new Error('Could not create a response to attach to.');
+                const ext = recorderExtension(saveType, kind);
+                const file = new File([take], `${kind}-recording.${ext}`, { type: saveType });
+                const uploaded = await helper.uploadMedia(rid, file, kind);
+                const blockId = uploaded?.id ?? uploaded?.ID ?? null;
+
+                if (closed) { deleteBlock(blockId); return; }
+
+                savedBlockId = blockId;
+                savedBlockURL = uploaded?.url || '';
+
+                const media = document.createElement(kind === 'video' ? 'video' : 'audio');
+                media.className = 'record-playback-media';
+                media.controls = true;
+                media.playsInline = true;
+                media.preload = 'metadata';
+                media.src = savedBlockURL;
+                playback.replaceChildren(media);
+                playback.hidden = false;
+                media.load();
+
+                status.textContent = 'Review your take, then Save — or Discard & redo.';
+                setState('recorded');
+            } catch (err) {
+                status.textContent = err.message || 'Could not process the recording — try again.';
+                if (kind === 'video' && stream && !closed) {
+                    preview.srcObject = stream;
+                    preview.hidden = false;
+                }
+                setState('idle');
+                if (!startBtn.disabled) startBtn.focus();
+            }
+        });
+
+        recorder.start(1000);
+        elapsed = 0;
+        startTicker();
+        status.textContent = 'Recording…';
+        setState('recording');
+    };
+
+    pauseBtn.onclick = () => {
+        if (recorder?.state === 'recording') {
+            recorder.pause();
+            elapsed += performance.now() - segmentStart;
+            stopTicker();
+            timer.textContent = formatDuration(elapsed);
+            pauseBtn.textContent = 'Resume';
+            status.textContent = 'Paused.';
+            setState('paused');
+        } else if (recorder?.state === 'paused') {
+            recorder.resume();
+            startTicker();
+            pauseBtn.textContent = 'Pause';
+            status.textContent = 'Recording…';
+            setState('recording');
+        }
+    };
+
+    stopBtn.onclick = () => {
+        if (recorder?.state === 'recording') {
+            elapsed += performance.now() - segmentStart;
+        }
+        pauseBtn.textContent = 'Pause';
+        if (recorder && recorder.state !== 'inactive') recorder.stop();
+    };
+
+    discardBtn.onclick = async () => {
+        discardBtn.disabled = true;
+        status.textContent = 'Discarding…';
+        await deleteSavedBlock();
+        discardBtn.disabled = false;
+        resetToIdle();
+    };
+
+    saveBtn.onclick = () => {
+        if (savedBlockId == null) return;
+        // The take is already uploaded; just keep it (clear the id so teardown
+        // won't delete it) and reload so it renders inline in the editor.
+        savedBlockId = null;
+        helper.showToast(`${kind === 'video' ? 'Video' : 'Audio'} recording added`);
+        close();
+        setTimeout(() => window.location.reload(), 600);
+    };
+
+    setState('idle');
+    status.textContent = 'Waiting for permission…';
+    startBtn.disabled = true;
+    preview.hidden = true;
+    playback.hidden = true;
+    timer.textContent = '0:00';
+    dialog.showModal();
+
+    try {
+        stream = await navigator.mediaDevices.getUserMedia(
+            kind === 'video' ? { audio: true, video: true } : { audio: true },
+        );
+        if (closed) {
+            stream.getTracks().forEach(track => track.stop());
+            return;
+        }
+        startBtn.disabled = false;
+        resetToIdle();
+    } catch (err) {
+        close();
+        helper?.showToast(err.name === 'NotAllowedError'
+            ? 'Microphone/camera permission was denied'
+            : 'Could not start recording');
+    }
+}
+
+document.querySelectorAll('.pl-record-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const section = this.closest('.question-section');
+        recordMedia(section, this.dataset.kind);
+    });
+});
+
+// Character counter for the friend-question box — appears near the limit
+// so users aren't silently blocked at 500 characters.
+const fqText = document.getElementById('friend-question-text');
+const fqCount = document.getElementById('friend-question-count');
+fqText?.addEventListener('input', function() {
+    if (!fqCount) return;
+    const remaining = 500 - this.value.length;
+    fqCount.hidden = remaining > 100;
+    fqCount.textContent = `${remaining} characters left`;
+    fqCount.style.color = remaining <= 20 ? 'var(--sindoor)' : 'var(--muted)';
+});
+
+// Friend question submission.
+document.getElementById('friend-question-form').addEventListener('submit', async function(ev) {
+    ev.preventDefault();
+    const textarea = document.getElementById('friend-question-text');
+    const button = document.getElementById('friend-question-submit');
+    const status = document.getElementById('friend-question-status');
+    const text = textarea.value.trim();
+
+    if (!text) {
+        status.textContent = 'Please write a question first.';
+        status.style.color = 'var(--sindoor)';
+        return;
+    }
+
+    button.disabled = true;
+    status.textContent = 'Submitting…';
+    status.style.color = 'var(--ink-soft)';
+
+    try {
+        const res = await fetch('/api/questions/submit', {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify({ issue_id: issueID, text }),
+        });
+
+        if (res.ok) {
+            textarea.value = '';
+            status.textContent = 'Added — thanks! Reloading to show it.';
+            status.style.color = 'var(--peacock)';
+            setTimeout(() => window.location.reload(), 800);
+            return;
+        }
+
+        const data = await res.json().catch(() => ({}));
+        status.textContent = data?.error?.message || 'Could not submit. Try again?';
+        status.style.color = 'var(--sindoor)';
+    } catch {
+        status.textContent = 'Network error — please retry.';
+        status.style.color = 'var(--sindoor)';
+    } finally {
+        button.disabled = false;
+    }
+});
+</script>
+{{end}}

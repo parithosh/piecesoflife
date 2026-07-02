@@ -1,0 +1,104 @@
+{{define "title"}}Archive — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+<div class="pl-archive">
+    <header class="pl-archive-head">
+        <p class="pl-eyebrow pl-eyebrow--peacock">{{.Settings.LoopName}}</p>
+        <h1 class="pl-display pl-archive-title">Issue archive</h1>
+        {{if .Issues}}
+        <p class="pl-archive-sub">{{len .Issues}} {{if eq (len .Issues) 1}}issue{{else}}issues{{end}} so far.</p>
+        {{end}}
+    </header>
+
+    {{if .CurrentIssue}}
+    <section class="pl-current" aria-label="Current issue">
+        <div class="mango" aria-hidden="true"></div>
+        <div class="pl-current-inner">
+            <div class="pl-current-main">
+                <p class="pl-eyebrow">Open now</p>
+                <h2 class="pl-current-month">
+                    {{if .CurrentIssue.Issue.Title}}{{.CurrentIssue.Issue.Title}}{{else}}{{formatDate .CurrentIssue.Issue.OpensAt}}{{end}}
+                </h2>
+                {{if .CurrentIssue.Issue.Title}}
+                <p class="pl-current-date">{{formatDate .CurrentIssue.Issue.OpensAt}}</p>
+                {{end}}
+                <div class="pl-current-meta">
+                    <span class="pl-pill pl-pill--collecting">● Collecting</span>
+                    <span>{{.CurrentIssue.QuestionCount}} {{if eq .CurrentIssue.QuestionCount 1}}question{{else}}questions{{end}}</span>
+                    <span>Closes {{formatRelative .CurrentIssue.Issue.Deadline}}</span>
+                </div>
+                <p class="pl-current-note">
+                    {{if .CurrentIssue.Submitted}}
+                        Your answers are submitted. You can still edit them until this issue is published.
+                    {{else if gt .CurrentIssue.AnsweredCount 0}}
+                        You have drafts saved. Finish them when you're ready.
+                    {{else}}
+                        This round is ready for your answers.
+                    {{end}}
+                </p>
+            </div>
+
+            <div class="pl-current-actions">
+                {{if gt .CurrentIssue.QuestionCount 0}}
+                <a class="pl-btn pl-btn--gold" href="/issues/{{.CurrentIssue.Issue.ID}}/respond">
+                    {{if .CurrentIssue.Submitted}}Edit answers{{else if gt .CurrentIssue.AnsweredCount 0}}Continue answers{{else}}Answer questions{{end}} →
+                </a>
+                {{else}}
+                <span class="pl-pill pl-pill--waiting">◌ Questions pending</span>
+                {{end}}
+            </div>
+        </div>
+    </section>
+    {{else if .NextIssueOpens}}
+    <section class="pl-next-issue" aria-label="Next issue">
+        <p class="pl-eyebrow pl-eyebrow--peacock">Coming up</p>
+        <p class="pl-next-issue-copy">
+            The next issue opens <b>{{.NextIssueOpens}}</b> — we'll email you
+            when it's ready for your answers.
+        </p>
+    </section>
+    {{end}}
+
+    {{if not .Issues}}
+    <div class="pl-archive-empty">
+        <h3 class="pl-display pl-archive-empty-title">No published issues yet</h3>
+        <p class="pl-archive-empty-sub">
+            {{if .CurrentIssue}}Once this issue is published, it'll show up here.{{else}}Once an issue is published, it'll show up here.{{end}}
+        </p>
+    </div>
+    {{else}}
+    <section class="pl-shelf" aria-label="Published issues">
+        <h2 class="pl-display pl-shelf-title">Published issues</h2>
+        <div class="pl-archive-grid">
+            {{range .Issues}}
+            <a href="/issues/{{.Year}}/{{printf "%02d" .Month}}" class="pl-issue-card">
+                {{if .Photos}}
+                {{$size := len .Photos}}
+                <div class="pl-issue-cover photo-collage {{if eq $size 1}}size-1{{else if eq $size 2}}size-2{{else if eq $size 4}}size-4{{else}}size-4{{end}}">
+                    {{range .Photos}}
+                    <img src="{{. | uploadURL}}" alt="" loading="lazy">
+                    {{end}}
+                </div>
+                {{else}}
+                <div class="pl-issue-cover pl-issue-cover--empty">No photos yet</div>
+                {{end}}
+
+                <div class="pl-issue-card-meta">
+                    <p class="pl-issue-card-month">{{.OpensAt | formatDate}}</p>
+                    {{if .Title}}<p class="pl-issue-card-title">{{.Title}}</p>{{end}}
+                    <p class="pl-issue-card-foot">
+                        <span class="pl-pill pl-pill--published">✦ Published</span>
+                        {{if .PublishedAt}}<span class="pl-issue-card-when">{{.PublishedAt | formatRelative}}</span>{{end}}
+                    </p>
+                </div>
+            </a>
+            {{end}}
+        </div>
+    </section>
+    {{end}}
+</div>
+</div>
+{{end}}

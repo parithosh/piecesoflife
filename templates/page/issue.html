@@ -1,0 +1,341 @@
+{{define "title"}}{{.Issue.OpensAt | formatDate}} - {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page pl-page--published">
+  <section id="issue-root" class="published-issue pl-issue" data-question-count="{{len .Questions}}">
+    <div class="pl-card pl-card--published">
+      <div class="temple" aria-hidden="true"></div>
+
+      <header class="pl-masthead">
+        <div class="mango" aria-hidden="true"></div>
+        <div class="pl-masthead-inner">
+          <img src="/static/img/logo.svg" alt="" class="pl-masthead-emblem">
+          <p class="pl-eyebrow pl-eyebrow--peacock pl-masthead-eyebrow">Woven &amp; Posted</p>
+          <h1 class="pl-masthead-month">
+            {{if .Issue.Title}}{{.Issue.Title}}{{else}}{{.Issue.OpensAt | formatDate}}{{end}}
+          </h1>
+          <p class="pl-masthead-meta">
+            {{.PeopleCount}} {{if eq .PeopleCount 1}}person{{else}}people{{end}} ·
+            {{.AnswerCount}} answer{{if ne .AnswerCount 1}}s{{end}} ·
+            {{.PhotoCount}} photo{{if ne .PhotoCount 1}}s{{end}}{{if .Issue.PublishedAt}} ·
+            <em>{{.Issue.PublishedAt.Format "Jan 2, 2006"}}</em>{{end}}
+          </p>
+        </div>
+      </header>
+      <div class="zari" aria-hidden="true"></div>
+
+      {{$pageCount := len .Questions}}
+      {{if .DumpGroups}}{{$pageCount = add $pageCount 1}}{{end}}
+      {{$dumpIdx := len .Questions}}
+
+      {{if .Questions}}
+      <div class="published-issue-strip">
+        <div class="published-mode-toggle" role="group" aria-label="Reading mode" hidden data-mode-toggle>
+          <button type="button" data-read-mode="paged" class="is-active" aria-pressed="true">One at a time</button>
+          <button type="button" data-read-mode="scroll" aria-pressed="false">All at once</button>
+        </div>
+        <div class="published-strip-progress" aria-label="Issue progress">
+          <div class="published-progress-segments" role="list">
+            {{range $idx, $q := .Questions}}
+            <a href="?q={{add $idx 1}}"
+               class="published-progress-segment {{if lt $idx $.CurrentQIdx}}is-past{{else if eq $idx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+               data-question-target="{{$idx}}"
+               aria-label="Go to question {{add $idx 1}}"
+               {{if eq $idx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+            {{end}}
+            {{if .DumpGroups}}
+            <a href="?q={{add $dumpIdx 1}}"
+               class="published-progress-segment published-progress-segment--dump {{if lt $dumpIdx $.CurrentQIdx}}is-past{{else if eq $dumpIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+               data-question-target="{{$dumpIdx}}"
+               aria-label="Go to the photo &amp; video dump"
+               {{if eq $dumpIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+            {{end}}
+          </div>
+          <span class="published-progress-label" data-question-position>Question {{.CurrentQ}} of {{$pageCount}}</span>
+          <span class="published-progress-label published-progress-label--compact" data-question-position-compact aria-hidden="true">{{.CurrentQ}} / {{$pageCount}}</span>
+        </div>
+      </div>
+      {{end}}
+
+      {{if not .Questions}}
+      <div class="published-empty">
+        <p>No questions were added to this issue.</p>
+      </div>
+      {{else}}
+      <div class="published-spread">
+        <div class="mango published-spread-motif" aria-hidden="true"></div>
+
+        {{range $idx, $q := .Questions}}
+        {{$qNum := add $idx 1}}
+        <section class="published-question"
+                 data-question-index="{{$idx}}"
+                 data-question-title="{{$q.Text}}"
+                 {{if ne $idx $.CurrentQIdx}}hidden{{end}}>
+          <div class="published-question-inner">
+            <p class="published-question-kicker">Question {{questionWord $qNum}}</p>
+            <h2 class="published-question-title" tabindex="-1">{{$q.Text}}</h2>
+            <div class="published-ornament" aria-hidden="true"><span></span><i></i><span></span></div>
+
+            <div class="question-responses">
+              {{$hasAny := false}}
+              {{$first := true}}
+              {{range $.Responses}}
+                {{if eq .Response.QuestionID $q.ID}}
+                  {{$hasAny = true}}
+                  <article class="response-article response-block pl-answer {{if $first}}is-first{{end}} {{if and $first (dropCap .Blocks)}}has-dropcap{{end}} {{if and $.User (eq .User.ID $.User.ID)}}is-self{{else}}is-other{{end}}"
+                           data-response-id="{{.Response.ID}}"
+                           data-user-id="{{.User.ID}}"
+                           data-user-name="{{.User.Name}}"
+                           data-question-id="{{$q.ID}}"
+                           data-created-at="{{.Response.CreatedAt.Format "2006-01-02T15:04:05Z"}}">
+                    <div class="pl-answer-head">
+                      <span class="avatar avatar--sm pl-answer-ava">
+                        {{if .User.AvatarURL}}<img src="{{.User.AvatarURL}}" alt="">{{else}}{{letterAvatar .User.Name}}{{end}}
+                      </span>
+                      <strong class="pl-answer-name">{{.User.Name}}</strong>
+                    </div>
+
+                    <div class="response-blocks pl-answer-text">
+                    {{range .Blocks}}
+                      {{if eq .Type "text"}}
+                        {{if .Content}}<p>{{.Content}}</p>{{end}}
+                      {{else if eq .Type "photo"}}
+                        <figure class="published-photo" data-lightbox
+                                data-lightbox-src="{{.FilePath | uploadURL}}"
+                                data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
+                          <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}">
+                          {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                        </figure>
+                      {{else if eq .Type "audio"}}
+                        {{if .FilePath}}
+                        <figure class="published-media published-media--audio">
+                          <audio controls preload="metadata">
+                            <source src="{{.FilePath | uploadURL}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                          </audio>
+                          <figcaption>Audio recording</figcaption>
+                        </figure>
+                        {{end}}
+                      {{else if eq .Type "video"}}
+                        {{if .FilePath}}
+                        <figure class="published-media published-media--video">
+                          <video controls preload="metadata" playsinline>
+                            <source src="{{.FilePath | uploadURL}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                          </video>
+                          <figcaption>Video recording</figcaption>
+                        </figure>
+                        {{end}}
+                      {{else if eq .Type "link"}}
+                        {{if .LinkURL}}
+                          {{$embed := linkEmbed .LinkURL}}
+                          {{if $embed}}{{$embed}}{{else}}
+                            <div class="published-link-block">
+                              <span>Link:</span>
+                              <a href="{{.LinkURL}}" rel="noopener" target="_blank">{{.LinkURL}}</a>
+                            </div>
+                          {{end}}
+                        {{end}}
+                      {{end}}
+                    {{end}}
+                    </div>
+
+                    <section class="comments-section" aria-label="Comments">
+                      <div class="comments-panel"
+                           data-response-id="{{.Response.ID}}"
+                           data-comment-count="{{index $.CommentCounts .Response.ID}}"></div>
+                    </section>
+                  </article>
+                  {{$first = false}}
+                {{end}}
+              {{end}}
+            </div>
+
+            {{if not $hasAny}}
+            <p class="no-answers">No answers to this one.</p>
+            {{end}}
+          </div>
+        </section>
+        {{end}}
+
+        {{if .DumpGroups}}
+        <section class="published-question published-question--dump"
+                 data-question-index="{{$dumpIdx}}"
+                 data-question-title="The photo &amp; video dump"
+                 data-dump-page
+                 {{if ne $dumpIdx $.CurrentQIdx}}hidden{{end}}>
+          <div class="published-question-inner published-dump-inner">
+            <p class="published-question-kicker">The closer</p>
+            <h2 class="published-question-title" tabindex="-1">The photo &amp; video dump</h2>
+            <div class="published-ornament" aria-hidden="true"><span></span><i></i><span></span></div>
+
+            {{range .DumpGroups}}
+            <section class="pl-dump-group" aria-label="Dump from {{.UserName}}">
+              <div class="pl-dump-group-head">
+                <span class="avatar avatar--sm pl-answer-ava">
+                  {{if .UserAvatarURL}}<img src="{{.UserAvatarURL}}" alt="">{{else}}{{letterAvatar .UserName}}{{end}}
+                </span>
+                <strong class="pl-answer-name">{{.UserName}}</strong>
+                <span class="pl-dump-group-rule" aria-hidden="true"></span>
+              </div>
+
+              {{if .Photos}}
+              <div class="pl-collage">
+                {{range .Photos}}
+                <figure class="pl-collage-item" data-lightbox
+                        data-lightbox-src="{{.FilePath | uploadURL}}"
+                        data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
+                  <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                  {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                </figure>
+                {{end}}
+              </div>
+              {{end}}
+
+              {{if .Videos}}
+              <div class="pl-collage-reel">
+                {{range .Videos}}
+                <figure class="pl-collage-video">
+                  <video controls preload="metadata" playsinline src="{{.FilePath | uploadURL}}"></video>
+                  {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                </figure>
+                {{end}}
+              </div>
+              {{end}}
+            </section>
+            {{end}}
+          </div>
+        </section>
+        {{end}}
+      </div>
+
+      <footer class="published-pager" aria-label="Question navigation">
+        {{$isFirst := eq .CurrentQIdx 0}}
+        {{$isLast := eq .CurrentQ $pageCount}}
+        {{$prevTitle := ""}}
+        {{if not $isFirst}}{{$prevTitle = (index .Questions (sub .CurrentQIdx 1)).Text}}{{end}}
+        {{$nextTitle := ""}}
+        {{if not $isLast}}
+          {{if lt .CurrentQ (len .Questions)}}
+            {{$nextTitle = (index .Questions .CurrentQ).Text}}
+          {{else}}
+            {{$nextTitle = "The photo & video dump"}}
+          {{end}}
+        {{end}}
+        <a {{if not $isFirst}}href="?q={{.CurrentQIdx}}"{{end}}
+           class="published-pager-card published-pager-card--prev{{if $isFirst}} is-disabled{{end}}"
+           data-pager-prev
+           {{if $isFirst}}aria-disabled="true"{{end}}
+           aria-label="Previous{{if $prevTitle}}: {{$prevTitle}}{{end}}">
+          <span class="published-pager-arrow" aria-hidden="true">←</span>
+          <span>
+            <span class="published-pager-kicker">Previous</span>
+            <strong data-pager-prev-title>{{$prevTitle}}</strong>
+          </span>
+        </a>
+
+        <div class="published-dot-pager" role="list" aria-label="Questions">
+          {{range $idx, $q := .Questions}}
+          <a href="?q={{add $idx 1}}"
+             class="published-dot {{if lt $idx $.CurrentQIdx}}is-past{{else if eq $idx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+             data-question-target="{{$idx}}"
+             aria-label="Go to question {{add $idx 1}}"
+             {{if eq $idx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+          {{end}}
+          {{if .DumpGroups}}
+          <a href="?q={{add $dumpIdx 1}}"
+             class="published-dot {{if lt $dumpIdx $.CurrentQIdx}}is-past{{else if eq $dumpIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+             data-question-target="{{$dumpIdx}}"
+             aria-label="Go to the photo &amp; video dump"
+             {{if eq $dumpIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+          {{end}}
+        </div>
+
+        <a href="{{if $isLast}}/issues{{else}}?q={{add .CurrentQ 1}}{{end}}"
+           class="published-pager-card published-pager-card--next{{if $isLast}} is-finish{{end}}"
+           data-pager-next
+           aria-label="{{if $isLast}}Back to all issues{{else}}Next: {{$nextTitle}}{{end}}">
+          <span>
+            <span class="published-pager-kicker">{{if $isLast}}Finish{{else}}Next{{end}}</span>
+            <strong data-pager-next-title>{{if $isLast}}Back to all issues{{else}}{{$nextTitle}}{{end}}</strong>
+          </span>
+          <span class="published-pager-arrow" aria-hidden="true">→</span>
+        </a>
+      </footer>
+      {{end}}
+
+      {{if .NextIssue}}
+      <section class="pl-suggest pl-suggest--next" aria-label="Suggest a question for the next issue">
+        <p class="pl-eyebrow pl-eyebrow--peacock">On the loom · opens {{.NextIssueOpens}}</p>
+        <h3>Suggest a question for the next issue</h3>
+        <p>Did something here spark a question of your own? Send it now and
+        it'll be waiting in the next round when it opens.</p>
+        <form id="next-question-form" data-issue-id="{{.NextIssue.ID}}">
+          <textarea id="next-question-text" class="pl-field"
+                    placeholder="e.g. What's a small ritual you picked up this month?"
+                    style="min-height:80px;margin-top:0;" maxlength="500" required></textarea>
+          <div style="display:flex;align-items:center;gap:14px;margin-top:12px;">
+            <button type="submit" class="pl-btn pl-btn--outline">Send suggestion</button>
+            <span id="next-question-status" role="status"
+                  style="font-family:var(--font-ui);font-size:12px;color:var(--ink-soft);"></span>
+          </div>
+        </form>
+      </section>
+      {{end}}
+    </div>
+  </section>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+// Suggest-a-question for the upcoming round (card only renders when a
+// pre-created draft exists).
+(function () {
+    const form = document.getElementById('next-question-form');
+    if (!form) return;
+
+    form.addEventListener('submit', async function (ev) {
+        ev.preventDefault();
+
+        const textEl = document.getElementById('next-question-text');
+        const status = document.getElementById('next-question-status');
+        const text = textEl.value.trim();
+        if (!text) return;
+
+        const csrf = document.cookie.split('; ')
+            .find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+
+        status.style.color = 'var(--ink-soft)';
+        status.textContent = 'Sending…';
+
+        try {
+            const res = await fetch('/api/questions/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                body: JSON.stringify({
+                    issue_id: Number(form.dataset.issueId),
+                    text: text,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+
+            if (res.ok) {
+                textEl.value = '';
+                status.style.color = 'var(--peacock)';
+                status.textContent = 'Sent — it\'ll be in the next round ✓';
+            } else {
+                status.style.color = 'var(--sindoor)';
+                status.textContent = data?.error?.message || 'Could not send';
+            }
+        } catch {
+            status.style.color = 'var(--sindoor)';
+            status.textContent = 'Network error';
+        }
+    });
+})();
+</script>
+<script src="/static/lightbox.js?v={{assetVersion}}"></script>
+<script src="/static/social.js?v={{assetVersion}}"></script>
+<script src="/static/issue-views.js?v={{assetVersion}}"></script>
+{{end}}

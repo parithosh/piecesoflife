@@ -1,0 +1,98 @@
+{{define "title"}}Members — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--admin">
+    <div class="pl-admin">
+
+      <div class="pl-admin-head">
+        <div>
+          <p class="pl-eyebrow pl-eyebrow--peacock">The Loom</p>
+          <h1 class="pl-admin-title">Members</h1>
+        </div>
+        <nav class="pl-tabs" aria-label="Admin sections">
+          <a href="/admin"           class="pl-tab">Dashboard</a>
+          <a href="/admin/members"   class="pl-tab is-active" aria-current="page">Members</a>
+          <a href="/admin/questions" class="pl-tab">Questions</a>
+          <a href="/admin/settings"  class="pl-tab">Settings</a>
+        </nav>
+      </div>
+
+      <div class="zari pl-admin-rule" aria-hidden="true"></div>
+
+      <div class="pl-members-head">
+        <p class="pl-eyebrow">Everyone in the loop</p>
+        <button type="button" id="invite-btn" class="pl-btn pl-btn--gold">＋ Invite member</button>
+      </div>
+
+      <div class="pl-members-list">
+        {{range .Members}}
+        <a href="/admin/members/{{.ID}}/submission"
+           class="pl-member-row {{if eq .Role "admin"}}is-admin{{end}}"
+           title="View {{.Name}}'s submission for the current issue">
+          <span class="pl-member-ava" aria-hidden="true">{{letterAvatar .Name}}</span>
+          <div class="pl-member-main">
+            <div class="pl-member-name">{{.Name}}</div>
+            <div class="pl-member-email">{{.Email}}</div>
+          </div>
+          {{if eq .Role "admin"}}<span class="pl-pill pl-pill--admin">✦ Admin</span>{{end}}
+          {{if .IsActive}}
+          <span class="pl-pill pl-pill--active">● Active</span>
+          {{else}}
+          <span class="pl-pill pl-pill--inactive">● Inactive</span>
+          {{end}}
+        </a>
+        {{end}}
+      </div>
+
+      <dialog id="invite-dialog" class="pl-dialog" aria-labelledby="invite-dialog-title">
+        <div class="pl-dialog-body">
+          <h3 id="invite-dialog-title" class="pl-dialog-title">Invite a member</h3>
+          <div class="pl-form-field">
+            <label for="invite-email" class="pl-login-label">Email address</label>
+            <input type="email" id="invite-email" class="pl-field pl-login-input"
+                   placeholder="friend@example.com" required>
+          </div>
+          <div class="pl-dialog-actions">
+            <button type="button" class="pl-btn pl-btn--outline"
+                    onclick="document.getElementById('invite-dialog').close()">Cancel</button>
+            <button type="button" id="send-invite-btn" class="pl-btn pl-btn--rani">Send invite</button>
+          </div>
+        </div>
+      </dialog>
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+
+document.getElementById('invite-btn').addEventListener('click', () => {
+    document.getElementById('invite-dialog').showModal();
+});
+
+document.getElementById('send-invite-btn').addEventListener('click', async () => {
+    const email = document.getElementById('invite-email').value.trim();
+    if (!email) return;
+
+    const res = await fetch('/api/users/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({ email }),
+    });
+
+    if (res.ok) {
+        document.getElementById('invite-dialog').close();
+        location.reload();
+    } else {
+        const data = await res.json();
+        alert(data.error?.message || 'Failed to send invite.');
+    }
+});
+</script>
+{{end}}

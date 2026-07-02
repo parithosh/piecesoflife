@@ -1,0 +1,27 @@
+# Local working files (personal screenshots, design zips, scratch)
+_local/
+
+# Runtime data — lives in Docker volumes or wherever DATABASE_PATH/UPLOAD_PATH point
+*.db
+*.db-wal
+*.db-shm
+uploads/
+data/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Generated test artifacts
+tests/screenshots/
+tests/node_modules/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Go build output
+/piecesoflife

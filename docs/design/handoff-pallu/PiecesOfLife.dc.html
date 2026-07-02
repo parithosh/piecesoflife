@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&family=Nunito+Sans:opsz,wght@6..12,400;6..12,500;6..12,600;6..12,700&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Marcellus&family=Rozha+One&family=Mukta:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#efe7d8;background-image:repeating-linear-gradient(45deg,#e6dbc6 0 1px,transparent 1px 28px),repeating-linear-gradient(-45deg,#e6dbc6 0 1px,transparent 1px 28px);font-family:'Nunito Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:#2a2622}
+  .dv-turn{padding:56px 60px 40px;scroll-margin-top:16px}
+  .dv-thd{display:flex;align-items:baseline;gap:12px;margin:0 0 8px}
+  .dv-tid{font:700 11px 'Nunito Sans';padding:4px 9px;background:#2a2622;color:#f5efe4;border-radius:6px;text-decoration:none}
+  .dv-tname{font:700 15px 'Quicksand';color:#2a2622}
+  .dv-tsub{margin:0 0 30px;font:400 14px/1.5 'Nunito Sans';color:#7c7468;max-width:760px}
+  .dv-opts{display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start}
+  .dv-opt{flex:none;display:flex;flex-direction:column;gap:12px;scroll-margin-top:16px}
+  .dv-oid{font:700 11px 'Nunito Sans';padding:4px 9px;background:rgba(42,38,34,.1);color:#2a2622;border-radius:6px;text-decoration:none}
+  .dv-olabel{display:flex;align-items:center;gap:10px;font:600 13px/1.3 'Nunito Sans';color:#7c7468}
+  .dv-opt:target .dv-oid{background:#c0673e;color:#fff}
+  .frame{background:#fbf7ef;border:1px solid #e7ddc9;border-radius:20px;overflow:hidden;box-shadow:0 30px 70px -34px rgba(70,52,32,.4)}
+  .nbar{display:flex;align-items:center;justify-content:space-between;padding:15px 24px;border-bottom:1px solid #ece3d2;background:#fdfaf3}
+  .nlogo{font:700 17px 'Quicksand';color:#2a2622;letter-spacing:-.01em;display:inline-flex;align-items:center;gap:9px}
+  .nlogo::before{content:"";width:16px;height:16px;flex:none;transform:rotate(45deg);border-radius:2px;background:conic-gradient(#c0673e 0 90deg,#e3b8a3 0 180deg,#5f7a52 0 270deg,#aabfa1 0)}
+  .gmark{width:16px;height:16px;flex:none;transform:rotate(45deg);border-radius:2px;background:conic-gradient(#c0673e 0 90deg,#e3b8a3 0 180deg,#5f7a52 0 270deg,#aabfa1 0)}
+  .gseal{width:72px;height:72px;border-radius:50%;background:repeating-radial-gradient(circle at center,#c0673e 0 1.5px,transparent 1.5px 9px)}
+  .gdiamond{width:48px;height:48px;transform:rotate(45deg);border-radius:3px;background:#fbf7ef;box-shadow:inset 0 0 0 2px #c0673e,inset 0 0 0 9px #fbf7ef,inset 0 0 0 11px #5f7a52,inset 0 0 0 18px #fbf7ef,inset 0 0 0 20px #caa64a}
+  .gstrip{height:12px;background:repeating-linear-gradient(135deg,#c0673e 0 1.5px,transparent 1.5px 13px),repeating-linear-gradient(45deg,#5f7a52 0 1.5px,transparent 1.5px 13px);opacity:.45}
+  .gtri{width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:18px solid #d8cdb6}
+  /* ---- Private Post (riso periodical) direction ---- */
+  .disp{font-family:'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-.02em}
+  .serif{font-family:'Newsreader',Georgia,serif}
+  .stamp{--s:18px;background:#fffaf0;-webkit-mask:radial-gradient(#000 69%,#0000 71%) round calc(var(--s)/-2) calc(var(--s)/-2)/var(--s) var(--s);mask:radial-gradient(#000 69%,#0000 71%) round calc(var(--s)/-2) calc(var(--s)/-2)/var(--s) var(--s)}
+  .pmark{width:104px;height:104px;border-radius:50%;border:2.5px solid #221c14;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#221c14;position:relative;flex:none}
+  .pmark::before{content:"";position:absolute;inset:7px;border:1.5px solid #221c14;border-radius:50%}
+  .pmark::after{content:"";position:absolute;inset:0;border-radius:50%;background:repeating-conic-gradient(#221c14 0 2deg,transparent 2deg 9deg);-webkit-mask:radial-gradient(transparent 60%,#000 61% 72%,transparent 73%);mask:radial-gradient(transparent 60%,#000 61% 72%,transparent 73%);opacity:.5}
+  .riso{position:relative}
+  .riso::after{content:"";position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(#221c14 .6px,transparent .6px);background-size:4px 4px;opacity:.05;mix-blend-mode:multiply}
+  /* ---- "Pallu" (saree) direction ---- */
+  .mar{font-family:'Rozha One',Georgia,serif;font-weight:400}
+  .mukta{font-family:'Mukta',system-ui,sans-serif}
+  /* clean ivory field (pattern moved to mango buti overlay) */
+  .weave{background-color:#fbf4e3}
+  .mango{background-image:url('mango.png');background-size:84px auto;opacity:.5}
+  /* temple / tent zari border — downward gold triangles on a band */
+  .temple{height:26px;background:#7a0f38;background-image:linear-gradient(135deg,#e6b23c 26%,transparent 26%),linear-gradient(225deg,#e6b23c 26%,transparent 26%);background-size:26px 26px;background-position:0 0;border-bottom:3px solid #c8962c}
+  .temple-up{height:26px;background:#7a0f38;background-image:linear-gradient(45deg,#e6b23c 26%,transparent 26%),linear-gradient(-45deg,#e6b23c 26%,transparent 26%);background-size:26px 26px;background-position:0 100%;border-top:3px solid #c8962c}
+  /* zari gold rule with dots */
+  .zari{height:8px;background:repeating-linear-gradient(90deg,#c8962c 0 8px,#e6b23c 8px 12px,#c8962c 12px 20px);border-top:1px solid #a8791f;border-bottom:1px solid #a8791f}
+  /* bandhani dot grid */
+  .bandhani{background-image:radial-gradient(#e6b23c 1.6px,transparent 1.8px),radial-gradient(#e6b23c 1.6px,transparent 1.8px);background-size:18px 18px;background-position:0 0,9px 9px;opacity:.5}
+  /* scalloped medallion (buta) */
+  .buta{width:78px;height:78px;border-radius:50%;background:radial-gradient(circle,#7a0f38 0 30%,#e6b23c 31% 38%,#7a0f38 39% 46%,#e6b23c 47% 54%,transparent 55%);position:relative;flex:none}
+  .buta::before{content:"";position:absolute;inset:-4px;border-radius:50%;background:repeating-conic-gradient(#c8962c 0 9deg,transparent 9deg 18deg);-webkit-mask:radial-gradient(transparent 54%,#000 55% 62%,transparent 63%);mask:radial-gradient(transparent 54%,#000 55% 62%,transparent 63%)}
+  .nnav{display:flex;gap:22px;align-items:center;font:600 14px 'Nunito Sans';color:#8a8175}
+  .av{width:30px;height:30px;border-radius:50%;background:#e7ddc9;color:#7a6f5c;display:flex;align-items:center;justify-content:center;font:700 13px 'Nunito Sans'}
+</style>
+</helmet>
+<section class="dv-turn" id="t3" style="border-bottom:1px solid #e2d9c7;background:#ecd9c0">
+  <div class="dv-thd"><a class="dv-tid" href="#t3" style="background:#7a0f38">3</a><span class="dv-tname mar" style="font-size:17px;letter-spacing:.01em">"Pallu" — a saree-woven personal periodical</span></div>
+  <p class="dv-tsub">The richest swing, drawn from saree design: temple/tent <em>zari</em> borders, bandhani dot grids, a woven check field, gold-thread rules, and scalloped <em>buta</em> medallions — in rani-pink, peacock-teal and marigold on ivory. Marcellus display over Newsreader reading. Warm and intimate, now ceremonial. Compare with <a class="dv-oid" href="#t2" style="background:#d2562f;color:#fff">turn 2</a> (riso) and <a class="dv-oid" href="#t1">turn 1</a> (calm).</p>
+  <div class="dv-opts">
+
+    <div class="dv-opt" id="3a">
+      <div class="dv-olabel"><a class="dv-oid" href="#3a" style="background:#7a0f38;color:#fff">3a</a>The direction — motif, type, palette</div>
+      <div class="weave" style="width:840px;border:1.5px solid #7a0f38;border-radius:5px;box-shadow:14px 14px 0 rgba(122,15,56,.18);overflow:hidden">
+        <div class="temple"></div>
+        <div style="background:#7a0f38;color:#f6ecd8;padding:24px 34px;display:flex;justify-content:space-between;align-items:center">
+          <div><div class="mukta" style="font:600 11px 'Mukta';letter-spacing:.34em;color:#e6b23c">PIECESOFLIFE · No.00</div><div class="mar" style="font:400 46px/.95 'Marcellus';margin-top:6px">PiecesOfLife</div></div>
+          <img src="logo.svg" alt="PiecesOfLife emblem" style="width:80px;height:80px;border-radius:13px;flex:none">
+        </div>
+        <div class="zari"></div>
+        <div style="padding:30px 34px;position:relative">
+          <div class="mango" style="position:absolute;top:0;right:0;width:180px;height:100%"></div>
+          <div style="position:relative">
+            <div class="mukta" style="font:700 12px 'Mukta';letter-spacing:.2em;color:#0e6b6b;margin-bottom:8px">THE IDEA</div>
+            <div class="serif" style="font:400 23px/1.5 'Newsreader';color:#2a0e15;max-width:560px;margin-bottom:26px">Every round is a length of cloth on the loom. You add your pieces — words, a photo — and the loop weaves everyone's together into one issue, bordered and kept like a family heirloom.</div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:26px">
+              <div style="text-align:center"><div style="width:64px;height:44px;border-radius:4px;background:#7a0f38"></div><div class="mukta" style="font:600 10px 'Mukta';color:#8a6d55;margin-top:5px">Rani</div></div>
+              <div style="text-align:center"><div style="width:64px;height:44px;border-radius:4px;background:#c3362b"></div><div class="mukta" style="font:600 10px 'Mukta';color:#8a6d55;margin-top:5px">Sindoor</div></div>
+              <div style="text-align:center"><div style="width:64px;height:44px;border-radius:4px;background:#e6b23c"></div><div class="mukta" style="font:600 10px 'Mukta';color:#8a6d55;margin-top:5px">Marigold</div></div>
+              <div style="text-align:center"><div style="width:64px;height:44px;border-radius:4px;background:#c8962c"></div><div class="mukta" style="font:600 10px 'Mukta';color:#8a6d55;margin-top:5px">Zari</div></div>
+              <div style="text-align:center"><div style="width:64px;height:44px;border-radius:4px;background:#0e6b6b"></div><div class="mukta" style="font:600 10px 'Mukta';color:#8a6d55;margin-top:5px">Peacock</div></div>
+              <div style="text-align:center"><div style="width:64px;height:44px;border-radius:4px;background:#f6ecd8;border:1.5px solid #c8962c"></div><div class="mukta" style="font:600 10px 'Mukta';color:#8a6d55;margin-top:5px">Ivory</div></div>
+            </div>
+
+            <div style="display:flex;gap:34px;border-top:1px solid #ddc9a6;border-bottom:1px solid #ddc9a6;padding:18px 0;margin-bottom:22px">
+              <div style="flex:1"><div class="mukta" style="font:700 10px 'Mukta';letter-spacing:.16em;color:#a8791f;margin-bottom:6px">DISPLAY — MARCELLUS</div><div class="mar" style="font:400 32px/1 'Marcellus';color:#2a0e15">June, in everyone's words</div></div>
+              <div style="flex:1"><div class="mukta" style="font:700 10px 'Mukta';letter-spacing:.16em;color:#a8791f;margin-bottom:6px">READING — NEWSREADER</div><div class="serif" style="font:400 18px/1.5 'Newsreader';color:#2a0e15">The smell of rain on the balcony plants. <em>I left the door open just for it.</em></div></div>
+            </div>
+
+            <div style="display:flex;gap:9px;flex-wrap:wrap">
+              <span class="mukta" style="font:700 11px 'Mukta';letter-spacing:.05em;color:#fff;background:#8a6d55;padding:6px 12px;border-radius:3px">● DRAFT</span>
+              <span class="mukta" style="font:700 11px 'Mukta';letter-spacing:.05em;color:#fff;background:#0e6b6b;padding:6px 12px;border-radius:3px">● SAVED</span>
+              <span class="mukta" style="font:700 11px 'Mukta';letter-spacing:.05em;color:#fff;background:#4f7042;padding:6px 12px;border-radius:3px">● COLLECTING</span>
+              <span class="mukta" style="font:700 11px 'Mukta';letter-spacing:.05em;color:#2a0e15;background:#e6b23c;padding:6px 12px;border-radius:3px">● WAITING</span>
+              <span class="mukta" style="font:700 11px 'Mukta';letter-spacing:.05em;color:#fff;background:#c3362b;padding:6px 12px;border-radius:3px">✓ SUBMITTED</span>
+              <span class="mukta" style="font:700 11px 'Mukta';letter-spacing:.05em;color:#e6b23c;background:#7a0f38;padding:6px 12px;border-radius:3px">▲ PUBLISHED</span>
+            </div>
+          </div>
+        </div>
+        <div class="temple-up"></div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="3b">
+      <div class="dv-olabel"><a class="dv-oid" href="#3b" style="background:#7a0f38;color:#fff">3b</a>Member · response editor (the heart)</div>
+      <div class="weave" style="width:1040px;border:1.5px solid #7a0f38;border-radius:5px;box-shadow:14px 14px 0 rgba(122,15,56,.18);overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:15px 28px;background:#7a0f38">
+          <div style="display:flex;align-items:center;gap:10px"><img src="logo.svg" alt="" style="width:32px;height:32px;border-radius:7px;flex:none"><span class="mar" style="font:400 22px 'Marcellus';color:#f6ecd8">PiecesOfLife</span></div>
+          <nav class="mukta" style="display:flex;gap:22px;align-items:center;font:600 13px 'Mukta';letter-spacing:.04em;color:#e9c9d4"><span style="color:#e6b23c;border-bottom:2px solid #e6b23c;padding-bottom:2px">ISSUES</span><span>PHOTOS</span><span style="display:flex;align-items:center;gap:7px;color:#f6ecd8"><span style="width:26px;height:26px;border-radius:50%;background:#e6b23c;color:#7a0f38;display:flex;align-items:center;justify-content:center;font:700 12px 'Mukta'">P</span>PARI</span></nav>
+        </div>
+        <div class="zari"></div>
+        <div style="display:flex">
+          <!-- left ledger -->
+          <div style="width:280px;flex:none;background:#0e6b6b;color:#eef6f4;padding:26px 24px;position:relative;overflow:hidden">
+            <div class="mango" style="position:absolute;inset:0;opacity:.2"></div>
+            <div style="position:relative">
+              <div class="mukta" style="font:700 10px 'Mukta';letter-spacing:.22em;color:#e6b23c;margin-bottom:10px">OPEN NOW · YOUR TURN</div>
+              <div class="mar" style="font:400 40px/.95 'Marcellus'">June<br>2026</div>
+              <div class="serif" style="font:400 15px/1.5 'Newsreader';color:#c3ded9;margin:12px 0 20px">3 prompts · closes in <b style="color:#fff">6 days</b>. Private until the issue is woven.</div>
+              <div style="height:1px;background:rgba(230,178,60,.35);margin-bottom:18px"></div>
+              <div class="mukta" style="font:700 10px 'Mukta';letter-spacing:.16em;color:#8fc4bd;margin-bottom:12px">PROGRESS — 2 OF 3</div>
+              <div style="display:flex;gap:6px;margin-bottom:22px"><span style="flex:1;height:10px;background:#e6b23c;border-radius:2px"></span><span style="flex:1;height:10px;background:#e6b23c;border-radius:2px"></span><span style="flex:1;height:10px;background:rgba(255,255,255,.18);border-radius:2px"></span></div>
+              <div class="mukta" style="font:700 10px 'Mukta';letter-spacing:.16em;color:#8fc4bd;margin-bottom:12px">IN THIS ROUND</div>
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><span style="width:28px;height:28px;border-radius:50%;background:#e6b23c;color:#7a0f38;display:flex;align-items:center;justify-content:center;font:700 12px 'Mukta'">P</span><span class="serif" style="font:500 15px 'Newsreader';flex:1">Pari · you</span><span class="mukta" style="font:700 9px 'Mukta';color:#e6b23c">WRITING</span></div>
+              <div style="display:flex;align-items:center;gap:10px"><span style="width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.15);color:#c3ded9;display:flex;align-items:center;justify-content:center;font:700 12px 'Mukta'">F</span><span class="serif" style="font:500 15px 'Newsreader';flex:1;color:#c3ded9">friend</span><span class="mukta" style="font:700 9px 'Mukta';color:#8fc4bd">WAITING</span></div>
+            </div>
+          </div>
+          <!-- prompts -->
+          <div style="flex:1;padding:30px 34px">
+            <div style="display:flex;gap:18px;padding-bottom:22px;border-bottom:1px solid #ddc9a6;margin-bottom:22px">
+              <div class="mar" style="font:400 40px/1 'Marcellus';color:#d9bf94;flex:none;width:52px">01</div>
+              <div style="flex:1">
+                <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start"><div class="mar" style="font:400 24px/1.15 'Marcellus';color:#2a0e15;max-width:470px">A small thing that made you happy this month?</div><span class="mukta" style="flex:none;font:700 10px 'Mukta';letter-spacing:.05em;color:#fff;background:#0e6b6b;padding:5px 10px;border-radius:3px">● SAVED 2m</span></div>
+                <div class="serif" style="font:400 17px/1.6 'Newsreader';color:#2a0e15;margin-top:12px;background:#fffaf0;border:1px solid #7a0f38;border-radius:4px;padding:14px 16px">The smell of rain on the balcony plants. I started leaving the door open in the mornings just for it.</div>
+                <div style="display:flex;gap:8px;margin-top:10px"><span class="mukta" style="font:600 11px 'Mukta';letter-spacing:.04em;color:#7a0f38;border:1.5px solid #7a0f38;padding:6px 11px;border-radius:3px">＋ PHOTO</span><span class="mukta" style="font:600 11px 'Mukta';letter-spacing:.04em;color:#7a0f38;border:1.5px solid #7a0f38;padding:6px 11px;border-radius:3px">🔗 LINK</span></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:18px;padding-bottom:22px;border-bottom:1px solid #ddc9a6;margin-bottom:22px">
+              <div class="mar" style="font:400 40px/1 'Marcellus';color:#c3362b;flex:none;width:52px">02</div>
+              <div style="flex:1">
+                <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start"><div class="mar" style="font:400 24px/1.15 'Marcellus';color:#2a0e15;max-width:470px">What are you looking forward to?</div><span class="mukta" style="flex:none;font:700 10px 'Mukta';letter-spacing:.05em;color:#2a0e15;background:#e6b23c;padding:5px 10px;border-radius:3px">● SAVING…</span></div>
+                <div class="serif" style="font:400 17px/1.6 'Newsreader';color:#2a0e15;margin-top:12px;background:#fffaf0;border:2px solid #c3362b;border-radius:4px;padding:14px 16px;min-height:30px">A long weekend with no plans. Maybe finally<span style="display:inline-block;width:2px;height:19px;background:#c3362b;vertical-align:-4px;margin-left:1px"></span></div>
+                <div style="display:flex;gap:8px;margin-top:10px"><span class="mukta" style="font:600 11px 'Mukta';letter-spacing:.04em;color:#7a0f38;border:1.5px solid #7a0f38;padding:6px 11px;border-radius:3px">＋ PHOTO</span><span class="mukta" style="font:600 11px 'Mukta';letter-spacing:.04em;color:#7a0f38;border:1.5px solid #7a0f38;padding:6px 11px;border-radius:3px">🔗 LINK</span></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:18px;margin-bottom:24px">
+              <div class="mar" style="font:400 40px/1 'Marcellus';color:#d9bf94;flex:none;width:52px">03</div>
+              <div style="flex:1">
+                <div class="mar" style="font:400 24px/1.15 'Marcellus';color:#2a0e15;max-width:470px">What's been on your mind lately?</div>
+                <div class="serif" style="font:400 16px/1.6 'Newsreader';color:#a98f7a;font-style:italic;margin-top:12px;background:#f6ecd8;border:1.5px dashed #c8962c;border-radius:4px;padding:14px 16px">Take your time — as much or as little as you like.</div>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;background:#7a0f38;border-radius:4px;padding:16px 20px">
+              <div class="serif" style="font:400 15px 'Newsreader';color:#e9c9d4">Edit anytime until June is <b style="color:#e6b23c">woven &amp; posted</b>.</div>
+              <div style="display:flex;gap:10px"><button class="mukta" style="font:700 12px 'Mukta';letter-spacing:.05em;color:#f6ecd8;background:transparent;border:1.5px solid #b06a82;padding:11px 16px;border-radius:3px;cursor:pointer">PREVIEW</button><button class="mukta" style="font:700 12px 'Mukta';letter-spacing:.05em;color:#7a0f38;background:#e6b23c;border:none;padding:11px 20px;border-radius:3px;cursor:pointer">SUBMIT TO THE ISSUE →</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="3c">
+      <div class="dv-olabel"><a class="dv-oid" href="#3c" style="background:#7a0f38;color:#fff">3c</a>Member · published issue — read like an heirloom</div>
+      <div class="weave" style="width:760px;border:1.5px solid #7a0f38;border-radius:5px;box-shadow:14px 14px 0 rgba(122,15,56,.18);overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:15px 28px;background:#7a0f38"><div style="display:flex;align-items:center;gap:10px"><img src="logo.svg" alt="" style="width:32px;height:32px;border-radius:7px;flex:none"><span class="mar" style="font:400 22px 'Marcellus';color:#f6ecd8">PiecesOfLife</span></div><nav class="mukta" style="display:flex;gap:20px;align-items:center;font:600 13px 'Mukta';color:#e9c9d4"><span style="color:#e6b23c;border-bottom:2px solid #e6b23c;padding-bottom:2px">ISSUES</span><span>PHOTOS</span><span style="width:26px;height:26px;border-radius:50%;background:#e6b23c;color:#7a0f38;display:flex;align-items:center;justify-content:center;font:700 12px 'Mukta'">P</span></nav></div>
+        <div class="temple"></div>
+        <!-- masthead -->
+        <div style="position:relative;padding:32px 36px 22px;text-align:center;overflow:hidden">
+          <div class="mango" style="position:absolute;inset:0;opacity:.3"></div>
+          <div style="position:relative">
+            <img src="logo.svg" alt="PiecesOfLife emblem" style="width:76px;height:76px;border-radius:13px;display:block;margin:0 auto 14px">
+            <div class="mukta" style="font:700 12px 'Mukta';letter-spacing:.28em;color:#0e6b6b;margin-bottom:6px">ISSUE No.1 · WOVEN &amp; POSTED</div>
+            <div class="mar" style="font:400 62px/.9 'Marcellus';color:#2a0e15">May 2026</div>
+            <div class="serif" style="font:400 16px 'Newsreader';color:#8a6d55;margin-top:10px">2 people · 6 answers · 3 photos</div>
+          </div>
+        </div>
+        <div class="zari"></div>
+        <!-- article -->
+        <div style="padding:28px 40px 32px;max-width:600px;margin:0 auto">
+          <div class="mar" style="font:400 27px/1.2 'Marcellus';color:#7a0f38;text-align:center;margin-bottom:22px">A small thing that made you happy this month?</div>
+          <div style="display:flex;gap:16px;margin-bottom:24px">
+            <span style="width:34px;height:34px;flex:none;border-radius:50%;background:#7a0f38;color:#f6ecd8;display:flex;align-items:center;justify-content:center;font:700 14px 'Mukta'">P</span>
+            <div style="flex:1">
+              <div class="mukta" style="font:700 13px 'Mukta';letter-spacing:.04em;color:#7a0f38;margin-bottom:4px">PARI</div>
+              <div class="serif" style="font:400 18px/1.65 'Newsreader';color:#2e1820"><span class="mar" style="float:left;font:400 60px/.72 'Marcellus';color:#c3362b;margin:6px 12px 0 0">T</span>he smell of rain on the balcony plants. I started leaving the door open in the mornings just for it — the whole flat smells like wet earth and coffee now.</div>
+              <div style="margin-top:14px;height:130px;border:1px solid #7a0f38;border-radius:4px;background:repeating-linear-gradient(135deg,#d9bf94 0 9px,#cbb182 9px 18px);display:flex;align-items:center;justify-content:center"><span class="mukta" style="font:700 11px 'Mukta';letter-spacing:.1em;color:#7a5a2e">balcony.jpg</span></div>
+              <div style="display:flex;gap:8px;margin-top:14px;align-items:center"><span class="mukta" style="font:700 12px 'Mukta';background:#fffaf0;border:1.5px solid #7a0f38;border-radius:3px;padding:5px 11px">❤ 1</span><span class="mukta" style="font:700 12px 'Mukta';background:#fffaf0;border:1.5px solid #7a0f38;border-radius:3px;padding:5px 11px">🌿 2</span><span class="mukta" style="font:700 11px 'Mukta';color:#8a6d55;border:1.5px dashed #c8962c;border-radius:3px;padding:5px 11px">＋ REACT</span></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px">
+            <span style="width:34px;height:34px;flex:none;border-radius:50%;background:#0e6b6b;color:#eef6f4;display:flex;align-items:center;justify-content:center;font:700 14px 'Mukta'">F</span>
+            <div style="flex:1">
+              <div class="mukta" style="font:700 13px 'Mukta';letter-spacing:.04em;color:#0e6b6b;margin-bottom:4px">FRIEND</div>
+              <div class="serif" style="font:400 18px/1.65 'Newsreader';color:#2e1820">Found my grandmother's handwriting in an old cookbook. Sat on the kitchen floor reading it for an hour.</div>
+              <div style="display:flex;gap:8px;margin-top:12px"><span class="mukta" style="font:700 12px 'Mukta';background:#fffaf0;border:1.5px solid #7a0f38;border-radius:3px;padding:5px 11px">❤ 2</span><span class="mukta" style="font:700 12px 'Mukta';background:#fffaf0;border:1.5px solid #7a0f38;border-radius:3px;padding:5px 11px">🥹 1</span></div>
+              <div style="margin-top:14px;border-left:3px solid #e6b23c;padding-left:14px"><span class="mukta" style="font:700 12px 'Mukta';color:#7a0f38">PARI </span><span class="serif" style="font:400 16px/1.5 'Newsreader';color:#2a0e15">Okay this made me tear up. Which recipe??</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="temple-up"></div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="3d">
+      <div class="dv-olabel"><a class="dv-oid" href="#3d" style="background:#7a0f38;color:#fff">3d</a>Admin · the loom (progress fix + nudges + publish)</div>
+      <div class="weave" style="width:980px;border:1.5px solid #7a0f38;border-radius:5px;box-shadow:14px 14px 0 rgba(122,15,56,.18);overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:15px 28px;background:#7a0f38"><div style="display:flex;align-items:center;gap:10px"><img src="logo.svg" alt="" style="width:32px;height:32px;border-radius:7px;flex:none"><span class="mar" style="font:400 22px 'Marcellus';color:#f6ecd8">PiecesOfLife</span></div><nav class="mukta" style="display:flex;gap:20px;align-items:center;font:600 13px 'Mukta';color:#e9c9d4"><span>ISSUES</span><span>PHOTOS</span><span style="color:#e6b23c;border-bottom:2px solid #e6b23c;padding-bottom:2px">ADMIN</span><span style="width:26px;height:26px;border-radius:50%;background:#e6b23c;color:#7a0f38;display:flex;align-items:center;justify-content:center;font:700 12px 'Mukta'">P</span></nav></div>
+        <div class="zari"></div>
+        <div style="padding:28px 34px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px">
+            <div><div class="mukta" style="font:700 12px 'Mukta';letter-spacing:.24em;color:#0e6b6b;margin-bottom:4px">THE LOOM</div><div class="mar" style="font:400 36px 'Marcellus';color:#2a0e15">PiecesOfLife Demo</div></div>
+            <div style="display:flex;gap:9px"><span class="mukta" style="font:600 12px 'Mukta';color:#7a0f38;border:1.5px solid #7a0f38;padding:9px 14px;border-radius:3px">MEMBERS</span><span class="mukta" style="font:600 12px 'Mukta';color:#7a0f38;border:1.5px solid #7a0f38;padding:9px 14px;border-radius:3px">QUESTIONS</span><span class="mukta" style="font:600 12px 'Mukta';color:#7a0f38;border:1.5px solid #7a0f38;padding:9px 14px;border-radius:3px">SETTINGS</span></div>
+          </div>
+
+          <div style="border:1.5px solid #7a0f38;border-radius:4px;overflow:hidden">
+            <div style="background:#7a0f38;color:#f6ecd8;padding:22px 26px;display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:16px"><div class="mar" style="font:400 30px 'Marcellus'">June 2026</div><span class="mukta" style="font:700 10px 'Mukta';letter-spacing:.06em;color:#fff;background:#4f7042;padding:5px 11px;border-radius:3px">● COLLECTING · 6D 23H</span></div>
+              <div style="display:flex;gap:10px"><button class="mukta" style="font:700 12px 'Mukta';letter-spacing:.05em;color:#f6ecd8;background:transparent;border:1.5px solid #b06a82;padding:11px 16px;border-radius:3px;cursor:pointer">SEND REMINDER</button><button class="mukta" style="font:700 12px 'Mukta';letter-spacing:.05em;color:#7a0f38;background:#e6b23c;border:none;padding:11px 20px;border-radius:3px;cursor:pointer">▲ PUBLISH NOW</button></div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap">
+              <div style="flex:1;min-width:280px;padding:22px 26px;border-right:1px solid #ddc9a6;border-bottom:1px solid #ddc9a6">
+                <div class="mukta" style="font:700 11px 'Mukta';letter-spacing:.16em;color:#a8791f;margin-bottom:8px">MEMBERS RESPONDED</div>
+                <div style="display:flex;align-items:baseline;gap:6px"><div class="mar" style="font:400 46px/1 'Marcellus';color:#2a0e15">1</div><div class="mar" style="font:400 24px 'Marcellus';color:#b3a587">/ 1</div></div>
+                <div style="display:flex;gap:6px;margin:12px 0 14px"><span style="flex:1;height:12px;background:#4f7042;border-radius:2px"></span></div>
+                <label class="mukta" style="display:flex;align-items:center;gap:10px;font:600 12px 'Mukta';letter-spacing:.03em;color:#2a0e15;cursor:pointer"><span style="width:38px;height:22px;border-radius:3px;background:#4f7042;position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:2px;background:#f6ecd8"></span></span>COUNT ME IN THIS ROUND</label>
+                <div class="serif" style="font:400 13px 'Newsreader';font-style:italic;color:#8a6d55;margin-top:8px">Admins are left out of progress unless this is on.</div>
+              </div>
+              <div style="flex:1;min-width:140px;padding:22px 26px;border-right:1px solid #ddc9a6;border-bottom:1px solid #ddc9a6"><div class="mukta" style="font:700 11px 'Mukta';letter-spacing:.16em;color:#a8791f;margin-bottom:8px">CADENCE</div><div class="mar" style="font:400 26px 'Marcellus';color:#2a0e15">Monthly</div><div class="serif" style="font:400 14px 'Newsreader';color:#8a6d55;margin-top:2px">7-day window</div></div>
+              <div style="flex:1;min-width:140px;padding:22px 26px;border-bottom:1px solid #ddc9a6"><div class="mukta" style="font:700 11px 'Mukta';letter-spacing:.16em;color:#a8791f;margin-bottom:8px">PHOTOS</div><div class="mar" style="font:400 26px 'Marcellus';color:#2a0e15">3</div><div class="serif" style="font:400 14px 'Newsreader';color:#8a6d55;margin-top:2px">2 answers</div></div>
+            </div>
+            <div style="padding:22px 26px">
+              <div class="mukta" style="font:700 11px 'Mukta';letter-spacing:.16em;color:#a8791f;margin-bottom:14px">WHO HAS RESPONDED</div>
+              <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid #ddc9a6"><span style="width:34px;height:34px;border-radius:50%;background:#0e6b6b;color:#eef6f4;display:flex;align-items:center;justify-content:center;font:700 14px 'Mukta'">F</span><div style="flex:1"><div class="mukta" style="font:700 15px 'Mukta';color:#2a0e15">friend</div><div class="serif" style="font:400 13px 'Newsreader';color:#8a6d55">friend@example.com</div></div><span class="mukta" style="font:700 10px 'Mukta';letter-spacing:.05em;color:#2a0e15;background:#e6b23c;padding:6px 11px;border-radius:3px">● WAITING</span><button class="mukta" style="font:700 11px 'Mukta';color:#fff;background:#c3362b;border:none;padding:8px 14px;border-radius:3px;cursor:pointer">NUDGE</button></div>
+              <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid #ddc9a6"><span style="width:34px;height:34px;border-radius:50%;background:#7a0f38;color:#f6ecd8;display:flex;align-items:center;justify-content:center;font:700 14px 'Mukta'">P</span><div style="flex:1"><div class="mukta" style="font:700 15px 'Mukta';color:#2a0e15">Pari · you (admin)</div><div class="serif" style="font:400 13px 'Newsreader';color:#8a6d55">admin@example.com</div></div><span class="mukta" style="font:700 10px 'Mukta';letter-spacing:.05em;color:#fff;background:#c3362b;padding:6px 11px;border-radius:3px">✓ SUBMITTED</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="temple-up"></div>
+      </div>
+    </div>
+
+    <p class="mukta" style="margin:30px 0 0;font:500 13px/1.6 'Mukta';color:#7a5a4a;max-width:760px">Next: "apply 'Pallu' to onboarding, profile, empty states &amp; mobile" · "add a real paisley/buta pattern (SVG) instead of the CSS medallion" · "dial the borders back for everyday screens, keep them for the masthead" · or "pick a winner and I'll build the full set".</p>
+  <!--t3end--></div>
+</section>
+<section class="dv-turn" id="t2" style="border-bottom:1px solid #e2d9c7;background:#ece2cb">
+  <div class="dv-thd"><a class="dv-tid" href="#t2" style="background:#d2562f">2</a><span class="dv-tname disp" style="font-size:16px">"Private Post" — a riso-printed personal periodical</span></div>
+  <p class="dv-tsub">A bolder swing. This <em>is</em> mail, so the whole app behaves like a private postal service: postage-stamp issue cards with real perforated edges, postmark seals, ink-block color, Bricolage Grotesque display type, and a serif (Newsreader) reading experience that feels like a printed zine. Warm and human, but unmistakably designed. Compare with the calm version in <a class="dv-oid" href="#t1">turn 1</a>.</p>
+  <div class="dv-opts">
+
+    <div class="dv-opt" id="2a">
+      <div class="dv-olabel"><a class="dv-oid" href="#2a" style="background:#d2562f;color:#fff">2a</a>The direction — motif, type, ink</div>
+      <div class="riso" style="width:840px;background:#f4ecd8;border:1.5px solid #221c14;border-radius:5px;box-shadow:14px 14px 0 #ddcba0;overflow:hidden">
+        <div style="background:#221c14;color:#f4ecd8;padding:26px 34px;display:flex;justify-content:space-between;align-items:flex-end">
+          <div><div class="disp" style="font:600 11px 'Bricolage Grotesque';letter-spacing:.34em;opacity:.7">PRIVATE · POST · No.00</div><div class="disp" style="font:800 52px/.9 'Bricolage Grotesque';margin-top:6px">PiecesOfLife</div></div>
+          <div class="pmark" style="transform:rotate(-9deg);border-color:#f4ecd8;color:#f4ecd8"><div class="disp" style="font:700 8.5px/1 'Bricolage Grotesque';letter-spacing:.1em">PIECESOFLIFE</div><div style="width:16px;height:16px;margin:3px 0;transform:rotate(45deg);background:conic-gradient(#f4ecd8 0 90deg,transparent 0 180deg,#f4ecd8 0 270deg,transparent 0)"></div><div class="disp" style="font:600 8px/1 'Bricolage Grotesque';letter-spacing:.1em">EST · 2026</div></div>
+        </div>
+        <div style="padding:30px 34px">
+          <div style="display:flex;gap:30px;align-items:flex-start;margin-bottom:28px">
+            <div class="stamp" style="width:160px;flex:none;filter:drop-shadow(3px 4px 0 rgba(34,28,20,.18))"><div style="border:1.5px dashed #221c14;margin:13px;padding:14px 10px;text-align:center"><div class="disp" style="font:700 9px 'Bricolage Grotesque';letter-spacing:.2em;color:#d2562f">ISSUE No.1</div><div style="height:60px;margin:10px 0;background:repeating-linear-gradient(45deg,#4f7042 0 6px,#5d8050 6px 12px);border-radius:2px"></div><div class="disp" style="font:800 18px 'Bricolage Grotesque';color:#221c14">JUNE</div><div class="disp" style="font:600 11px 'Bricolage Grotesque';letter-spacing:.2em;color:#221c14">2026</div></div></div>
+            <div style="flex:1">
+              <div class="disp" style="font:700 13px 'Bricolage Grotesque';letter-spacing:.18em;color:#d2562f;margin-bottom:8px">THE IDEA</div>
+              <div class="serif" style="font:400 22px/1.45 'Newsreader';color:#3a3024;margin-bottom:14px">Every round is a piece of mail. You answer prompts, attach a photo, and the loop compiles everyone's pieces into one issue — postmarked, kept, and read like a letter.</div>
+              <div style="display:flex;gap:9px;flex-wrap:wrap">
+                <span style="width:46px;height:30px;border-radius:3px;background:#221c14"></span>
+                <span style="width:46px;height:30px;border-radius:3px;background:#d2562f"></span>
+                <span style="width:46px;height:30px;border-radius:3px;background:#4f7042"></span>
+                <span style="width:46px;height:30px;border-radius:3px;background:#355e8a"></span>
+                <span style="width:46px;height:30px;border-radius:3px;background:#e3a52a"></span>
+                <span style="width:46px;height:30px;border-radius:3px;background:#f4ecd8;border:1.5px solid #221c14"></span>
+              </div>
+            </div>
+          </div>
+          <div style="border-top:1.5px solid #221c14;border-bottom:1.5px solid #221c14;padding:18px 0;display:flex;gap:34px;margin-bottom:24px">
+            <div style="flex:1"><div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.16em;color:#8a7d63;margin-bottom:6px">DISPLAY — BRICOLAGE GROTESQUE</div><div class="disp" style="font:800 34px/1 'Bricolage Grotesque';color:#221c14">June, in everyone's words</div></div>
+            <div style="flex:1"><div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.16em;color:#8a7d63;margin-bottom:6px">READING — NEWSREADER</div><div class="serif" style="font:400 19px/1.5 'Newsreader';color:#3a3024">The smell of rain on the balcony plants. <em>I started leaving the door open just for it.</em></div></div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <span class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.06em;color:#fff;background:#8a7d63;padding:6px 12px;border-radius:3px">● DRAFT</span>
+            <span class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.06em;color:#fff;background:#355e8a;padding:6px 12px;border-radius:3px">● SAVED</span>
+            <span class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.06em;color:#fff;background:#4f7042;padding:6px 12px;border-radius:3px">● COLLECTING</span>
+            <span class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.06em;color:#221c14;background:#e3a52a;padding:6px 12px;border-radius:3px">● WAITING</span>
+            <span class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.06em;color:#fff;background:#d2562f;padding:6px 12px;border-radius:3px">✓ SUBMITTED</span>
+            <span class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.06em;color:#f4ecd8;background:#221c14;padding:6px 12px;border-radius:3px">▲ PUBLISHED</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="2b">
+      <div class="dv-olabel"><a class="dv-oid" href="#2b" style="background:#d2562f;color:#fff">2b</a>Member · response editor (the heart)</div>
+      <div class="riso" style="width:1040px;background:#f4ecd8;border:1.5px solid #221c14;border-radius:5px;box-shadow:14px 14px 0 #ddcba0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 28px;border-bottom:1.5px solid #221c14;background:#f4ecd8">
+          <div class="disp" style="font:800 20px 'Bricolage Grotesque';color:#221c14">PiecesOfLife</div>
+          <nav class="disp" style="display:flex;gap:22px;align-items:center;font:600 13px 'Bricolage Grotesque';letter-spacing:.04em;color:#221c14"><span style="border-bottom:2px solid #d2562f;padding-bottom:2px">ISSUES</span><span style="opacity:.55">PHOTOS</span><span style="display:flex;align-items:center;gap:7px"><span style="width:26px;height:26px;border-radius:50%;background:#d2562f;color:#fff;display:flex;align-items:center;justify-content:center;font:700 12px 'Bricolage Grotesque'">P</span>PARI</span></nav>
+        </div>
+        <div style="display:flex">
+          <!-- left ledger -->
+          <div style="width:280px;flex:none;background:#221c14;color:#f4ecd8;padding:28px 26px">
+            <div class="disp" style="font:700 10px 'Bricolage Grotesque';letter-spacing:.24em;color:#e3a52a;margin-bottom:10px">OPEN NOW · YOUR TURN</div>
+            <div class="disp" style="font:800 40px/.95 'Bricolage Grotesque'">June<br>2026</div>
+            <div class="serif" style="font:400 15px/1.5 'Newsreader';color:#cdc2a8;margin:12px 0 20px">3 prompts · closes in <b style="color:#f4ecd8">6 days</b>. Private until the issue is posted.</div>
+            <div style="height:1.5px;background:#3c3527;margin-bottom:18px"></div>
+            <div class="disp" style="font:700 10px 'Bricolage Grotesque';letter-spacing:.18em;color:#8a7d63;margin-bottom:12px">PROGRESS — 2 OF 3</div>
+            <div style="display:flex;gap:6px;margin-bottom:22px"><span style="flex:1;height:10px;background:#d2562f;border-radius:2px"></span><span style="flex:1;height:10px;background:#d2562f;border-radius:2px"></span><span style="flex:1;height:10px;background:#3c3527;border-radius:2px"></span></div>
+            <div class="disp" style="font:700 10px 'Bricolage Grotesque';letter-spacing:.18em;color:#8a7d63;margin-bottom:12px">IN THIS ROUND</div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><span style="width:28px;height:28px;border-radius:50%;background:#d2562f;color:#fff;display:flex;align-items:center;justify-content:center;font:700 12px 'Bricolage Grotesque'">P</span><span class="serif" style="font:500 15px 'Newsreader';flex:1">Pari · you</span><span class="disp" style="font:700 9px 'Bricolage Grotesque';color:#e3a52a">WRITING</span></div>
+            <div style="display:flex;align-items:center;gap:10px"><span style="width:28px;height:28px;border-radius:50%;background:#3c3527;color:#cdc2a8;display:flex;align-items:center;justify-content:center;font:700 12px 'Bricolage Grotesque'">F</span><span class="serif" style="font:500 15px 'Newsreader';flex:1;color:#cdc2a8">friend</span><span class="disp" style="font:700 9px 'Bricolage Grotesque';color:#8a7d63">WAITING</span></div>
+          </div>
+          <!-- prompts -->
+          <div style="flex:1;padding:30px 34px">
+            <!-- Q1 saved -->
+            <div style="display:flex;gap:18px;padding-bottom:22px;border-bottom:1.5px solid #d8caa6;margin-bottom:22px">
+              <div class="disp" style="font:800 40px/1 'Bricolage Grotesque';color:#d8caa6;flex:none;width:54px">01</div>
+              <div style="flex:1">
+                <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start"><div class="disp" style="font:700 21px/1.15 'Bricolage Grotesque';color:#221c14;max-width:480px">A small thing that made you happy this month?</div><span class="disp" style="flex:none;font:700 10px 'Bricolage Grotesque';letter-spacing:.06em;color:#fff;background:#355e8a;padding:5px 10px;border-radius:3px">● SAVED 2m</span></div>
+                <div class="serif" style="font:400 17px/1.6 'Newsreader';color:#3a3024;margin-top:12px;background:#fffaf0;border:1.5px solid #221c14;border-radius:4px;padding:14px 16px">The smell of rain on the balcony plants. I started leaving the door open in the mornings just for it.</div>
+                <div style="display:flex;gap:8px;margin-top:10px"><span class="disp" style="font:600 11px 'Bricolage Grotesque';letter-spacing:.04em;color:#221c14;border:1.5px solid #221c14;padding:6px 11px;border-radius:3px">＋ PHOTO</span><span class="disp" style="font:600 11px 'Bricolage Grotesque';letter-spacing:.04em;color:#221c14;border:1.5px solid #221c14;padding:6px 11px;border-radius:3px">🔗 LINK</span></div>
+              </div>
+            </div>
+            <!-- Q2 writing -->
+            <div style="display:flex;gap:18px;padding-bottom:22px;border-bottom:1.5px solid #d8caa6;margin-bottom:22px">
+              <div class="disp" style="font:800 40px/1 'Bricolage Grotesque';color:#d2562f;flex:none;width:54px">02</div>
+              <div style="flex:1">
+                <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start"><div class="disp" style="font:700 21px/1.15 'Bricolage Grotesque';color:#221c14;max-width:480px">What are you looking forward to?</div><span class="disp" style="flex:none;font:700 10px 'Bricolage Grotesque';letter-spacing:.06em;color:#221c14;background:#e3a52a;padding:5px 10px;border-radius:3px">● SAVING…</span></div>
+                <div class="serif" style="font:400 17px/1.6 'Newsreader';color:#3a3024;margin-top:12px;background:#fffaf0;border:2px solid #d2562f;border-radius:4px;padding:14px 16px;min-height:30px">A long weekend with no plans. Maybe finally<span style="display:inline-block;width:2px;height:19px;background:#d2562f;vertical-align:-4px;margin-left:1px"></span></div>
+                <div style="display:flex;gap:8px;margin-top:10px"><span class="disp" style="font:600 11px 'Bricolage Grotesque';letter-spacing:.04em;color:#221c14;border:1.5px solid #221c14;padding:6px 11px;border-radius:3px">＋ PHOTO</span><span class="disp" style="font:600 11px 'Bricolage Grotesque';letter-spacing:.04em;color:#221c14;border:1.5px solid #221c14;padding:6px 11px;border-radius:3px">🔗 LINK</span></div>
+              </div>
+            </div>
+            <!-- Q3 empty -->
+            <div style="display:flex;gap:18px;margin-bottom:24px">
+              <div class="disp" style="font:800 40px/1 'Bricolage Grotesque';color:#d8caa6;flex:none;width:54px">03</div>
+              <div style="flex:1">
+                <div class="disp" style="font:700 21px/1.15 'Bricolage Grotesque';color:#221c14;max-width:480px">What's been on your mind lately?</div>
+                <div class="serif" style="font:400 16px/1.6 'Newsreader';color:#a99a7a;font-style:italic;margin-top:12px;background:#f4ecd8;border:1.5px dashed #b3a587;border-radius:4px;padding:14px 16px">Take your time — as much or as little as you like.</div>
+              </div>
+            </div>
+            <!-- submit bar -->
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;background:#221c14;border-radius:4px;padding:16px 20px">
+              <div class="serif" style="font:400 15px 'Newsreader';color:#cdc2a8">Edit anytime until June is <b style="color:#f4ecd8">posted</b>.</div>
+              <div style="display:flex;gap:10px"><button class="disp" style="font:700 12px 'Bricolage Grotesque';letter-spacing:.06em;color:#f4ecd8;background:transparent;border:1.5px solid #6b6149;padding:11px 16px;border-radius:3px;cursor:pointer">PREVIEW</button><button class="disp" style="font:700 12px 'Bricolage Grotesque';letter-spacing:.06em;color:#221c14;background:#e3a52a;border:none;padding:11px 20px;border-radius:3px;cursor:pointer">SUBMIT TO THE ISSUE →</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="2c">
+      <div class="dv-olabel"><a class="dv-oid" href="#2c" style="background:#d2562f;color:#fff">2c</a>Member · published issue — read like a printed zine</div>
+      <div class="riso" style="width:760px;background:#f4ecd8;border:1.5px solid #221c14;border-radius:5px;box-shadow:14px 14px 0 #ddcba0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 28px;border-bottom:1.5px solid #221c14"><div class="disp" style="font:800 20px 'Bricolage Grotesque';color:#221c14">PiecesOfLife</div><nav class="disp" style="display:flex;gap:22px;font:600 13px 'Bricolage Grotesque';color:#221c14"><span style="border-bottom:2px solid #d2562f;padding-bottom:2px">ISSUES</span><span style="opacity:.55">PHOTOS</span><span style="width:26px;height:26px;border-radius:50%;background:#d2562f;color:#fff;display:flex;align-items:center;justify-content:center;font:700 12px 'Bricolage Grotesque'">P</span></nav></div>
+        <!-- masthead -->
+        <div style="position:relative;padding:34px 36px 24px;border-bottom:3px double #221c14">
+          <div class="pmark" style="position:absolute;top:28px;right:34px;transform:rotate(11deg)"><div class="disp" style="font:700 9px/1 'Bricolage Grotesque';letter-spacing:.1em">POSTED</div><div style="width:15px;height:15px;margin:3px 0;transform:rotate(45deg);background:conic-gradient(#221c14 0 90deg,transparent 0 180deg,#221c14 0 270deg,transparent 0)"></div><div class="disp" style="font:600 8px/1.1 'Bricolage Grotesque';letter-spacing:.08em">MAY<br>2026</div></div>
+          <div class="disp" style="font:700 12px 'Bricolage Grotesque';letter-spacing:.28em;color:#d2562f;margin-bottom:6px">PRIVATE POST · ISSUE No.1</div>
+          <div class="disp" style="font:800 66px/.88 'Bricolage Grotesque';color:#221c14">May 2026</div>
+          <div class="serif" style="font:400 16px 'Newsreader';color:#6b5f47;margin-top:10px">2 people · 6 answers · 3 photos</div>
+        </div>
+        <!-- article -->
+        <div style="padding:30px 36px">
+          <div class="disp" style="font:700 24px/1.2 'Bricolage Grotesque';color:#221c14;margin-bottom:20px">A small thing that made you happy this month?</div>
+          <div style="display:flex;gap:16px;margin-bottom:24px">
+            <span style="width:34px;height:34px;flex:none;border-radius:50%;background:#d2562f;color:#fff;display:flex;align-items:center;justify-content:center;font:700 14px 'Bricolage Grotesque'">P</span>
+            <div style="flex:1">
+              <div class="disp" style="font:700 13px 'Bricolage Grotesque';letter-spacing:.04em;color:#221c14;margin-bottom:4px">PARI</div>
+              <div class="serif" style="font:400 18px/1.65 'Newsreader';color:#2e261b"><span style="float:left;font:600 58px/.78 'Newsreader';color:#d2562f;margin:6px 10px 0 0">T</span>he smell of rain on the balcony plants. I started leaving the door open in the mornings just for it — the whole flat smells like wet earth and coffee now.</div>
+              <div class="stamp" style="width:200px;margin-top:14px;filter:drop-shadow(2px 3px 0 rgba(34,28,20,.18))"><div style="height:120px;margin:11px;background:repeating-linear-gradient(135deg,#cdbf9c 0 9px,#c3b48e 9px 18px);border:1.5px solid #221c14;display:flex;align-items:center;justify-content:center"><span class="disp" style="font:700 10px 'Bricolage Grotesque';letter-spacing:.1em;color:#6b5f47">balcony.jpg</span></div></div>
+              <div style="display:flex;gap:8px;margin-top:14px;align-items:center"><span class="disp" style="font:700 12px 'Bricolage Grotesque';background:#fffaf0;border:1.5px solid #221c14;border-radius:3px;padding:5px 11px">❤ 1</span><span class="disp" style="font:700 12px 'Bricolage Grotesque';background:#fffaf0;border:1.5px solid #221c14;border-radius:3px;padding:5px 11px">🌿 2</span><span class="disp" style="font:700 11px 'Bricolage Grotesque';color:#8a7d63;border:1.5px dashed #b3a587;border-radius:3px;padding:5px 11px">＋ REACT</span></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px">
+            <span style="width:34px;height:34px;flex:none;border-radius:50%;background:#4f7042;color:#fff;display:flex;align-items:center;justify-content:center;font:700 14px 'Bricolage Grotesque'">F</span>
+            <div style="flex:1">
+              <div class="disp" style="font:700 13px 'Bricolage Grotesque';letter-spacing:.04em;color:#221c14;margin-bottom:4px">FRIEND</div>
+              <div class="serif" style="font:400 18px/1.65 'Newsreader';color:#2e261b">Found my grandmother's handwriting in an old cookbook. Sat on the kitchen floor reading it for an hour.</div>
+              <div style="display:flex;gap:8px;margin-top:12px"><span class="disp" style="font:700 12px 'Bricolage Grotesque';background:#fffaf0;border:1.5px solid #221c14;border-radius:3px;padding:5px 11px">❤ 2</span><span class="disp" style="font:700 12px 'Bricolage Grotesque';background:#fffaf0;border:1.5px solid #221c14;border-radius:3px;padding:5px 11px">🥹 1</span></div>
+              <div style="margin-top:14px;border-left:3px solid #d2562f;padding-left:14px"><span class="disp" style="font:700 12px 'Bricolage Grotesque';color:#221c14">PARI </span><span class="serif" style="font:400 16px/1.5 'Newsreader';color:#3a3024">Okay this made me tear up. Which recipe??</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="2d">
+      <div class="dv-olabel"><a class="dv-oid" href="#2d" style="background:#d2562f;color:#fff">2d</a>Member · archive — the open issue is a stamp to claim</div>
+      <div class="riso" style="width:720px;background:#f4ecd8;border:1.5px solid #221c14;border-radius:5px;box-shadow:14px 14px 0 #ddcba0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 28px;border-bottom:1.5px solid #221c14"><div class="disp" style="font:800 20px 'Bricolage Grotesque';color:#221c14">PiecesOfLife</div><nav class="disp" style="display:flex;gap:22px;font:600 13px 'Bricolage Grotesque';color:#221c14"><span style="border-bottom:2px solid #d2562f;padding-bottom:2px">ISSUES</span><span style="opacity:.55">PHOTOS</span><span style="width:26px;height:26px;border-radius:50%;background:#d2562f;color:#fff;display:flex;align-items:center;justify-content:center;font:700 12px 'Bricolage Grotesque'">P</span></nav></div>
+        <div style="padding:30px 34px">
+          <div class="disp" style="font:700 12px 'Bricolage Grotesque';letter-spacing:.26em;color:#d2562f;margin-bottom:4px">THE ARCHIVE</div>
+          <div class="disp" style="font:800 40px 'Bricolage Grotesque';color:#221c14;margin-bottom:22px">Issues</div>
+          <!-- open now: perforated stamp banner -->
+          <div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.2em;color:#4f7042;margin-bottom:10px">● OPEN NOW · YOUR TURN</div>
+          <div class="stamp" style="--s:18px;width:100%;filter:drop-shadow(4px 5px 0 rgba(34,28,20,.16));margin-bottom:30px">
+            <div style="border:1.5px dashed #221c14;margin:13px;padding:22px 24px;display:flex;align-items:center;gap:24px">
+              <div style="flex:none;text-align:center;background:#221c14;color:#f4ecd8;padding:16px 20px;border-radius:3px"><div class="disp" style="font:800 30px/.9 'Bricolage Grotesque'">JUN</div><div class="disp" style="font:600 13px 'Bricolage Grotesque';letter-spacing:.16em">2026</div></div>
+              <div style="flex:1"><div class="disp" style="font:800 26px 'Bricolage Grotesque';color:#221c14">June 2026</div><div class="serif" style="font:400 16px/1.5 'Newsreader';color:#6b5f47;margin-top:2px">3 prompts · closes in 6 days · <b style="color:#b1481f">you haven't answered yet</b></div></div>
+              <button class="disp" style="flex:none;font:700 13px 'Bricolage Grotesque';letter-spacing:.04em;color:#f4ecd8;background:#d2562f;border:none;padding:14px 22px;border-radius:3px;cursor:pointer">ANSWER →</button>
+            </div>
+          </div>
+          <!-- posted -->
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px"><div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.2em;color:#8a7d63">POSTED ISSUES</div><div style="flex:1;height:1.5px;background:#d8caa6"></div></div>
+          <div style="border:1.5px dashed #b3a587;border-radius:4px;padding:34px 28px;text-align:center;background:#efe6cf">
+            <div class="pmark" style="margin:0 auto 14px;opacity:.5;transform:rotate(-7deg)"><div class="disp" style="font:700 8px 'Bricolage Grotesque';letter-spacing:.1em">PENDING</div><div style="width:13px;height:13px;margin:3px 0;transform:rotate(45deg);background:conic-gradient(#221c14 0 90deg,transparent 0 180deg,#221c14 0 270deg,transparent 0)"></div><div class="disp" style="font:600 8px 'Bricolage Grotesque'">No.1</div></div>
+            <div class="disp" style="font:700 19px 'Bricolage Grotesque';color:#3a3024;margin-bottom:6px">Your first issue is at the press</div>
+            <div class="serif" style="font:400 15px/1.55 'Newsreader';color:#6b5f47;max-width:380px;margin:0 auto">When June closes, everyone's pieces get compiled, postmarked, and delivered here — yours to keep.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="2e">
+      <div class="dv-olabel"><a class="dv-oid" href="#2e" style="background:#d2562f;color:#fff">2e</a>Admin · the press room (progress fix + nudges + publish)</div>
+      <div class="riso" style="width:980px;background:#f4ecd8;border:1.5px solid #221c14;border-radius:5px;box-shadow:14px 14px 0 #ddcba0;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 28px;border-bottom:1.5px solid #221c14"><div class="disp" style="font:800 20px 'Bricolage Grotesque';color:#221c14">PiecesOfLife</div><nav class="disp" style="display:flex;gap:22px;font:600 13px 'Bricolage Grotesque';color:#221c14"><span style="opacity:.55">ISSUES</span><span style="opacity:.55">PHOTOS</span><span style="border-bottom:2px solid #d2562f;padding-bottom:2px">ADMIN</span><span style="width:26px;height:26px;border-radius:50%;background:#d2562f;color:#fff;display:flex;align-items:center;justify-content:center;font:700 12px 'Bricolage Grotesque'">P</span></nav></div>
+        <div style="padding:28px 34px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px">
+            <div><div class="disp" style="font:700 12px 'Bricolage Grotesque';letter-spacing:.24em;color:#d2562f;margin-bottom:4px">THE PRESS ROOM</div><div class="disp" style="font:800 36px 'Bricolage Grotesque';color:#221c14">PiecesOfLife Demo</div></div>
+            <div style="display:flex;gap:9px"><span class="disp" style="font:600 12px 'Bricolage Grotesque';color:#221c14;border:1.5px solid #221c14;padding:9px 14px;border-radius:3px">MEMBERS</span><span class="disp" style="font:600 12px 'Bricolage Grotesque';color:#221c14;border:1.5px solid #221c14;padding:9px 14px;border-radius:3px">QUESTIONS</span><span class="disp" style="font:600 12px 'Bricolage Grotesque';color:#221c14;border:1.5px solid #221c14;padding:9px 14px;border-radius:3px">SETTINGS</span></div>
+          </div>
+
+          <div style="border:1.5px solid #221c14;border-radius:4px;overflow:hidden">
+            <div style="background:#221c14;color:#f4ecd8;padding:22px 26px;display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:16px"><div class="disp" style="font:800 30px 'Bricolage Grotesque'">June 2026</div><span class="disp" style="font:700 10px 'Bricolage Grotesque';letter-spacing:.06em;color:#221c14;background:#4f7042;color:#fff;padding:5px 11px;border-radius:3px">● COLLECTING · 6D 23H</span></div>
+              <div style="display:flex;gap:10px"><button class="disp" style="font:700 12px 'Bricolage Grotesque';letter-spacing:.05em;color:#f4ecd8;background:transparent;border:1.5px solid #6b6149;padding:11px 16px;border-radius:3px;cursor:pointer">SEND REMINDER</button><button class="disp" style="font:700 12px 'Bricolage Grotesque';letter-spacing:.05em;color:#221c14;background:#e3a52a;border:none;padding:11px 20px;border-radius:3px;cursor:pointer">▲ PUBLISH NOW</button></div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap">
+              <!-- progress with fix -->
+              <div style="flex:1;min-width:280px;padding:22px 26px;border-right:1.5px solid #d8caa6;border-bottom:1.5px solid #d8caa6">
+                <div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.16em;color:#8a7d63;margin-bottom:8px">MEMBERS RESPONDED</div>
+                <div style="display:flex;align-items:baseline;gap:6px"><div class="disp" style="font:800 44px/1 'Bricolage Grotesque';color:#221c14">1</div><div class="disp" style="font:700 22px 'Bricolage Grotesque';color:#b3a587">/ 1</div></div>
+                <div style="display:flex;gap:6px;margin:12px 0 14px"><span style="flex:1;height:12px;background:#4f7042;border-radius:2px"></span></div>
+                <label class="disp" style="display:flex;align-items:center;gap:10px;font:600 12px 'Bricolage Grotesque';letter-spacing:.03em;color:#221c14;cursor:pointer"><span style="width:38px;height:22px;border-radius:3px;background:#4f7042;position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:2px;background:#f4ecd8"></span></span>COUNT ME IN THIS ROUND</label>
+                <div class="serif" style="font:400 13px 'Newsreader';font-style:italic;color:#8a7d63;margin-top:8px">Admins are left out of progress unless this is on.</div>
+              </div>
+              <div style="flex:1;min-width:140px;padding:22px 26px;border-right:1.5px solid #d8caa6;border-bottom:1.5px solid #d8caa6"><div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.16em;color:#8a7d63;margin-bottom:8px">CADENCE</div><div class="disp" style="font:800 26px 'Bricolage Grotesque';color:#221c14">Monthly</div><div class="serif" style="font:400 14px 'Newsreader';color:#6b5f47;margin-top:2px">7-day window</div></div>
+              <div style="flex:1;min-width:140px;padding:22px 26px;border-bottom:1.5px solid #d8caa6"><div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.16em;color:#8a7d63;margin-bottom:8px">PHOTOS</div><div class="disp" style="font:800 26px 'Bricolage Grotesque';color:#221c14">3</div><div class="serif" style="font:400 14px 'Newsreader';color:#6b5f47;margin-top:2px">2 answers</div></div>
+            </div>
+            <!-- member ledger -->
+            <div style="padding:22px 26px">
+              <div class="disp" style="font:700 11px 'Bricolage Grotesque';letter-spacing:.16em;color:#8a7d63;margin-bottom:14px">WHO HAS RESPONDED</div>
+              <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1.5px solid #d8caa6"><span style="width:34px;height:34px;border-radius:50%;background:#4f7042;color:#fff;display:flex;align-items:center;justify-content:center;font:700 14px 'Bricolage Grotesque'">F</span><div style="flex:1"><div class="disp" style="font:700 15px 'Bricolage Grotesque';color:#221c14">friend</div><div class="serif" style="font:400 13px 'Newsreader';color:#8a7d63">friend@example.com</div></div><span class="disp" style="font:700 10px 'Bricolage Grotesque';letter-spacing:.05em;color:#221c14;background:#e3a52a;padding:6px 11px;border-radius:3px">● WAITING</span><button class="disp" style="font:700 11px 'Bricolage Grotesque';color:#fff;background:#d2562f;border:none;padding:8px 14px;border-radius:3px;cursor:pointer">NUDGE</button></div>
+              <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1.5px solid #d8caa6"><span style="width:34px;height:34px;border-radius:50%;background:#d2562f;color:#fff;display:flex;align-items:center;justify-content:center;font:700 14px 'Bricolage Grotesque'">P</span><div style="flex:1"><div class="disp" style="font:700 15px 'Bricolage Grotesque';color:#221c14">Pari · you (admin)</div><div class="serif" style="font:400 13px 'Newsreader';color:#8a7d63">admin@example.com</div></div><span class="disp" style="font:700 10px 'Bricolage Grotesque';letter-spacing:.05em;color:#fff;background:#d2562f;padding:6px 11px;border-radius:3px">✓ SUBMITTED</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="dv-next disp" style="margin:30px 0 0;font:500 13px/1.6 'Bricolage Grotesque';color:#6b5f47;max-width:760px;letter-spacing:0">Next: "apply 'Private Post' to the rest — onboarding, profile, empty states, mobile" · "make the postmark a real react animation" · "dial the ink-blocks back 20%" · "try a third direction" · or "ship 2b + 2c, keep admin calmer like 1f".</p>
+  <!--t2end--></div>
+</section>
+<section class="dv-turn" id="t1" style="border-bottom:1px solid #e2d9c7">
+  <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">PiecesOfLife — warm, letter-like redesign</span></div>
+  <p class="dv-tsub">A self-hosted private newsletter for a handful of people. The redesign trades the near-black UI for a warm, paper-like surface that feels like opening a letter — calm, intimate, unmistakably a usable app (no marketing landing). Member screens lead; admin screens stay efficient. Pan and zoom freely; each card has an id you can reference in chat (e.g. "make 1c the default editor").</p>
+  <div class="dv-opts">
+
+    <div class="dv-opt" id="1a">
+      <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Design system &amp; principles</div>
+      <div class="frame" style="width:760px;padding:34px 36px">
+        <div class="gdiamond" style="margin-bottom:16px"></div>
+        <div style="font:700 26px 'Quicksand';color:#2a2622;margin-bottom:4px">The system</div>
+        <div style="font:400 14px 'Nunito Sans';color:#7c7468;margin-bottom:26px">Warm paper, soft ink, one clay accent, sage for "live" states.</div>
+
+        <div style="font:700 12px 'Nunito Sans';letter-spacing:.08em;color:#a59a87;text-transform:uppercase;margin-bottom:12px">Palette</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:28px">
+          <div style="text-align:center"><div style="width:84px;height:54px;border-radius:11px;background:#efe7d8;border:1px solid #e2d9c7"></div><div style="font:600 11px 'Nunito Sans';color:#8a8175;margin-top:6px">Paper</div></div>
+          <div style="text-align:center"><div style="width:84px;height:54px;border-radius:11px;background:#fbf7ef;border:1px solid #e2d9c7"></div><div style="font:600 11px 'Nunito Sans';color:#8a8175;margin-top:6px">Card</div></div>
+          <div style="text-align:center"><div style="width:84px;height:54px;border-radius:11px;background:#2a2622"></div><div style="font:600 11px 'Nunito Sans';color:#8a8175;margin-top:6px">Ink</div></div>
+          <div style="text-align:center"><div style="width:84px;height:54px;border-radius:11px;background:#c0673e"></div><div style="font:600 11px 'Nunito Sans';color:#8a8175;margin-top:6px">Clay</div></div>
+          <div style="text-align:center"><div style="width:84px;height:54px;border-radius:11px;background:#5f7a52"></div><div style="font:600 11px 'Nunito Sans';color:#8a8175;margin-top:6px">Sage</div></div>
+          <div style="text-align:center"><div style="width:84px;height:54px;border-radius:11px;background:#caa64a"></div><div style="font:600 11px 'Nunito Sans';color:#8a8175;margin-top:6px">Ochre</div></div>
+        </div>
+
+        <div style="font:700 12px 'Nunito Sans';letter-spacing:.08em;color:#a59a87;text-transform:uppercase;margin-bottom:12px">Type — Quicksand display · Nunito Sans text</div>
+        <div style="border-top:1px solid #ece3d2;padding-top:16px;margin-bottom:28px">
+          <div style="font:700 30px 'Quicksand';color:#2a2622;letter-spacing:-.01em">June, in everyone's words</div>
+          <div style="font:400 15px/1.6 'Nunito Sans';color:#5d564c;margin-top:6px;max-width:560px">Body copy stays in a calm, readable humanist sans. Generous line height makes long answers feel like reading a note from a friend, not filling a form.</div>
+        </div>
+
+        <div style="font:700 12px 'Nunito Sans';letter-spacing:.08em;color:#a59a87;text-transform:uppercase;margin-bottom:12px">Status labels</div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap">
+          <span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#8a8175;background:#f0ebe0;border:1px solid #e4dccb;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#b3a892"></span>Draft</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#5e7392;background:#eef2f7;border:1px solid #dbe4ef;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#7d96b8"></span>Saved</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#456b3c;background:#e9f0e4;border:1px solid #d3e2cb;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#5f7a52"></span>Collecting</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#8a6a1f;background:#f7f0dc;border:1px solid #ebdfbc;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#caa64a"></span>Waiting</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#fff;background:#5f7a52;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#c6d6bd"></span>Submitted</span>
+          <span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#fff;background:#2a2622;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#c0673e"></span>Published</span>
+        </div>
+
+        <div style="font:700 12px 'Nunito Sans';letter-spacing:.08em;color:#a59a87;text-transform:uppercase;margin:28px 0 12px">Key UX moves</div>
+        <ul style="margin:0;padding-left:18px;font:400 14px/1.7 'Nunito Sans';color:#5d564c">
+          <li><b style="color:#2a2622">Member-first home.</b> Landing on an open issue shows the writing space, not a dashboard.</li>
+          <li><b style="color:#2a2622">Autosave you can trust.</b> Draft → Saving… → Saved, with a timestamp.</li>
+          <li><b style="color:#2a2622">Progress that counts the right people.</b> Admin progress excludes admins by default, with an "I'm participating too" toggle (see 1g).</li>
+          <li><b style="color:#2a2622">Honest empty states.</b> Every empty view tells you what happens next, not just "nothing here".</li>
+          <li><b style="color:#2a2622">Mobile is first-class.</b> Single-column, 44px+ targets, sticky save bar (see 1k).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1b">
+      <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Member · current issue → response editor (the heart)</div>
+      <div class="frame" style="width:1080px">
+        <div class="nbar"><div class="nlogo">PiecesOfLife</div><nav class="nnav"><span style="color:#2a2622">Issues</span><span>Photos</span><span style="display:flex;align-items:center;gap:8px;color:#2a2622"><span class="av">P</span>Pari</span></nav></div>
+        <div style="display:flex;gap:0;background:#f3ecdd">
+          <div style="flex:1;padding:34px 40px 40px;position:relative;overflow:hidden">
+            <div class="gseal" style="position:absolute;top:-34px;left:-34px;opacity:.13"></div>
+            <div style="position:relative;font:700 12px 'Nunito Sans';letter-spacing:.1em;color:#5f7a52;text-transform:uppercase;margin-bottom:8px">Open now · your turn</div>
+            <div style="display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:6px"><div style="font:700 38px 'Quicksand';color:#2a2622;letter-spacing:-.01em">June 2026</div>
+              <span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#456b3c;background:#e9f0e4;border:1px solid #d3e2cb;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#5f7a52"></span>Collecting</span></div>
+            <div style="font:400 15px 'Nunito Sans';color:#7c7468;margin-bottom:24px">3 questions · closes in <b style="color:#2a2622">6 days</b> · your answers are private until June is published.</div>
+
+            <!-- Q1 answered -->
+            <div style="background:#fdfaf3;border:1px solid #ece3d2;border-radius:16px;padding:22px 24px;margin-bottom:16px">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:12px"><div style="font:700 18px 'Quicksand';color:#2a2622;max-width:560px">What's a small thing that made you happy this month?</div><span style="flex:none;display:inline-flex;align-items:center;gap:6px;font:700 11px 'Nunito Sans';color:#5e7392;background:#eef2f7;border:1px solid #dbe4ef;padding:5px 10px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:#7d96b8"></span>Saved · 2m ago</span></div>
+              <div style="font:400 15px/1.65 'Nunito Sans';color:#3f3a32;border:1px solid #e7ddc9;border-radius:12px;padding:14px 16px;background:#fff">The smell of rain on the balcony plants. I started leaving the door open in the mornings just for it.</div>
+              <div style="display:flex;gap:8px;margin-top:12px"><span style="display:inline-flex;align-items:center;gap:7px;font:600 13px 'Nunito Sans';color:#7c7468;border:1px solid #e2d9c7;background:#f7f1e6;padding:7px 12px;border-radius:9px">＋ Photo</span><span style="display:inline-flex;align-items:center;gap:7px;font:600 13px 'Nunito Sans';color:#7c7468;border:1px solid #e2d9c7;background:#f7f1e6;padding:7px 12px;border-radius:9px">🔗 Link</span></div>
+            </div>
+
+            <!-- Q2 typing/saving -->
+            <div style="background:#fdfaf3;border:1.5px solid #c0673e;border-radius:16px;padding:22px 24px;margin-bottom:16px;box-shadow:0 0 0 4px rgba(192,103,62,.1)">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:12px"><div style="font:700 18px 'Quicksand';color:#2a2622;max-width:560px">What are you looking forward to?</div><span style="flex:none;display:inline-flex;align-items:center;gap:7px;font:700 11px 'Nunito Sans';color:#a59a87;background:#f0ebe0;padding:5px 10px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:#caa64a;box-shadow:0 0 0 0 rgba(202,166,74,.6)"></span>Saving…</span></div>
+              <div style="font:400 15px/1.65 'Nunito Sans';color:#3f3a32;border:1px solid #c0673e;border-radius:12px;padding:14px 16px;background:#fff;min-height:46px">A long weekend with no plans. Maybe finally<span style="display:inline-block;width:2px;height:18px;background:#c0673e;vertical-align:-3px;margin-left:1px"></span></div>
+              <div style="display:flex;gap:8px;margin-top:12px"><span style="display:inline-flex;align-items:center;gap:7px;font:600 13px 'Nunito Sans';color:#7c7468;border:1px solid #e2d9c7;background:#f7f1e6;padding:7px 12px;border-radius:9px">＋ Photo</span><span style="display:inline-flex;align-items:center;gap:7px;font:600 13px 'Nunito Sans';color:#7c7468;border:1px solid #e2d9c7;background:#f7f1e6;padding:7px 12px;border-radius:9px">🔗 Link</span></div>
+            </div>
+
+            <!-- Q3 empty -->
+            <div style="background:#faf5ec;border:1px dashed #d8cdb6;border-radius:16px;padding:22px 24px;margin-bottom:24px">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:12px"><div style="font:700 18px 'Quicksand';color:#2a2622;max-width:560px">What's been on your mind lately?</div><span style="flex:none;display:inline-flex;align-items:center;gap:6px;font:700 11px 'Nunito Sans';color:#8a8175;background:#f0ebe0;border:1px solid #e4dccb;padding:5px 10px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:#b3a892"></span>Not started</span></div>
+              <div style="font:400 15px 'Nunito Sans';color:#a59a87;border:1px solid #e7ddc9;border-radius:12px;padding:14px 16px;background:#fff">Take your time — write as much or as little as you like.</div>
+            </div>
+
+            <!-- sticky save/submit bar -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#fdfaf3;border:1px solid #ece3d2;border-radius:14px;padding:14px 18px">
+              <div style="font:400 13px 'Nunito Sans';color:#7c7468"><b style="color:#456b3c">2 of 3 answered.</b> You can edit anytime until June is published.</div>
+              <div style="display:flex;gap:10px"><button style="font:700 14px 'Nunito Sans';color:#7c7468;background:transparent;border:1px solid #e2d9c7;padding:11px 18px;border-radius:11px;cursor:pointer">Preview</button><button style="font:700 14px 'Nunito Sans';color:#fff;background:#5f7a52;border:none;padding:11px 22px;border-radius:11px;cursor:pointer">Submit answers</button></div>
+            </div>
+          </div>
+
+          <!-- right rail: members + suggest -->
+          <div style="width:300px;flex:none;background:#fbf7ef;border-left:1px solid #ece3d2;padding:30px 26px">
+            <div style="font:700 12px 'Nunito Sans';letter-spacing:.08em;color:#a59a87;text-transform:uppercase;margin-bottom:14px">Who's in this round</div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:28px">
+              <div style="display:flex;align-items:center;gap:10px"><span class="av" style="background:#dfe6d8;color:#456b3c">P</span><div style="font:600 14px 'Nunito Sans';color:#2a2622;flex:1">Pari <span style="color:#a59a87;font-weight:400">· you</span></div><span style="width:8px;height:8px;border-radius:50%;background:#caa64a" title="In progress"></span></div>
+              <div style="display:flex;align-items:center;gap:10px"><span class="av">F</span><div style="font:600 14px 'Nunito Sans';color:#2a2622;flex:1">friend</div><span style="width:8px;height:8px;border-radius:50%;background:#d8cdb6" title="Waiting"></span></div>
+            </div>
+            <div style="border-top:1px solid #ece3d2;padding-top:22px">
+              <div style="font:700 15px 'Quicksand';color:#2a2622;margin-bottom:6px">Suggest a question</div>
+              <div style="font:400 13px/1.5 'Nunito Sans';color:#7c7468;margin-bottom:12px">Got a good one for next round? Pari reviews suggestions.</div>
+              <div style="font:400 14px 'Nunito Sans';color:#a59a87;border:1px solid #e7ddc9;border-radius:11px;padding:12px 14px;background:#fff;margin-bottom:10px">What surprised you this year?</div>
+              <button style="width:100%;font:700 13px 'Nunito Sans';color:#c0673e;background:#f7ede6;border:1px solid #eccdb9;padding:10px;border-radius:11px;cursor:pointer">Send suggestion</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1c">
+      <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Member · editor, alt — one question at a time (calmer, mobile-friendly)</div>
+      <div class="frame" style="width:720px">
+        <div class="nbar"><div class="nlogo">PiecesOfLife</div><nav class="nnav"><span style="color:#2a2622">Issues</span><span>Photos</span><span class="av">P</span></nav></div>
+        <div style="padding:32px 40px 36px;background:#f3ecdd">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+            <div style="font:400 13px 'Nunito Sans';color:#7c7468">June 2026 · Question <b style="color:#2a2622">2</b> of 3</div>
+            <div style="display:flex;gap:6px"><span style="width:26px;height:5px;border-radius:3px;background:#5f7a52"></span><span style="width:26px;height:5px;border-radius:3px;background:#c0673e"></span><span style="width:26px;height:5px;border-radius:3px;background:#e2d9c7"></span></div>
+          </div>
+          <div style="font:700 27px/1.25 'Quicksand';color:#2a2622;margin-bottom:18px;text-wrap:balance">What are you looking forward to?</div>
+          <div style="font:400 16px/1.7 'Nunito Sans';color:#3f3a32;border:1px solid #e7ddc9;border-radius:14px;padding:18px 20px;background:#fff;min-height:150px">A long weekend with no plans. Maybe finally taking the coast drive we keep postponing —<span style="display:inline-block;width:2px;height:20px;background:#c0673e;vertical-align:-4px"></span></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px">
+            <div style="display:flex;gap:8px"><span style="font:600 13px 'Nunito Sans';color:#7c7468;border:1px solid #e2d9c7;background:#f7f1e6;padding:8px 13px;border-radius:9px">＋ Photo</span><span style="font:600 13px 'Nunito Sans';color:#7c7468;border:1px solid #e2d9c7;background:#f7f1e6;padding:8px 13px;border-radius:9px">🔗 Link</span></div>
+            <span style="display:inline-flex;align-items:center;gap:7px;font:700 12px 'Nunito Sans';color:#5e7392;background:#eef2f7;border:1px solid #dbe4ef;padding:6px 11px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:#7d96b8"></span>Saved</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:26px;padding-top:20px;border-top:1px solid #e2d9c7">
+            <button style="font:700 14px 'Nunito Sans';color:#7c7468;background:transparent;border:1px solid #e2d9c7;padding:12px 20px;border-radius:11px;cursor:pointer">← Back</button>
+            <button style="font:700 14px 'Nunito Sans';color:#fff;background:#2a2622;border:none;padding:12px 24px;border-radius:11px;cursor:pointer">Next question →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1d">
+      <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Member · archive with "Open now" + honest empty state</div>
+      <div class="frame" style="width:760px">
+        <div class="nbar"><div class="nlogo">PiecesOfLife</div><nav class="nnav"><span style="color:#2a2622">Issues</span><span>Photos</span><span class="av">P</span></nav></div>
+        <div style="padding:34px 40px 40px;background:#f3ecdd">
+          <div style="font:700 12px 'Nunito Sans';letter-spacing:.1em;color:#a59a87;text-transform:uppercase;margin-bottom:4px">PiecesOfLife</div>
+          <div style="font:700 32px 'Quicksand';color:#2a2622;margin-bottom:24px">Issues</div>
+
+          <div style="background:#fdfaf3;border:1px solid #d3e2cb;border-radius:18px;padding:26px 28px;margin-bottom:24px;box-shadow:0 2px 0 #5f7a52 inset,0 18px 40px -28px rgba(95,122,82,.5);border-top:3px solid #5f7a52;position:relative;overflow:hidden">
+            <div class="gseal" style="position:absolute;top:-30px;right:-30px;opacity:.18"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;position:relative">
+              <div>
+                <div style="font:700 11px 'Nunito Sans';letter-spacing:.1em;color:#5f7a52;text-transform:uppercase;margin-bottom:6px">Open now · your turn</div>
+                <div style="font:700 26px 'Quicksand';color:#2a2622;margin-bottom:6px">June 2026</div>
+                <div style="font:400 14px 'Nunito Sans';color:#7c7468">3 questions · closes in 6 days · <b style="color:#8a6a1f">you haven't answered yet</b></div>
+              </div>
+              <button style="font:700 14px 'Nunito Sans';color:#fff;background:#5f7a52;border:none;padding:13px 24px;border-radius:12px;cursor:pointer;white-space:nowrap">Answer questions →</button>
+            </div>
+          </div>
+
+          <div style="font:700 12px 'Nunito Sans';letter-spacing:.08em;color:#a59a87;text-transform:uppercase;margin-bottom:12px">Published issues</div>
+          <div style="border:1px dashed #d8cdb6;border-radius:16px;padding:40px 30px;text-align:center;background:#faf5ec">
+            <div style="font:700 18px 'Quicksand';color:#5d564c;margin-bottom:6px">Your first issue is being written right now</div>
+            <div style="font:400 14px/1.55 'Nunito Sans';color:#8a8175;max-width:420px;margin:0 auto">When June closes, everyone's answers get compiled into one issue and it'll appear here — yours to keep.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1e">
+      <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a>Member · published issue — the reading experience</div>
+      <div class="frame" style="width:760px">
+        <div class="nbar"><div class="nlogo">PiecesOfLife</div><nav class="nnav"><span style="color:#2a2622">Issues</span><span>Photos</span><span class="av">P</span></nav></div>
+        <div style="background:#f3ecdd;padding:0 0 36px">
+          <!-- masthead -->
+          <div style="text-align:center;padding:44px 40px 0;border-bottom:1px solid #e2d9c7;background:linear-gradient(#f7f1e6,#f3ecdd);position:relative;overflow:hidden">
+            <div class="gseal" style="position:absolute;top:-24px;left:-24px;opacity:.5"></div>
+            <div class="gseal" style="position:absolute;top:-24px;right:-24px;opacity:.5"></div>
+            <div class="gdiamond" style="margin:0 auto 18px"></div>
+            <div style="font:700 12px 'Nunito Sans';letter-spacing:.18em;color:#c0673e;text-transform:uppercase;margin-bottom:10px">Issue No.1 · Published</div>
+            <div style="font:700 44px 'Quicksand';color:#2a2622;letter-spacing:-.01em;line-height:1.05">May 2026</div>
+            <div style="font:400 15px 'Nunito Sans';color:#7c7468;margin:10px 0 26px">2 people · 6 answers · 3 photos</div>
+            <div class="gstrip"></div>
+          </div>
+
+          <div style="max-width:600px;margin:0 auto;padding:32px 30px 0">
+            <!-- entry: a question, answers from each member -->
+            <div style="font:700 21px/1.3 'Quicksand';color:#2a2622;margin-bottom:18px;text-wrap:balance">What's a small thing that made you happy this month?</div>
+
+            <div style="display:flex;gap:14px;margin-bottom:24px">
+              <span class="av" style="flex:none;background:#dfe6d8;color:#456b3c">P</span>
+              <div style="flex:1">
+                <div style="font:700 14px 'Nunito Sans';color:#2a2622;margin-bottom:5px">Pari</div>
+                <div style="font:400 16px/1.7 'Nunito Sans';color:#3f3a32">The smell of rain on the balcony plants. I started leaving the door open in the mornings just for it.</div>
+                <div style="margin-top:12px;height:150px;border-radius:13px;background:repeating-linear-gradient(135deg,#e7ddc9,#e7ddc9 11px,#ddd2bb 11px,#ddd2bb 22px);display:flex;align-items:center;justify-content:center;font:600 12px 'Nunito Sans';color:#8a8175">balcony.jpg</div>
+                <div style="display:flex;gap:8px;margin-top:12px;align-items:center"><span style="font:600 13px 'Nunito Sans';background:#fff;border:1px solid #e7ddc9;border-radius:999px;padding:5px 12px">❤️ 1</span><span style="font:600 13px 'Nunito Sans';background:#fff;border:1px solid #e7ddc9;border-radius:999px;padding:5px 12px">🌿</span><span style="font:600 13px 'Nunito Sans';color:#a59a87;border:1px dashed #d8cdb6;border-radius:999px;padding:5px 12px">＋ react</span></div>
+              </div>
+            </div>
+
+            <div style="display:flex;gap:14px;margin-bottom:20px">
+              <span class="av" style="flex:none">F</span>
+              <div style="flex:1">
+                <div style="font:700 14px 'Nunito Sans';color:#2a2622;margin-bottom:5px">friend</div>
+                <div style="font:400 16px/1.7 'Nunito Sans';color:#3f3a32">Found my grandmother's handwriting in an old cookbook. Sat on the kitchen floor reading it for an hour.</div>
+                <div style="display:flex;gap:8px;margin-top:12px"><span style="font:600 13px 'Nunito Sans';background:#fff;border:1px solid #e7ddc9;border-radius:999px;padding:5px 12px">❤️ 2</span><span style="font:600 13px 'Nunito Sans';background:#fff;border:1px solid #e7ddc9;border-radius:999px;padding:5px 12px">🥹 1</span></div>
+                <!-- comment thread -->
+                <div style="margin-top:14px;border-left:2px solid #e2d9c7;padding-left:14px;display:flex;flex-direction:column;gap:10px">
+                  <div><span style="font:700 13px 'Nunito Sans';color:#2a2622">Pari</span> <span style="font:400 14px/1.5 'Nunito Sans';color:#5d564c">Okay this made me tear up. Which recipe??</span></div>
+                  <div style="display:flex;gap:8px;align-items:center"><span class="av" style="width:24px;height:24px;font-size:11px;background:#dfe6d8;color:#456b3c">P</span><span style="font:400 14px 'Nunito Sans';color:#a59a87;border:1px solid #e7ddc9;border-radius:999px;padding:7px 14px;background:#fff;flex:1">Add a comment…</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="border-top:1px solid #e2d9c7;padding-top:26px;margin-top:8px;font:700 21px/1.3 'Quicksand';color:#2a2622">What are you looking forward to?</div>
+            <div style="font:400 14px 'Nunito Sans';color:#a59a87;margin-top:10px">2 more answers below…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1f">
+      <div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a>Admin · dashboard (progress fix + per-member nudges)</div>
+      <div class="frame" style="width:1000px">
+        <div class="nbar"><div class="nlogo">PiecesOfLife</div><nav class="nnav"><span>Issues</span><span>Photos</span><span style="color:#2a2622">Admin</span><span class="av">P</span></nav></div>
+        <div style="padding:32px 40px 40px;background:#f3ecdd">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:26px">
+            <div><div style="font:700 11px 'Nunito Sans';letter-spacing:.1em;color:#a59a87;text-transform:uppercase;margin-bottom:4px">Admin</div><div style="font:700 30px 'Quicksand';color:#2a2622">PiecesOfLife Demo</div><div style="font:400 14px 'Nunito Sans';color:#7c7468">A private loop for life updates</div></div>
+            <div style="display:flex;gap:9px"><span style="font:600 13px 'Nunito Sans';color:#5d564c;border:1px solid #e2d9c7;background:#fdfaf3;padding:9px 15px;border-radius:10px">Members</span><span style="font:600 13px 'Nunito Sans';color:#5d564c;border:1px solid #e2d9c7;background:#fdfaf3;padding:9px 15px;border-radius:10px">Questions</span><span style="font:600 13px 'Nunito Sans';color:#5d564c;border:1px solid #e2d9c7;background:#fdfaf3;padding:9px 15px;border-radius:10px">Settings</span></div>
+          </div>
+
+          <div style="background:#fdfaf3;border:1px solid #ece3d2;border-top:3px solid #5f7a52;border-radius:18px;padding:28px 30px;margin-bottom:22px;position:relative;overflow:hidden">
+            <div class="gseal" style="position:absolute;top:-32px;right:-32px;opacity:.16"></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:24px;flex-wrap:wrap;position:relative">
+              <div><div style="font:700 11px 'Nunito Sans';letter-spacing:.1em;color:#5f7a52;text-transform:uppercase;margin-bottom:6px">Current issue</div><div style="display:flex;align-items:center;gap:12px"><div style="font:700 30px 'Quicksand';color:#2a2622">June 2026</div><span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#456b3c;background:#e9f0e4;border:1px solid #d3e2cb;padding:5px 11px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:#5f7a52"></span>Collecting</span></div><div style="font:400 14px 'Nunito Sans';color:#7c7468;margin-top:6px">Closes in 6d 23h</div></div>
+              <div style="display:flex;gap:10px"><button style="font:700 14px 'Nunito Sans';color:#5d564c;background:#f7f1e6;border:1px solid #e2d9c7;padding:11px 18px;border-radius:11px;cursor:pointer">Send reminder</button><button style="font:700 14px 'Nunito Sans';color:#fff;background:#2a2622;border:none;padding:11px 20px;border-radius:11px;cursor:pointer">Publish now</button></div>
+            </div>
+
+            <div style="display:flex;gap:16px;flex-wrap:wrap">
+              <!-- progress card with fix -->
+              <div style="flex:1;min-width:260px;background:#f7f1e6;border:1px solid #ece3d2;border-radius:14px;padding:18px 20px">
+                <div style="font:700 11px 'Nunito Sans';letter-spacing:.07em;color:#a59a87;text-transform:uppercase;margin-bottom:8px">Members responded</div>
+                <div style="display:flex;align-items:baseline;gap:6px"><div style="font:700 34px 'Quicksand';color:#2a2622">1</div><div style="font:600 18px 'Nunito Sans';color:#a59a87">/ 1</div></div>
+                <div style="height:7px;border-radius:4px;background:#e2d9c7;margin:10px 0 8px;overflow:hidden"><div style="width:100%;height:100%;background:#5f7a52"></div></div>
+                <label style="display:flex;align-items:center;gap:9px;font:600 13px 'Nunito Sans';color:#5d564c;cursor:pointer"><span style="width:36px;height:21px;border-radius:999px;background:#5f7a52;position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:17px;height:17px;border-radius:50%;background:#fff"></span></span>Count me in this round</label>
+                <div style="font:400 12px 'Nunito Sans';color:#a59a87;margin-top:6px">Admins are excluded from progress unless this is on.</div>
+              </div>
+              <div style="flex:1;min-width:200px;background:#f7f1e6;border:1px solid #ece3d2;border-radius:14px;padding:18px 20px"><div style="font:700 11px 'Nunito Sans';letter-spacing:.07em;color:#a59a87;text-transform:uppercase;margin-bottom:8px">Cadence</div><div style="font:700 22px 'Quicksand';color:#2a2622">Monthly</div><div style="font:400 13px 'Nunito Sans';color:#7c7468;margin-top:4px">7-day window</div></div>
+              <div style="flex:1;min-width:200px;background:#f7f1e6;border:1px solid #ece3d2;border-radius:14px;padding:18px 20px"><div style="font:700 11px 'Nunito Sans';letter-spacing:.07em;color:#a59a87;text-transform:uppercase;margin-bottom:8px">Photos shared</div><div style="font:700 22px 'Quicksand';color:#2a2622">3</div><div style="font:400 13px 'Nunito Sans';color:#7c7468;margin-top:4px">across 2 answers</div></div>
+            </div>
+
+            <div style="font:700 15px 'Quicksand';color:#2a2622;margin:24px 0 12px">Who has responded</div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;gap:12px;background:#f7f1e6;border:1px solid #ece3d2;border-radius:12px;padding:12px 16px"><span class="av">F</span><div style="flex:1"><div style="font:700 14px 'Nunito Sans';color:#2a2622">friend</div><div style="font:400 12px 'Nunito Sans';color:#a59a87">friend@example.com</div></div><span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#8a6a1f;background:#f7f0dc;border:1px solid #ebdfbc;padding:5px 11px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:#caa64a"></span>Waiting</span><button style="font:700 12px 'Nunito Sans';color:#c0673e;background:#f7ede6;border:1px solid #eccdb9;padding:7px 13px;border-radius:9px;cursor:pointer">Nudge</button></div>
+              <div style="display:flex;align-items:center;gap:12px;background:#f7f1e6;border:1px solid #ece3d2;border-radius:12px;padding:12px 16px"><span class="av" style="background:#dfe6d8;color:#456b3c">P</span><div style="flex:1"><div style="font:700 14px 'Nunito Sans';color:#2a2622">Pari <span style="color:#a59a87;font-weight:400">· you (admin)</span></div><div style="font:400 12px 'Nunito Sans';color:#a59a87">admin@example.com</div></div><span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#fff;background:#5f7a52;padding:5px 11px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:#c6d6bd"></span>Submitted</span></div>
+            </div>
+          </div>
+
+          <div style="background:#fdfaf3;border:1px solid #ece3d2;border-radius:16px;padding:22px 26px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div style="font:700 15px 'Quicksand';color:#2a2622">Recent activity</div><span style="font:600 13px 'Nunito Sans';color:#c0673e">View log →</span></div>
+            <div style="display:flex;align-items:center;gap:12px;font:400 14px 'Nunito Sans';color:#5d564c;padding:8px 0;border-top:1px solid #ece3d2"><span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#456b3c;background:#e9f0e4;border:1px solid #d3e2cb;padding:4px 10px;border-radius:999px">submitted</span> friend answered all 3 questions <span style="color:#a59a87;margin-left:auto">12 min ago</span></div>
+            <div style="display:flex;align-items:center;gap:12px;font:400 14px 'Nunito Sans';color:#5d564c;padding:8px 0;border-top:1px solid #ece3d2"><span style="display:inline-flex;align-items:center;gap:6px;font:700 12px 'Nunito Sans';color:#5e7392;background:#eef2f7;border:1px solid #dbe4ef;padding:4px 10px;border-radius:999px">invite</span> invite sent to friend@example.com <span style="color:#a59a87;margin-left:auto">2 hours ago</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1g">
+      <div class="dv-olabel"><a class="dv-oid" href="#1g">1g</a>Admin · first-run onboarding wizard</div>
+      <div class="frame" style="width:720px">
+        <div style="background:#f3ecdd;padding:38px 44px 40px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:28px"><div class="nlogo" style="font-size:20px">PiecesOfLife</div></div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:24px">
+            <span style="width:28px;height:28px;border-radius:50%;background:#5f7a52;color:#fff;display:flex;align-items:center;justify-content:center;font:700 13px 'Nunito Sans'">✓</span>
+            <span style="height:2px;flex:1;background:#5f7a52"></span>
+            <span style="width:28px;height:28px;border-radius:50%;background:#c0673e;color:#fff;display:flex;align-items:center;justify-content:center;font:700 13px 'Nunito Sans'">2</span>
+            <span style="height:2px;flex:1;background:#e2d9c7"></span>
+            <span style="width:28px;height:28px;border-radius:50%;background:#e7ddc9;color:#a59a87;display:flex;align-items:center;justify-content:center;font:700 13px 'Nunito Sans'">3</span>
+            <span style="height:2px;flex:1;background:#e2d9c7"></span>
+            <span style="width:28px;height:28px;border-radius:50%;background:#e7ddc9;color:#a59a87;display:flex;align-items:center;justify-content:center;font:700 13px 'Nunito Sans'">4</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:18px"><div class="gtri"></div><div class="gtri" style="border-bottom-color:#c0673e"></div><div class="gtri"></div><div class="gtri" style="border-bottom-color:#5f7a52"></div><div class="gtri"></div></div>
+          <div style="font:700 12px 'Nunito Sans';letter-spacing:.1em;color:#a59a87;text-transform:uppercase;margin-bottom:8px">Step 2 of 4 · Rhythm</div>
+          <div style="font:700 28px 'Quicksand';color:#2a2622;margin-bottom:8px;text-wrap:balance">How often should everyone share?</div>
+          <div style="font:400 15px/1.6 'Nunito Sans';color:#7c7468;margin-bottom:24px">You can change this anytime. Most small groups land on monthly — often enough to feel connected, rare enough to feel special.</div>
+          <div style="display:flex;gap:12px;margin-bottom:24px">
+            <div style="flex:1;border:1px solid #e7ddc9;border-radius:13px;padding:16px;text-align:center;background:#fbf7ef"><div style="font:700 16px 'Quicksand';color:#5d564c">Weekly</div></div>
+            <div style="flex:1;border:1.5px solid #c0673e;border-radius:13px;padding:16px;text-align:center;background:#fbf3ed;box-shadow:0 0 0 4px rgba(192,103,62,.1)"><div style="font:700 16px 'Quicksand';color:#2a2622">Monthly</div><div style="font:600 11px 'Nunito Sans';color:#c0673e;margin-top:2px">Recommended</div></div>
+            <div style="flex:1;border:1px solid #e7ddc9;border-radius:13px;padding:16px;text-align:center;background:#fbf7ef"><div style="font:700 16px 'Quicksand';color:#5d564c">Quarterly</div></div>
+          </div>
+          <div style="font:700 14px 'Nunito Sans';color:#2a2622;margin-bottom:8px">Submission window</div>
+          <div style="font:400 14px 'Nunito Sans';color:#3f3a32;border:1px solid #e7ddc9;border-radius:11px;padding:13px 16px;background:#fff;margin-bottom:6px;display:flex;justify-content:space-between">7 days<span style="color:#a59a87">▾</span></div>
+          <div style="font:400 12px 'Nunito Sans';color:#a59a87;margin-bottom:26px">Days members have to respond before the issue compiles.</div>
+          <div style="display:flex;justify-content:space-between"><button style="font:700 14px 'Nunito Sans';color:#7c7468;background:transparent;border:1px solid #e2d9c7;padding:12px 20px;border-radius:11px;cursor:pointer">← Back</button><button style="font:700 14px 'Nunito Sans';color:#fff;background:#2a2622;border:none;padding:12px 24px;border-radius:11px;cursor:pointer">Continue → invite people</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1h">
+      <div class="dv-olabel"><a class="dv-oid" href="#1h">1h</a>Admin · question bank &amp; settings</div>
+      <div class="frame" style="width:720px">
+        <div class="nbar"><div class="nlogo">PiecesOfLife</div><nav class="nnav"><span>Issues</span><span style="color:#2a2622">Admin</span><span class="av">P</span></nav></div>
+        <div style="background:#f3ecdd;padding:30px 36px 36px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><div style="font:700 28px 'Quicksand';color:#2a2622">Question bank</div><button style="font:700 13px 'Nunito Sans';color:#fff;background:#5f7a52;border:none;padding:10px 18px;border-radius:11px;cursor:pointer">＋ Add question</button></div>
+          <div style="font:400 13px 'Nunito Sans';color:#7c7468;margin-bottom:20px">49 questions · filter by theme to build a round quickly</div>
+          <div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap"><span style="font:700 12px 'Nunito Sans';color:#2a2622;background:#fdfaf3;border:1.5px solid #2a2622;padding:6px 13px;border-radius:999px">All 49</span><span style="font:600 12px 'Nunito Sans';color:#7c7468;background:#fdfaf3;border:1px solid #e2d9c7;padding:6px 13px;border-radius:999px">Deep Thoughts 21</span><span style="font:600 12px 'Nunito Sans';color:#7c7468;background:#fdfaf3;border:1px solid #e2d9c7;padding:6px 13px;border-radius:999px">Everyday 18</span><span style="font:600 12px 'Nunito Sans';color:#7c7468;background:#fdfaf3;border:1px solid #e2d9c7;padding:6px 13px;border-radius:999px">Suggested 3</span></div>
+          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:30px">
+            <div style="display:flex;align-items:center;gap:14px;background:#fdfaf3;border:1px solid #ece3d2;border-radius:13px;padding:15px 18px"><div style="flex:1"><div style="font:600 15px 'Nunito Sans';color:#2a2622;margin-bottom:6px">What's something you've changed your mind about recently?</div><span style="font:700 11px 'Nunito Sans';color:#456b3c;background:#e9f0e4;border:1px solid #d3e2cb;padding:3px 9px;border-radius:999px">Deep Thoughts</span></div><span style="font:600 13px 'Nunito Sans';color:#7c7468;cursor:pointer">Edit</span><span style="font:600 13px 'Nunito Sans';color:#b3603b;cursor:pointer">Delete</span></div>
+            <div style="display:flex;align-items:center;gap:14px;background:#fdfaf3;border:1px solid #ebdfbc;border-radius:13px;padding:15px 18px"><div style="flex:1"><div style="font:600 15px 'Nunito Sans';color:#2a2622;margin-bottom:6px">What surprised you this year?</div><span style="font:700 11px 'Nunito Sans';color:#8a6a1f;background:#f7f0dc;border:1px solid #ebdfbc;padding:3px 9px;border-radius:999px">Suggested by friend</span></div><button style="font:700 12px 'Nunito Sans';color:#fff;background:#5f7a52;border:none;padding:7px 13px;border-radius:9px;cursor:pointer">Approve</button><span style="font:600 13px 'Nunito Sans';color:#b3603b;cursor:pointer">Dismiss</span></div>
+          </div>
+
+          <div style="font:700 22px 'Quicksand';color:#2a2622;margin-bottom:16px">Settings</div>
+          <div style="background:#fdfaf3;border:1px solid #ece3d2;border-radius:15px;padding:22px 24px">
+            <div style="font:700 11px 'Nunito Sans';letter-spacing:.07em;color:#a59a87;text-transform:uppercase;margin-bottom:14px">Basics</div>
+            <div style="font:600 13px 'Nunito Sans';color:#2a2622;margin-bottom:6px">Newsletter name</div>
+            <div style="font:400 14px 'Nunito Sans';color:#3f3a32;border:1px solid #e7ddc9;border-radius:10px;padding:11px 14px;background:#fff;margin-bottom:16px">PiecesOfLife Demo</div>
+            <div style="display:flex;gap:14px;margin-bottom:18px"><div style="flex:1"><div style="font:600 13px 'Nunito Sans';color:#2a2622;margin-bottom:6px">Frequency</div><div style="font:400 14px 'Nunito Sans';color:#3f3a32;border:1px solid #e7ddc9;border-radius:10px;padding:11px 14px;background:#fff;display:flex;justify-content:space-between">Monthly<span style="color:#a59a87">▾</span></div></div><div style="flex:1"><div style="font:600 13px 'Nunito Sans';color:#2a2622;margin-bottom:6px">Window (days)</div><div style="font:400 14px 'Nunito Sans';color:#3f3a32;border:1px solid #e7ddc9;border-radius:10px;padding:11px 14px;background:#fff">7</div></div></div>
+            <div style="font:700 11px 'Nunito Sans';letter-spacing:.07em;color:#a59a87;text-transform:uppercase;margin:6px 0 12px">Appearance · accent</div>
+            <div style="display:flex;gap:10px"><span style="width:30px;height:30px;border-radius:50%;background:#c0673e;box-shadow:0 0 0 3px #fff,0 0 0 5px #c0673e"></span><span style="width:30px;height:30px;border-radius:50%;background:#5f7a52"></span><span style="width:30px;height:30px;border-radius:50%;background:#5e7392"></span><span style="width:30px;height:30px;border-radius:50%;background:#9a6a8e"></span><span style="width:30px;height:30px;border-radius:50%;background:#caa64a"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1i">
+      <div class="dv-olabel"><a class="dv-oid" href="#1i">1i</a>Empty states — each says what happens next</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;width:720px">
+        <div style="background:#fbf7ef;border:1px dashed #d8cdb6;border-radius:16px;padding:30px 26px;text-align:center"><div style="font-size:30px;margin-bottom:10px">🌱</div><div style="font:700 17px 'Quicksand';color:#2a2622;margin-bottom:6px">No issue is open yet</div><div style="font:400 13px/1.5 'Nunito Sans';color:#8a8175;margin-bottom:16px">Pari will open the next round soon. We'll email you the moment it's your turn.</div><button style="font:700 13px 'Nunito Sans';color:#5d564c;background:#f7f1e6;border:1px solid #e2d9c7;padding:9px 16px;border-radius:10px">Read past issues</button></div>
+        <div style="background:#fbf7ef;border:1px dashed #d8cdb6;border-radius:16px;padding:30px 26px;text-align:center"><div style="font-size:30px;margin-bottom:10px">✉️</div><div style="font:700 17px 'Quicksand';color:#2a2622;margin-bottom:6px">No published issues yet</div><div style="font:400 13px/1.5 'Nunito Sans';color:#8a8175;margin-bottom:16px">When the open round closes, everyone's answers compile into one issue — it'll live here.</div><button style="font:700 13px 'Nunito Sans';color:#fff;background:#5f7a52;border:none;padding:9px 16px;border-radius:10px">Answer the open round</button></div>
+        <div style="background:#fbf7ef;border:1px dashed #d8cdb6;border-radius:16px;padding:30px 26px;text-align:center"><div style="font-size:30px;margin-bottom:10px">📷</div><div style="font:700 17px 'Quicksand';color:#2a2622;margin-bottom:6px">No photos shared yet</div><div style="font:400 13px/1.5 'Nunito Sans';color:#8a8175;margin-bottom:16px">Photos attached to answers gather here as a shared album. Add one to your answer to start it.</div><button style="font:700 13px 'Nunito Sans';color:#5d564c;background:#f7f1e6;border:1px solid #e2d9c7;padding:9px 16px;border-radius:10px">＋ Add to your answer</button></div>
+        <div style="background:#fbf7ef;border:1px dashed #d8cdb6;border-radius:16px;padding:30px 26px;text-align:center"><div style="font-size:30px;margin-bottom:10px">❓</div><div style="font:700 17px 'Quicksand';color:#2a2622;margin-bottom:6px">Your question bank is empty</div><div style="font:400 13px/1.5 'Nunito Sans';color:#8a8175;margin-bottom:16px">Add a few prompts, or load our starter set of 49 thoughtful questions to begin.</div><button style="font:700 13px 'Nunito Sans';color:#fff;background:#2a2622;border:none;padding:9px 16px;border-radius:10px">Load starter set</button></div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1j">
+      <div class="dv-olabel"><a class="dv-oid" href="#1j">1j</a>Member · profile &amp; preferences</div>
+      <div class="frame" style="width:640px">
+        <div class="nbar"><div class="nlogo">PiecesOfLife</div><nav class="nnav"><span>Issues</span><span>Photos</span><span class="av">P</span></nav></div>
+        <div style="background:#f3ecdd;padding:32px 36px 36px">
+          <div style="font:700 28px 'Quicksand';color:#2a2622;margin-bottom:20px">Your profile</div>
+          <div style="background:#fdfaf3;border:1px solid #ece3d2;border-radius:16px;padding:24px;margin-bottom:18px">
+            <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px"><span class="av" style="width:56px;height:56px;font-size:22px;background:#dfe6d8;color:#456b3c">P</span><div><div style="font:700 20px 'Quicksand';color:#2a2622">Pari</div><div style="font:400 14px 'Nunito Sans';color:#a59a87">admin@example.com</div></div></div>
+            <div style="font:600 13px 'Nunito Sans';color:#2a2622;margin-bottom:6px">Display name</div>
+            <div style="font:400 14px 'Nunito Sans';color:#3f3a32;border:1px solid #e7ddc9;border-radius:10px;padding:11px 14px;background:#fff;margin-bottom:14px">Pari</div>
+            <div style="font:600 13px 'Nunito Sans';color:#2a2622;margin-bottom:6px">Short bio</div>
+            <div style="font:400 14px 'Nunito Sans';color:#a59a87;border:1px solid #e7ddc9;border-radius:10px;padding:11px 14px;background:#fff;min-height:48px">A line about you that friends see on your answers…</div>
+          </div>
+          <div style="background:#fdfaf3;border:1px solid #ece3d2;border-radius:16px;padding:24px;margin-bottom:18px">
+            <div style="font:700 16px 'Quicksand';color:#2a2622;margin-bottom:14px">Email notifications</div>
+            <label style="display:flex;align-items:center;gap:12px;padding:10px 0;font:500 14px 'Nunito Sans';color:#3f3a32;border-bottom:1px solid #f0e9da"><span style="width:36px;height:21px;border-radius:999px;background:#5f7a52;position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:17px;height:17px;border-radius:50%;background:#fff"></span></span>When a new issue opens</label>
+            <label style="display:flex;align-items:center;gap:12px;padding:10px 0;font:500 14px 'Nunito Sans';color:#3f3a32;border-bottom:1px solid #f0e9da"><span style="width:36px;height:21px;border-radius:999px;background:#5f7a52;position:relative;flex:none"><span style="position:absolute;top:2px;right:2px;width:17px;height:17px;border-radius:50%;background:#fff"></span></span>Reminder before the deadline</label>
+            <label style="display:flex;align-items:center;gap:12px;padding:10px 0;font:500 14px 'Nunito Sans';color:#3f3a32"><span style="width:36px;height:21px;border-radius:999px;background:#e2d9c7;position:relative;flex:none"><span style="position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#fff"></span></span>When someone reacts to my answer</label>
+          </div>
+          <button style="font:700 14px 'Nunito Sans';color:#fff;background:#5f7a52;border:none;padding:12px 22px;border-radius:11px;cursor:pointer">Save changes</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1k">
+      <div class="dv-olabel"><a class="dv-oid" href="#1k">1k</a>Mobile — first-class single column, sticky save bar</div>
+      <div style="display:flex;gap:24px;align-items:flex-start">
+        <!-- phone: editor -->
+        <div style="width:300px;background:#2a2622;border-radius:38px;padding:10px;box-shadow:0 30px 60px -30px rgba(70,52,32,.6)">
+          <div style="background:#f3ecdd;border-radius:30px;overflow:hidden;position:relative;height:620px">
+            <div style="height:30px;display:flex;align-items:center;justify-content:center"><span style="width:90px;height:6px;border-radius:6px;background:#d8cdb6"></span></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 18px 12px"><div class="nlogo" style="font-size:15px">PiecesOfLife</div><span class="av" style="width:26px;height:26px;font-size:11px">P</span></div>
+            <div style="padding:0 16px;overflow:hidden">
+              <div style="font:700 11px 'Nunito Sans';letter-spacing:.08em;color:#5f7a52;text-transform:uppercase">Open now</div>
+              <div style="font:700 24px 'Quicksand';color:#2a2622;margin:2px 0 4px">June 2026</div>
+              <div style="font:400 12px 'Nunito Sans';color:#7c7468;margin-bottom:14px">2 of 3 · closes in 6 days</div>
+              <div style="background:#fdfaf3;border:1.5px solid #c0673e;border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 0 0 4px rgba(192,103,62,.1)"><div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px"><div style="font:700 15px 'Quicksand';color:#2a2622">What are you looking forward to?</div></div><div style="font:400 13px/1.55 'Nunito Sans';color:#3f3a32;border:1px solid #c0673e;border-radius:10px;padding:10px;background:#fff">A long weekend with no plans<span style="display:inline-block;width:2px;height:14px;background:#c0673e;vertical-align:-2px"></span></div><span style="display:inline-flex;align-items:center;gap:5px;font:700 10px 'Nunito Sans';color:#a59a87;background:#f0ebe0;padding:4px 9px;border-radius:999px;margin-top:8px"><span style="width:5px;height:5px;border-radius:50%;background:#caa64a"></span>Saving…</span></div>
+              <div style="background:#faf5ec;border:1px dashed #d8cdb6;border-radius:14px;padding:14px"><div style="font:700 15px 'Quicksand';color:#2a2622">What's been on your mind?</div><div style="font:400 12px 'Nunito Sans';color:#a59a87;margin-top:6px">Tap to write…</div></div>
+            </div>
+            <div style="position:absolute;left:0;right:0;bottom:0;background:#fdfaf3;border-top:1px solid #ece3d2;padding:12px 16px;display:flex;gap:10px"><button style="flex:1;font:700 13px 'Nunito Sans';color:#7c7468;background:#f7f1e6;border:1px solid #e2d9c7;padding:11px;border-radius:11px">Preview</button><button style="flex:1;font:700 13px 'Nunito Sans';color:#fff;background:#5f7a52;border:none;padding:11px;border-radius:11px">Submit</button></div>
+          </div>
+        </div>
+        <!-- phone: reading -->
+        <div style="width:300px;background:#2a2622;border-radius:38px;padding:10px;box-shadow:0 30px 60px -30px rgba(70,52,32,.6)">
+          <div style="background:#f3ecdd;border-radius:30px;overflow:hidden;height:620px">
+            <div style="height:30px;display:flex;align-items:center;justify-content:center"><span style="width:90px;height:6px;border-radius:6px;background:#d8cdb6"></span></div>
+            <div style="text-align:center;padding:14px 20px 18px;border-bottom:1px solid #e2d9c7;background:linear-gradient(#f7f1e6,#f3ecdd)"><div style="font:700 10px 'Nunito Sans';letter-spacing:.16em;color:#c0673e;text-transform:uppercase">Issue No.1</div><div style="font:700 32px 'Quicksand';color:#2a2622;margin-top:4px">May 2026</div><div style="font:400 12px 'Nunito Sans';color:#7c7468;margin-top:4px">2 people · 6 answers</div></div>
+            <div style="padding:18px 18px">
+              <div style="font:700 16px/1.3 'Quicksand';color:#2a2622;margin-bottom:14px">What made you happy this month?</div>
+              <div style="display:flex;gap:10px;margin-bottom:14px"><span class="av" style="width:28px;height:28px;font-size:12px;background:#dfe6d8;color:#456b3c">P</span><div><div style="font:700 12px 'Nunito Sans';color:#2a2622;margin-bottom:3px">Pari</div><div style="font:400 13px/1.6 'Nunito Sans';color:#3f3a32">The smell of rain on the balcony plants.</div><div style="display:flex;gap:6px;margin-top:8px"><span style="font:600 11px 'Nunito Sans';background:#fff;border:1px solid #e7ddc9;border-radius:999px;padding:4px 9px">❤️ 1</span><span style="font:600 11px 'Nunito Sans';background:#fff;border:1px solid #e7ddc9;border-radius:999px;padding:4px 9px">🌿</span></div></div></div>
+              <div style="display:flex;gap:10px"><span class="av" style="width:28px;height:28px;font-size:12px">F</span><div><div style="font:700 12px 'Nunito Sans';color:#2a2622;margin-bottom:3px">friend</div><div style="font:400 13px/1.6 'Nunito Sans';color:#3f3a32">Found my grandmother's handwriting in a cookbook.</div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="1l">
+      <div class="dv-olabel"><a class="dv-oid" href="#1l">1l</a>Dark mode — same warmth, ink-on-charcoal</div>
+      <div style="width:560px;background:#1c1916;border:1px solid #34302a;border-radius:20px;overflow:hidden;box-shadow:0 30px 70px -34px rgba(0,0,0,.7)">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 24px;border-bottom:1px solid #2c2823;background:#211d19"><div style="font:700 17px 'Quicksand';color:#f3ecdd">PiecesOfLife</div><div style="display:flex;gap:18px;font:600 13px 'Nunito Sans';color:#9a9082"><span style="color:#f3ecdd">Issues</span><span>Photos</span></div></div>
+        <div style="padding:28px 30px">
+          <div style="font:700 11px 'Nunito Sans';letter-spacing:.1em;color:#7a9a6c;text-transform:uppercase;margin-bottom:6px">Open now · your turn</div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px"><div style="font:700 30px 'Quicksand';color:#f3ecdd">June 2026</div><span style="display:inline-flex;align-items:center;gap:6px;font:700 11px 'Nunito Sans';color:#a6c499;background:#26331f;border:1px solid #3a4d30;padding:5px 11px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:#7a9a6c"></span>Collecting</span></div>
+          <div style="background:#252119;border:1.5px solid #cf7a4f;border-radius:14px;padding:18px 20px"><div style="font:700 17px 'Quicksand';color:#f3ecdd;margin-bottom:10px">What are you looking forward to?</div><div style="font:400 14px/1.6 'Nunito Sans';color:#d8cfc1;border:1px solid #cf7a4f;border-radius:10px;padding:12px;background:#1c1916">A long weekend with no plans<span style="display:inline-block;width:2px;height:16px;background:#cf7a4f;vertical-align:-2px"></span></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px"><span style="font:400 12px 'Nunito Sans';color:#9a9082">2 of 3 answered</span><button style="font:700 13px 'Nunito Sans';color:#1c1916;background:#7a9a6c;border:none;padding:11px 20px;border-radius:11px">Submit answers</button></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <p style="margin:34px 0 0;font:400 13px/1.6 'Nunito Sans';color:#8a8175;max-width:780px">Mix &amp; match next: "make <a class="dv-oid" href="#1c">1c</a> the default editor" · "apply the <a class="dv-oid" href="#1l">1l</a> dark palette across all screens" · "show the admin members + invite modal warmed up" · "tighten <a class="dv-oid" href="#1e">1e</a> spacing" · or "new directions for the reading view".</p>
+</section>
+</x-dc>
+</body>
+</html>

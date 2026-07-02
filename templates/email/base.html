@@ -1,0 +1,37 @@
+{{define "email_base"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "email_title" .}}{{end}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#fbf4e3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr><td style="padding:20px 0;">
+<table class="email-container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="margin:0 auto;background-color:#ffffff;border-radius:8px;overflow:hidden;">
+    <tr><td style="padding:24px 32px;background-color:#7a0f38;color:#ffffff;">
+        <h1 style="margin:0;font-size:20px;font-weight:600;">{{.LoopName}}</h1>
+    </td></tr>
+    <tr><td class="email-body" style="padding:32px;color:#333333;font-size:16px;line-height:1.6;">
+        {{block "email_content" .}}{{end}}
+    </td></tr>
+    <tr><td style="padding:16px 32px;background-color:#fbf4e3;color:#999999;font-size:12px;text-align:center;">
+        Sent with {{.LoopName}}
+    </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>
+{{end}}
+
+{{define "cta_button"}}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px auto;">
+<tr><td style="background-color:#7a0f38;border-radius:6px;">
+    <a href="{{.URL}}" style="display:inline-block;padding:14px 32px;color:#ffffff;text-decoration:none;font-weight:600;font-size:16px;">
+        {{.Label}}
+    </a>
+</td></tr>
+</table>
+{{end}}

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    
+    <g id="arm">
+      <path d="M60 58 C54 47 55 33 60 25 C65 33 66 47 60 58 Z" fill="#e9bd4c"></path>
+      <path d="M60 40 C55 37 51 38 49 33 C54 32 58 35 60 40 Z" fill="#e2b143"></path>
+      <path d="M60 40 C65 37 69 38 71 33 C66 32 62 35 60 40 Z" fill="#e2b143"></path>
+      <circle cx="60" cy="21" r="2.4" fill="#f2d488"></circle>
+      <circle cx="49" cy="30" r="1.5" fill="#f0cd6e"></circle>
+      <circle cx="71" cy="30" r="1.5" fill="#f0cd6e"></circle>
+    </g>
+    <g id="floret">
+      <path d="M0 -7 C3 -4 3 4 0 7 C-3 4 -3 -4 0 -7 Z"></path>
+      <path d="M-7 0 C-4 3 4 3 7 0 C4 -3 -4 -3 -7 0 Z"></path>
+    </g>
+  </defs>
+
+  
+  <rect x="0" y="0" width="120" height="120" rx="14" fill="#7a0f38"></rect>
+
+  
+  <g fill="none" stroke="#eabf52" stroke-linejoin="round">
+    <path d="M60 11 L109 60 L60 109 L11 60 Z" stroke-width="2.4"></path>
+    <path d="M60 22 L98 60 L60 98 L22 60 Z" stroke-width="1.5"></path>
+  </g>
+
+  
+  <use href="#arm"></use>
+  <use href="#arm" transform="rotate(45 60 60)"></use>
+  <use href="#arm" transform="rotate(90 60 60)"></use>
+  <use href="#arm" transform="rotate(135 60 60)"></use>
+  <use href="#arm" transform="rotate(180 60 60)"></use>
+  <use href="#arm" transform="rotate(225 60 60)"></use>
+  <use href="#arm" transform="rotate(270 60 60)"></use>
+  <use href="#arm" transform="rotate(315 60 60)"></use>
+
+  
+  <circle cx="60" cy="60" r="8" fill="#f2d488"></circle>
+  <circle cx="60" cy="60" r="4.6" fill="#7a0f38"></circle>
+  <circle cx="60" cy="60" r="1.8" fill="#f2d488"></circle>
+
+  
+  <g fill="#f0cd6e">
+    <use href="#floret" transform="translate(60 11)"></use>
+    <use href="#floret" transform="translate(109 60)"></use>
+    <use href="#floret" transform="translate(60 109)"></use>
+    <use href="#floret" transform="translate(11 60)"></use>
+  </g>
+
+  
+  <g fill="#e6b23c">
+    <circle cx="22" cy="22" r="2.6"></circle>
+    <circle cx="98" cy="22" r="2.6"></circle>
+    <circle cx="98" cy="98" r="2.6"></circle>
+    <circle cx="22" cy="98" r="2.6"></circle>
+  </g>
+</svg>
