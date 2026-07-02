@@ -120,5 +120,5 @@ cd tests && npm install && npm run snap   # Playwright screenshot crawl of every
 ```
 
 The UI is a hand-rolled design system ("Pallu", saree-textile inspired) in
-`static/pallu.css` — design documents live in [`docs/design/`](docs/design/).
-Database migrations are embedded and run automatically on boot.
+`static/pallu.css`. Database migrations are embedded and run automatically
+on boot.
