@@ -97,7 +97,39 @@
     <section class="wizard-step" data-step="3" style="display:none;">
         <p class="step-eyebrow">Step 3 of 4</p>
         <h2>Pick questions</h2>
-        <p class="step-help">Choose 3–7 prompts for the first issue. Edit them or write your own.</p>
+        <p class="step-help">
+            Every issue starts with the default questions below — untick any
+            you don't want. Then pick a few more prompts for the first issue,
+            edit them, or write your own.
+        </p>
+
+        <div class="field">
+            <label for="questions-per-issue">Questions per issue</label>
+            <input type="number" id="questions-per-issue" value="6" min="1" max="20">
+            <span class="helper">
+                The total each round aims for. Defaults and member suggestions
+                count toward it; the question bank fills any gap. Members can
+                always suggest more.
+            </span>
+            <span class="error" data-error="questions_per_issue"></span>
+        </div>
+
+        <div class="field">
+            <label>Default questions <span class="muted">— in every issue</span></label>
+            <div id="default-question-list">
+                {{range .DefaultQuestions}}
+                <label class="question-pick {{if .Enabled}}checked{{end}}">
+                    <div style="display:flex;align-items:center;gap:var(--space-2);">
+                        <input type="checkbox" class="dq-check" data-dq-id="{{.ID}}"
+                               {{if .Enabled}}checked{{end}}>
+                        <span class="q-cat">default</span>
+                    </div>
+                    <span style="padding:var(--space-2) 0;">{{.Text}}</span>
+                </label>
+                {{end}}
+            </div>
+            <span class="helper">You can change these any time under Settings.</span>
+        </div>
 
         <div id="question-list"></div>
 
@@ -215,6 +247,12 @@
         });
     }
 
+    document.querySelectorAll('.dq-check').forEach(cb => {
+        cb.addEventListener('change', () => {
+            cb.closest('.question-pick').classList.toggle('checked', cb.checked);
+        });
+    });
+
     document.getElementById('wizard-next').addEventListener('click', () => {
         if (currentStep < totalSteps) showStep(currentStep + 1);
     });
@@ -250,7 +288,7 @@
                 const j = Math.floor(Math.random() * (i + 1));
                 [pool[i], pool[j]] = [pool[j], pool[i]];
             }
-            suggestedQuestions = pool.slice(0, 5);
+            suggestedQuestions = pool.slice(0, Math.max(suggestedQuestions.length, 2));
             renderQuestions();
         } catch (_) {}
     });
@@ -269,7 +307,7 @@
         const stepOf = {
             admin_name: 1,
             loop_name: 2, frequency: 2, submission_window_days: 2, start_datetime: 2,
-            questions: 3,
+            questions: 3, questions_per_issue: 3,
         };
         const firstField = Object.keys(fields)[0];
         if (stepOf[firstField]) showStep(stepOf[firstField]);
@@ -300,6 +338,11 @@
             if (email) inviteEmails.push(email);
         });
 
+        const defaultQuestions = [];
+        document.querySelectorAll('.dq-check').forEach(cb => {
+            defaultQuestions.push({ id: parseInt(cb.dataset.dqId), enabled: cb.checked });
+        });
+
         const body = {
             admin_name: document.getElementById('admin-name').value.trim(),
             loop_name: document.getElementById('loop-name').value.trim(),
@@ -308,6 +351,8 @@
             submission_window_days: parseInt(document.getElementById('window-days').value),
             start_datetime: document.getElementById('start-datetime').value,
             timezone: document.getElementById('timezone').value,
+            questions_per_issue: parseInt(document.getElementById('questions-per-issue').value) || 6,
+            default_questions: defaultQuestions,
             questions,
             invite_emails: inviteEmails,
             invite_note: document.getElementById('invite-note').value.trim() || null,

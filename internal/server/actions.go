@@ -327,13 +327,17 @@ func (s *Server) queueNextIssueEvent(
 		slog.Time("opens_at", nextOpen))
 }
 
-// openIssueForCollecting flips a draft round to collecting: tops the
-// question list up to the default count with bank questions (friend
-// suggestions gathered while the round was upcoming stay first), schedules
-// its reminder and auto-close events, and emails every active member that
-// the round is open.
+// openIssueForCollecting flips a draft round to collecting: stitches in the
+// enabled default questions, then pads the list up to the total question
+// target with bank questions. Friend suggestions gathered while the round
+// was upcoming stay first, and — like the defaults — count toward the
+// target, so the bank only fills the shortfall; suggestions beyond the
+// target simply mean no padding. Schedules the round's reminder and
+// auto-close events, and emails every active member that it is open.
+// questionCount overrides the settings target when > 0.
 func (s *Server) openIssueForCollecting(
 	ctx context.Context, settings *store.Settings, issue *store.Issue,
+	questionCount int,
 ) error {
 	loc := s.settingsLocation(ctx, settings)
 	now := time.Now().UTC()
@@ -346,7 +350,21 @@ func (s *Server) openIssueForCollecting(
 		existing = nil
 	}
 
-	if need := defaultQuestionsPerIssue - len(existing); need > 0 {
+	hasDefaults := false
+
+	for _, q := range existing {
+		if q.Source == "default" {
+			hasDefaults = true
+			break
+		}
+	}
+
+	nextOrder := len(existing)
+	if !hasDefaults {
+		nextOrder += s.insertDefaultQuestions(ctx, issue.ID, nextOrder)
+	}
+
+	if need := questionTarget(settings, questionCount) - nextOrder; need > 0 {
 		bankQuestions, err := s.store.SelectRandomUnusedQuestions(ctx, need)
 		if err != nil {
 			s.logger.WarnContext(ctx, "Failed to select bank questions for issue open",
@@ -357,7 +375,7 @@ func (s *Server) openIssueForCollecting(
 		for i, bq := range bankQuestions {
 			cat := bq.Category
 			if _, err := s.store.CreateQuestion(ctx, issue.ID, bq.Text, &cat,
-				"bank", nil, len(existing)+i); err != nil {
+				"bank", nil, nextOrder+i); err != nil {
 				s.logger.WarnContext(ctx, "Failed to add bank question on issue open",
 					slog.Int64("bank_question_id", bq.ID),
 					slog.String("error", err.Error()))
@@ -474,7 +492,7 @@ func (s *Server) CreateNextIssue(ctx context.Context) error {
 	if draft, err := s.store.GetNextDraftIssue(ctx); err != nil {
 		return fmt.Errorf("checking draft issue: %w", err)
 	} else if draft != nil {
-		return s.openIssueForCollecting(ctx, settings, draft)
+		return s.openIssueForCollecting(ctx, settings, draft, 0)
 	}
 
 	// Fallback: no pre-created draft — build one now and open it.
@@ -503,7 +521,7 @@ func (s *Server) CreateNextIssue(ctx context.Context) error {
 		return fmt.Errorf("loading created issue %d: %w", issueID, err)
 	}
 
-	return s.openIssueForCollecting(ctx, settings, issue)
+	return s.openIssueForCollecting(ctx, settings, issue, 0)
 }
 
 // nextIssueOpenTime calculates when the next issue should open based on the

@@ -62,6 +62,44 @@
         </section>
 
         <section class="pl-settings-section">
+          <h2 class="pl-display pl-settings-title">Questions</h2>
+
+          <div class="pl-form-field">
+            <label for="questions-per-issue" class="pl-login-label">Questions per issue</label>
+            <input type="number" id="questions-per-issue" class="pl-field pl-login-input"
+                   value="{{.Settings.QuestionsPerIssue}}" min="1" max="20">
+            <p class="pl-field-help">
+              The total each round aims for. Default questions and member
+              suggestions count toward it, and the question bank fills any gap —
+              with 4 defaults on and 1 suggestion, a target of 6 pulls just 1
+              from the bank. Members can always suggest past it.
+            </p>
+          </div>
+
+          <div class="pl-form-field">
+            <span class="pl-login-label">Default questions</span>
+            <p class="pl-field-help">
+              These are stitched into every new issue and count toward the
+              number above. Turn one off to keep it out of all future rounds;
+              you can still reword or remove its copy on a specific issue from
+              the dashboard.
+            </p>
+            {{range .DefaultQuestions}}
+            <label class="pl-check-row">
+              <input type="checkbox" data-dq-toggle data-dq-id="{{.ID}}"
+                     {{if .Enabled}}checked{{end}}>
+              <span>{{.Text}}</span>
+            </label>
+            {{end}}
+            <div class="pl-export-row" style="margin-top:8px;">
+              <button type="button" id="dq-enable-all" class="pl-btn pl-btn--outline">Enable all</button>
+              <button type="button" id="dq-disable-all" class="pl-btn pl-btn--outline">Disable all</button>
+              <span id="dq-status" style="font-family:var(--font-ui);font-size:12px;color:var(--ink-soft);" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="pl-settings-section">
           <h2 class="pl-display pl-settings-title">Automation</h2>
 
           <label class="pl-check-row">
@@ -156,6 +194,56 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
     }
 });
 
+// Default questions save instantly — each toggle PATCHes on change, and the
+// all-at-once buttons flip every switch in one call.
+(function () {
+    const status = document.getElementById('dq-status');
+    const toggles = Array.from(document.querySelectorAll('[data-dq-toggle]'));
+    if (!toggles.length) return;
+
+    const setDqStatus = (msg, isError) => {
+        status.textContent = msg || '';
+        status.style.color = isError ? 'var(--sindoor)' : 'var(--peacock)';
+    };
+
+    toggles.forEach(toggle => toggle.addEventListener('change', async function () {
+        this.disabled = true;
+        try {
+            const res = await fetch(`/api/default-questions/${this.dataset.dqId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                body: JSON.stringify({ enabled: this.checked }),
+            });
+            if (!res.ok) throw new Error('Save failed');
+            setDqStatus(this.checked ? 'Enabled for future issues ✓' : 'Disabled for future issues ✓');
+        } catch {
+            this.checked = !this.checked;
+            setDqStatus('Could not save the change', true);
+        } finally {
+            this.disabled = false;
+        }
+    }));
+
+    async function setAll(enabled) {
+        setDqStatus('Saving…');
+        try {
+            const res = await fetch('/api/default-questions', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                body: JSON.stringify({ enabled }),
+            });
+            if (!res.ok) throw new Error('Save failed');
+            toggles.forEach(t => { t.checked = enabled; });
+            setDqStatus(enabled ? 'All enabled ✓' : 'All disabled ✓');
+        } catch {
+            setDqStatus('Could not save the change', true);
+        }
+    }
+
+    document.getElementById('dq-enable-all').addEventListener('click', () => setAll(true));
+    document.getElementById('dq-disable-all').addEventListener('click', () => setAll(false));
+})();
+
 document.getElementById('settings-form').addEventListener('submit', async function(e) {
     e.preventDefault();
 
@@ -165,6 +253,7 @@ document.getElementById('settings-form').addEventListener('submit', async functi
         tagline: tagline,
         frequency: document.getElementById('frequency').value,
         submission_window_days: parseInt(document.getElementById('window-days').value),
+        questions_per_issue: parseInt(document.getElementById('questions-per-issue').value),
         timezone: document.getElementById('timezone').value.trim(),
         auto_create_enabled: document.getElementById('auto-create-enabled').checked,
         allow_public_mementos: document.getElementById('allow-public-mementos').checked,

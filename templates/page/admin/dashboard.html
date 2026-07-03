@@ -237,7 +237,11 @@
         <div style="margin-top:14px;">
           <label for="create-issue-title" class="pl-field-label">Issue name</label>
           <input type="text" id="create-issue-title" class="pl-field" maxlength="120" autocomplete="off" style="margin-top:6px;">
-          <p class="pl-dialog-sub" style="margin-top:8px;">We pre-fill the current month — feel free to rename it.</p>
+          <p class="pl-dialog-sub" style="margin-top:8px;">
+            We pre-fill the current month — feel free to rename it. The round
+            gets {{.Settings.QuestionsPerIssue}} questions (adjustable in
+            <a href="/admin/settings">Settings</a>).
+          </p>
         </div>
         <div class="pl-dialog-actions">
           <button type="button" class="pl-btn pl-btn--outline" onclick="document.getElementById('create-issue-dialog').close()">Cancel</button>

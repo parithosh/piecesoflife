@@ -15,8 +15,10 @@ import (
 	"github.com/parithosh/piecesoflife/internal/store"
 )
 
-// defaultQuestionsPerIssue is the number of questions auto-picked when creating an issue.
-const defaultQuestionsPerIssue = 5
+// fallbackQuestionsPerIssue is the total question target used when settings
+// are unreadable or hold a nonsensical value. The regular default lives in
+// settings.questions_per_issue.
+const fallbackQuestionsPerIssue = 6
 
 // handleListIssues returns all issues, optionally filtered by status.
 // GET /api/issues
@@ -80,13 +82,16 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 // createIssueRequest is the expected JSON body for POST /api/issues.
+// QuestionCount is the total question target for this issue — default
+// questions and member suggestions count toward it, and the bank only pads
+// the shortfall. Zero or absent falls back to settings.questions_per_issue.
 type createIssueRequest struct {
-	Title             *string `json:"title"`
-	Month             int     `json:"month"`
-	Year              int     `json:"year"`
-	OpensAt           string  `json:"opens_at"`
-	Deadline          string  `json:"deadline"`
-	QuestionsFromBank int     `json:"questions_from_bank"`
+	Title         *string `json:"title"`
+	Month         int     `json:"month"`
+	Year          int     `json:"year"`
+	OpensAt       string  `json:"opens_at"`
+	Deadline      string  `json:"deadline"`
+	QuestionCount int     `json:"question_count"`
 }
 
 // handleCreateIssue creates a new issue, auto-picks questions from the bank,
@@ -168,7 +173,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		req.Year = opensAt.Year()
 	}
 
-	validationErrs := make(map[string]string, 2)
+	validationErrs := make(map[string]string, 3)
 
 	if req.Month < 1 || req.Month > 12 {
 		validationErrs["month"] = "Month must be between 1 and 12"
@@ -176,6 +181,10 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	if req.Year < 2020 {
 		validationErrs["year"] = "Year must be 2020 or later"
+	}
+
+	if req.QuestionCount < 0 || req.QuestionCount > 20 {
+		validationErrs["question_count"] = "Must be between 1 and 20 questions"
 	}
 
 	if len(validationErrs) > 0 {
@@ -243,7 +252,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			fresh = draft
 		}
 
-		if oErr := s.openIssueForCollecting(r.Context(), settings, fresh); oErr != nil {
+		if oErr := s.openIssueForCollecting(r.Context(), settings, fresh, req.QuestionCount); oErr != nil {
 			s.logger.ErrorContext(r.Context(), "Failed to open upcoming draft",
 				slog.Int64("issue_id", draft.ID),
 				slog.String("error", oErr.Error()))
@@ -281,24 +290,27 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 	}
 
-	// Auto-pick questions from the bank.
-	questionCount := req.QuestionsFromBank
-	if questionCount <= 0 {
-		questionCount = defaultQuestionsPerIssue
-	}
+	// Default questions lead the round and count toward the total target;
+	// the bank only pads the shortfall.
+	numDefaults := s.insertDefaultQuestions(r.Context(), issueID, 0)
 
-	bankQuestions, err := s.store.SelectRandomUnusedQuestions(r.Context(), questionCount)
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to select bank questions",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
+	questionCount := questionTarget(settings, req.QuestionCount) - numDefaults
+
+	var bankQuestions []store.QuestionBank
+	if questionCount > 0 {
+		bankQuestions, err = s.store.SelectRandomUnusedQuestions(r.Context(), questionCount)
+		if err != nil {
+			s.logger.ErrorContext(r.Context(), "Failed to select bank questions",
+				slog.Int64("issue_id", issueID),
+				slog.String("error", err.Error()))
+		}
 	}
 
 	for i, bq := range bankQuestions {
 		cat := bq.Category
 
 		if _, qErr := s.store.CreateQuestion(
-			r.Context(), issueID, bq.Text, &cat, "bank", nil, i,
+			r.Context(), issueID, bq.Text, &cat, "bank", nil, numDefaults+i,
 		); qErr != nil {
 			s.logger.ErrorContext(r.Context(), "Failed to create question from bank",
 				slog.Int64("bank_question_id", bq.ID),
@@ -1416,6 +1428,59 @@ func (s *Server) sendPublishNotifications(
 
 		_, _ = s.store.LogEmail(batchCtx, &rec.UserID, rec.IssueID, rec.EmailType, "sent", nil)
 	})
+}
+
+// insertDefaultQuestions adds every enabled default question to an issue
+// with source "default", starting at sortOrder, and returns how many were
+// added. Failures are logged per question — a missing default prompt must
+// not block a round from opening.
+func (s *Server) insertDefaultQuestions(
+	ctx context.Context, issueID int64, sortOrder int,
+) int {
+	defaults, err := s.store.ListEnabledDefaultQuestions(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to list default questions",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", err.Error()))
+
+		return 0
+	}
+
+	added := 0
+
+	for _, dq := range defaults {
+		if _, err := s.store.CreateQuestion(
+			ctx, issueID, dq.Text, nil, "default", nil, sortOrder+added,
+		); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to add default question to issue",
+				slog.Int64("issue_id", issueID),
+				slog.Int64("default_question_id", dq.ID),
+				slog.String("error", err.Error()))
+
+			continue
+		}
+
+		added++
+	}
+
+	return added
+}
+
+// questionTarget resolves the total number of questions an issue aims for:
+// an explicit per-issue choice wins, then the settings default, then the
+// hardcoded fallback. Default questions and member suggestions count toward
+// it — the bank only pads up to this number, and suggestions beyond it are
+// welcome.
+func questionTarget(settings *store.Settings, requested int) int {
+	if requested > 0 {
+		return requested
+	}
+
+	if settings != nil && settings.QuestionsPerIssue > 0 {
+		return settings.QuestionsPerIssue
+	}
+
+	return fallbackQuestionsPerIssue
 }
 
 // renderPublishEmail builds the "issue published" notification via the
