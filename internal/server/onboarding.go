@@ -18,6 +18,9 @@ import (
 type SetupWizardData struct {
 	PageData
 	SuggestedQuestions []store.QuestionBank
+	// DefaultQuestions are the prompts stitched into every issue; the wizard
+	// offers the same global on/off switches as the settings page.
+	DefaultQuestions []store.DefaultQuestion
 }
 
 // handleAdminSetup renders the onboarding wizard page.
@@ -36,14 +39,34 @@ func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	questions, err := s.store.SelectRandomUnusedQuestions(r.Context(), 5)
+	user := UserFromContext(r.Context())
+	settings, _ := s.store.GetSettings(r.Context())
+
+	defaultQuestions, err := s.store.ListDefaultQuestions(r.Context())
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to list default questions",
+			slog.String("error", err.Error()))
+		defaultQuestions = make([]store.DefaultQuestion, 0)
+	}
+
+	// The default questions already fill part of the target, so only suggest
+	// enough bank picks to cover the rest of the first issue.
+	suggestCount := questionTarget(settings, 0)
+	for _, dq := range defaultQuestions {
+		if dq.Enabled {
+			suggestCount--
+		}
+	}
+
+	if suggestCount < 1 {
+		suggestCount = 1
+	}
+
+	questions, err := s.store.SelectRandomUnusedQuestions(r.Context(), suggestCount)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to select suggested questions",
 			slog.String("error", err.Error()))
 	}
-
-	user := UserFromContext(r.Context())
-	settings, _ := s.store.GetSettings(r.Context())
 
 	data := SetupWizardData{
 		PageData: PageData{
@@ -51,6 +74,7 @@ func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
 			Settings: settings,
 		},
 		SuggestedQuestions: questions,
+		DefaultQuestions:   defaultQuestions,
 	}
 
 	s.renderPage(w, "setup.html", data)
@@ -58,22 +82,31 @@ func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
 
 // onboardingRequest is the expected JSON body for POST /api/onboarding/complete.
 type onboardingRequest struct {
-	AdminName            string               `json:"admin_name"`
-	LoopName             string               `json:"loop_name"`
-	Tagline              *string              `json:"tagline"`
-	Frequency            string               `json:"frequency"`
-	SubmissionWindowDays int                  `json:"submission_window_days"`
-	StartDatetime        string               `json:"start_datetime"`
-	Timezone             string               `json:"timezone"`
-	Questions            []onboardingQuestion `json:"questions"`
-	InviteEmails         []string             `json:"invite_emails"`
-	InviteNote           *string              `json:"invite_note"`
+	AdminName            string                      `json:"admin_name"`
+	LoopName             string                      `json:"loop_name"`
+	Tagline              *string                     `json:"tagline"`
+	Frequency            string                      `json:"frequency"`
+	SubmissionWindowDays int                         `json:"submission_window_days"`
+	StartDatetime        string                      `json:"start_datetime"`
+	Timezone             string                      `json:"timezone"`
+	QuestionsPerIssue    int                         `json:"questions_per_issue"`
+	DefaultQuestions     []onboardingDefaultQuestion `json:"default_questions"`
+	Questions            []onboardingQuestion        `json:"questions"`
+	InviteEmails         []string                    `json:"invite_emails"`
+	InviteNote           *string                     `json:"invite_note"`
 }
 
 type onboardingQuestion struct {
 	Text     string  `json:"text"`
 	Category *string `json:"category"`
 	BankID   *int64  `json:"bank_id"`
+}
+
+// onboardingDefaultQuestion carries the wizard's global on/off choice for
+// one default question.
+type onboardingDefaultQuestion struct {
+	ID      int64 `json:"id"`
+	Enabled bool  `json:"enabled"`
 }
 
 // handleCompleteOnboarding processes the setup wizard submission.
@@ -116,6 +149,11 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 
 	if req.SubmissionWindowDays < 3 || req.SubmissionWindowDays > 21 {
 		errors["submission_window_days"] = "Must be between 3 and 21 days"
+	}
+
+	// Zero means "not provided" and keeps the seeded default.
+	if req.QuestionsPerIssue < 0 || req.QuestionsPerIssue > 20 {
+		errors["questions_per_issue"] = "Must be between 1 and 20 questions"
 	}
 
 	if len(req.Questions) == 0 {
@@ -181,12 +219,20 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	accentColor := "#2d5016"
 	autoCreateEnabled := false
 	allowPublicMementos := true
+	questionsPerIssue := fallbackQuestionsPerIssue
 	if currentSettings != nil {
 		if currentSettings.AccentColor != "" {
 			accentColor = currentSettings.AccentColor
 		}
 		autoCreateEnabled = currentSettings.AutoCreateEnabled
 		allowPublicMementos = currentSettings.AllowPublicMementos
+		if currentSettings.QuestionsPerIssue > 0 {
+			questionsPerIssue = currentSettings.QuestionsPerIssue
+		}
+	}
+
+	if req.QuestionsPerIssue > 0 {
+		questionsPerIssue = req.QuestionsPerIssue
 	}
 
 	settings := &store.Settings{
@@ -200,6 +246,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		AccentColor:          accentColor,
 		AutoCreateEnabled:    autoCreateEnabled,
 		AllowPublicMementos:  allowPublicMementos,
+		QuestionsPerIssue:    questionsPerIssue,
 	}
 
 	if err := s.store.UpdateSettings(ctx, settings); err != nil {
@@ -207,6 +254,18 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update settings")
 		return
+	}
+
+	// Step 2b: Apply the wizard's default-question switches so the first
+	// issue (and every later one) honors them. Idempotent (UPDATE WHERE id=);
+	// a bad ID is logged rather than blocking the launch.
+	for _, dq := range req.DefaultQuestions {
+		if err := s.store.SetDefaultQuestionEnabled(ctx, dq.ID, dq.Enabled); err != nil {
+			s.logger.WarnContext(ctx, "Failed to apply default question switch",
+				slog.Int64("default_question_id", dq.ID),
+				slog.Bool("enabled", dq.Enabled),
+				slog.String("error", err.Error()))
+		}
 	}
 
 	// Step 3: Mark chosen bank questions as used. Idempotent (UPDATE WHERE id=).
@@ -250,6 +309,9 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Enabled default questions lead the first round; the admin's picks follow.
+	numDefaults := s.insertDefaultQuestions(ctx, issueID, 0)
+
 	for i, q := range req.Questions {
 		source := "bank"
 		if q.BankID == nil {
@@ -257,7 +319,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		}
 
 		if _, err := s.store.CreateQuestion(
-			ctx, issueID, q.Text, q.Category, source, nil, i,
+			ctx, issueID, q.Text, q.Category, source, nil, numDefaults+i,
 		); err != nil {
 			s.logger.ErrorContext(ctx, "Failed to create question",
 				slog.String("text", q.Text),

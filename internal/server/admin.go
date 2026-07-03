@@ -45,6 +45,9 @@ type AdminSettingsData struct {
 	// admin can see what's configured and fire a test send against it.
 	EmailProvider string
 	EmailFrom     string
+	// DefaultQuestions are the prompts stitched into every new issue, with
+	// their global enabled switches.
+	DefaultQuestions []store.DefaultQuestion
 }
 
 // AdminQuestionsData is the template data for the question bank management page.
@@ -340,13 +343,21 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defaultQuestions, err := s.store.ListDefaultQuestions(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to list default questions",
+			slog.String("error", err.Error()))
+		defaultQuestions = make([]store.DefaultQuestion, 0)
+	}
+
 	data := AdminSettingsData{
 		PageData: PageData{
 			User:     user,
 			Settings: settings,
 		},
-		EmailProvider: s.config.EmailProvider,
-		EmailFrom:     s.config.FromEmail,
+		EmailProvider:    s.config.EmailProvider,
+		EmailFrom:        s.config.FromEmail,
+		DefaultQuestions: defaultQuestions,
 	}
 
 	s.renderPage(w, "settings.html", data)
@@ -503,6 +514,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		AccentColor          *string `json:"accent_color"`
 		AutoCreateEnabled    *bool   `json:"auto_create_enabled"`
 		AllowPublicMementos  *bool   `json:"allow_public_mementos"`
+		QuestionsPerIssue    *int    `json:"questions_per_issue"`
 	}
 
 	if err := readJSON(r, &req); err != nil {
@@ -585,6 +597,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if req.AllowPublicMementos != nil {
 		current.AllowPublicMementos = *req.AllowPublicMementos
+	}
+
+	if req.QuestionsPerIssue != nil {
+		if *req.QuestionsPerIssue < 1 || *req.QuestionsPerIssue > 20 {
+			writeValidationError(w, map[string]string{
+				"questions_per_issue": "Must be between 1 and 20 questions",
+			})
+			return
+		}
+		current.QuestionsPerIssue = *req.QuestionsPerIssue
 	}
 
 	if err := s.store.UpdateSettings(ctx, current); err != nil {
