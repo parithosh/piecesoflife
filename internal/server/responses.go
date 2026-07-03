@@ -263,8 +263,7 @@ func (s *Server) handleAddBlock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "validation_error", "block type is required")
 		return
 	}
-	if !isAllowedBlockType(req.Type) || req.Type == photoBlockType ||
-		req.Type == audioBlockType || req.Type == videoBlockType {
+	if req.Type != "text" && req.Type != "link" {
 		writeError(w, http.StatusBadRequest, "invalid_block_type",
 			"Block type must be text or link")
 		return
@@ -930,15 +929,6 @@ func normalizedUploadContentType(blockType, headerContentType string, sniff []by
 	}
 
 	return declared
-}
-
-func isAllowedBlockType(blockType string) bool {
-	switch blockType {
-	case "text", "link", photoBlockType, audioBlockType, videoBlockType:
-		return true
-	default:
-		return false
-	}
 }
 
 // extensionFromContentType maps an upload MIME type to a file extension.

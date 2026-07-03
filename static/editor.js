@@ -18,21 +18,7 @@ function uploadTooLarge(file) {
     return `${file.name || 'That file'} is ${mb} MB — uploads are capped at 200 MB. Try trimming or compressing it.`;
 }
 
-// Helper: get CSRF token from cookie.
-function getCSRFToken() {
-    return document.cookie
-        .split('; ')
-        .find(row => row.startsWith('csrf_token='))
-        ?.split('=')[1] || '';
-}
-
-// Helper: standard API headers.
-function apiHeaders() {
-    return {
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': getCSRFToken(),
-    };
-}
+// CSRF helpers (getCSRFToken/apiHeaders) come from the base layout.
 
 // Helper: show a toast notification.
 function showToast(message, duration) {
@@ -352,10 +338,6 @@ function attachDump() {
 
 // Expose for respond.html to call after rendering.
 window.__polEditor = {
-    attachPasteDetectors,
-    attachSortable,
-    getCSRFToken,
-    apiHeaders,
     uploadMedia,
     uploadPhoto,
     createLinkBlock,

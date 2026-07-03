@@ -116,24 +116,3 @@ func (s *Store) DeleteComment(ctx context.Context, id int64) error {
 
 	return nil
 }
-
-// GetResponseAuthor returns the user who authored a response being commented on.
-func (s *Store) GetResponseAuthor(
-	ctx context.Context, responseID int64,
-) (*User, error) {
-	var u User
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT u.id, u.name, u.email, u.avatar_url, u.bio, u.role,
-		        u.is_active, u.created_at
-		 FROM responses r
-		 JOIN users u ON r.user_id = u.id
-		 WHERE r.id = ?`, responseID,
-	).Scan(&u.ID, &u.Name, &u.Email, &u.AvatarURL, &u.Bio,
-		&u.Role, &u.IsActive, &u.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("getting response author for %d: %w", responseID, err)
-	}
-
-	return &u, nil
-}

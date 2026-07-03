@@ -164,18 +164,6 @@ func (s *Store) DeleteSession(ctx context.Context, id int64) error {
 	return nil
 }
 
-// DeleteUserSessions removes all sessions for a user.
-func (s *Store) DeleteUserSessions(ctx context.Context, userID int64) error {
-	_, err := s.write.ExecContext(ctx,
-		"DELETE FROM sessions WHERE user_id = ?", userID,
-	)
-	if err != nil {
-		return fmt.Errorf("deleting sessions for user %d: %w", userID, err)
-	}
-
-	return nil
-}
-
 // CleanupExpiredSessions deletes sessions past their expiration.
 func (s *Store) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 	result, err := s.write.ExecContext(ctx,

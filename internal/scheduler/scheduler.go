@@ -8,7 +8,6 @@ import (
 	"context"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -35,7 +34,6 @@ type Scheduler struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	alive  atomic.Bool
 }
 
 // New constructs a Scheduler. Start must be called to begin dispatching.
@@ -54,12 +52,10 @@ func New(st *store.Store, actions Actions, logger *slog.Logger) *Scheduler {
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.alive.Store(true)
 
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer s.alive.Store(false)
 
 		s.logger.InfoContext(ctx, "Scheduler starting")
 
@@ -93,11 +89,6 @@ func (s *Scheduler) Stop() {
 		s.cancel()
 	}
 	s.wg.Wait()
-}
-
-// IsAlive reports whether the scheduler loop is running. Used by /health.
-func (s *Scheduler) IsAlive() bool {
-	return s.alive.Load()
 }
 
 func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {

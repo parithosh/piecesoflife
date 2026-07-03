@@ -1,10 +1,32 @@
 package server
 
 import (
+	"database/sql"
+	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/parithosh/piecesoflife/internal/store"
 )
+
+// loadSettingsOr500 fetches settings for a page handler, writing a plain-text
+// 500 on failure. Returns ok=false when the response has already been
+// written. API handlers render JSON errors and should keep calling
+// GetSettings with writeError instead.
+func (s *Server) loadSettingsOr500(
+	w http.ResponseWriter, r *http.Request,
+) (*store.Settings, bool) {
+	settings, err := s.store.GetSettings(r.Context())
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to load settings",
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+
+		return nil, false
+	}
+
+	return settings, true
+}
 
 // parseIDParam reads a path parameter as int64 and writes a 400 on failure.
 // Returns (id, true) on success; on failure the response is already written
@@ -22,6 +44,30 @@ func (s *Server) parseIDParam(
 	}
 
 	return id, true
+}
+
+// requireIssue fetches an issue by ID, writing a 404 when it doesn't exist
+// and a logged 500 on any other store error. Returns ok=false when the
+// response has already been written.
+func (s *Server) requireIssue(
+	w http.ResponseWriter, r *http.Request, issueID int64,
+) (*store.Issue, bool) {
+	issue, err := s.store.GetIssueByID(r.Context(), issueID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
+			return nil, false
+		}
+
+		s.logger.ErrorContext(r.Context(), "Failed to get issue",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to get issue")
+
+		return nil, false
+	}
+
+	return issue, true
 }
 
 // loadOwnedResponse fetches a response by id and verifies the current user
@@ -60,26 +106,6 @@ func (s *Server) loadOwnedResponse(
 				"This issue is no longer accepting changes")
 			return nil, false
 		}
-	}
-
-	return resp, true
-}
-
-// loadDraftResponse fetches a response by id and verifies the current user
-// owns it, the parent issue is collecting, and the response has not been
-// submitted yet.
-func (s *Server) loadDraftResponse(
-	w http.ResponseWriter, r *http.Request, id int64,
-) (*store.Response, bool) {
-	resp, ok := s.loadOwnedResponse(w, r, id, true)
-	if !ok {
-		return nil, false
-	}
-
-	if !resp.IsDraft {
-		writeError(w, http.StatusConflict, "conflict",
-			"Response has already been submitted")
-		return nil, false
 	}
 
 	return resp, true

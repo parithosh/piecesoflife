@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/parithosh/piecesoflife/internal/auth"
 	"github.com/parithosh/piecesoflife/internal/store"
 )
 
@@ -469,16 +468,9 @@ func (s *Server) sendInviteEmail(
 	userID int64, email, loopName, adminName string,
 	inviteNote *string, issueID *int64,
 ) {
-	raw, hash, err := auth.GenerateRandomToken(32)
+	raw, err := s.mintEmailCTAToken(ctx, userID)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to generate invite token",
-			slog.String("error", err.Error()))
-		return
-	}
-
-	expiresAt := time.Now().Add(30 * 24 * time.Hour)
-	if err := s.store.CreateAuthToken(ctx, userID, hash, "email_cta", expiresAt); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to create invite token",
+		s.logger.ErrorContext(ctx, "Failed to mint invite token",
 			slog.String("error", err.Error()))
 		return
 	}
@@ -550,18 +542,13 @@ func (s *Server) sendIssueOpenEmail(
 		return
 	}
 
-	raw, hash, err := auth.GenerateRandomToken(32)
+	raw, err := s.mintEmailCTAToken(ctx, user.ID)
 	if err != nil {
 		return
 	}
 
-	expiresAt := time.Now().Add(30 * 24 * time.Hour)
-	if err := s.store.CreateAuthToken(ctx, user.ID, hash, "email_cta", expiresAt); err != nil {
-		return
-	}
-
 	authURL := fmt.Sprintf("%s/issues/%d/respond?auth=%s", s.config.BaseURL, issue.ID, raw)
-	monthStr := issue.OpensAt.Format("January 2006")
+	monthStr := formatDate(issue.OpensAt)
 
 	questionTexts := make([]string, 0, len(questions))
 	for _, q := range questions {

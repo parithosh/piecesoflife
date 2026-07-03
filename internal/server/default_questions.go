@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 )
 
 // updateDefaultQuestionRequest is the expected JSON body for
@@ -35,9 +34,8 @@ func (s *Server) handleListDefaultQuestions(w http.ResponseWriter, r *http.Reque
 // all future issues. Issues that already carry the question keep their copy.
 // PATCH /api/default-questions/{id}
 func (s *Server) handleUpdateDefaultQuestion(w http.ResponseWriter, r *http.Request) {
-	questionID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid question ID")
+	questionID, ok := s.parseIDParam(w, r, "id", "question ID")
+	if !ok {
 		return
 	}
 

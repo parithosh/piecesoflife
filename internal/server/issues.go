@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -44,24 +43,13 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 // handleGetIssue returns a single issue by ID, including its questions.
 // GET /api/issues/{id}
 func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(r.Context(), issueID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to get issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to get issue")
-
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 
@@ -145,10 +133,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		windowDays := settings.SubmissionWindowDays
-		if windowDays < 3 {
-			windowDays = 7
-		}
+		windowDays := effectiveWindowDays(settings)
 
 		// Default deadline lands at a friendly evening hour in the loop's
 		// configured timezone rather than a raw N×24h offset.
@@ -230,12 +215,8 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		now := time.Now().UTC()
 		loc := s.settingsLocation(r.Context(), settings)
-		windowDays := settings.SubmissionWindowDays
-		if windowDays < 3 {
-			windowDays = 7
-		}
+		windowDays := effectiveWindowDays(settings)
 		newDeadline := atLocalHour(now.In(loc).AddDate(0, 0, windowDays), deadlineLocalHour, loc)
 
 		if uErr := s.store.UpdateIssueSchedule(r.Context(), draft.ID, now, newDeadline); uErr != nil {
@@ -377,9 +358,8 @@ type updateIssueRequest struct {
 // handleUpdateIssue updates an issue's title and/or deadline.
 // PATCH /api/issues/{id}
 func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
@@ -404,17 +384,7 @@ func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 		deadlineTime = &t
 	}
 
-	if _, err := s.store.GetIssueByID(r.Context(), issueID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue for update",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
 		return
 	}
 
@@ -443,24 +413,13 @@ func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 // handlePublishIssue publishes an issue and sends notification emails in the background.
 // POST /api/issues/{id}/publish
 func (s *Server) handlePublishIssue(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(r.Context(), issueID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue for publish",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 
@@ -546,9 +505,8 @@ type extendDeadlineRequest struct {
 // handleExtendDeadline extends the deadline of an issue and recreates scheduler events.
 // POST /api/issues/{id}/extend
 func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
@@ -575,18 +533,8 @@ func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(r.Context(), issueID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue for extend",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 
@@ -669,23 +617,12 @@ func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
 // handleListQuestions returns all questions for an issue.
 // GET /api/issues/{id}/questions
 func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
-	if _, err := s.store.GetIssueByID(r.Context(), issueID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
 		return
 	}
 
@@ -705,23 +642,12 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 // handleGetProgress returns submission progress for an issue.
 // GET /api/issues/{id}/progress
 func (s *Server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
-	if _, err := s.store.GetIssueByID(r.Context(), issueID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
 		return
 	}
 
@@ -742,9 +668,8 @@ func (s *Server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 // progress denominator, then returns the refreshed progress.
 // POST /api/issues/{id}/count-admin
 func (s *Server) handleSetCountAdmin(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
@@ -756,17 +681,7 @@ func (s *Server) handleSetCountAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.store.GetIssueByID(r.Context(), issueID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
 		return
 	}
 
@@ -796,23 +711,12 @@ func (s *Server) handleSetCountAdmin(w http.ResponseWriter, r *http.Request) {
 // handleListResponses returns submitted responses for an issue, enriched with blocks.
 // GET /api/issues/{id}/responses
 func (s *Server) handleListResponses(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
-	if _, err := s.store.GetIssueByID(r.Context(), issueID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
 		return
 	}
 
@@ -842,9 +746,8 @@ func (s *Server) handleListResponses(w http.ResponseWriter, r *http.Request) {
 // handleListMyResponses returns the current user's responses for an issue.
 // GET /api/issues/{id}/responses/mine
 func (s *Server) handleListMyResponses(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
@@ -854,17 +757,7 @@ func (s *Server) handleListMyResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.store.GetIssueByID(r.Context(), issueID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
 		return
 	}
 
@@ -904,9 +797,8 @@ type addQuestionRequest struct {
 // handleAddQuestion adds a question to an issue.
 // POST /api/issues/{id}/questions
 func (s *Server) handleAddQuestion(w http.ResponseWriter, r *http.Request) {
-	issueID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
 		return
 	}
 
@@ -924,17 +816,7 @@ func (s *Server) handleAddQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.store.GetIssueByID(r.Context(), issueID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
 		return
 	}
 
@@ -991,9 +873,8 @@ type editQuestionRequest struct {
 // handleEditQuestion updates a question's text.
 // PATCH /api/questions/{id}
 func (s *Server) handleEditQuestion(w http.ResponseWriter, r *http.Request) {
-	questionID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid question ID")
+	questionID, ok := s.parseIDParam(w, r, "id", "question ID")
+	if !ok {
 		return
 	}
 
@@ -1050,9 +931,8 @@ func (s *Server) handleEditQuestion(w http.ResponseWriter, r *http.Request) {
 // handleDeleteQuestion removes a question by ID.
 // DELETE /api/questions/{id}
 func (s *Server) handleDeleteQuestion(w http.ResponseWriter, r *http.Request) {
-	questionID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid question ID")
+	questionID, ok := s.parseIDParam(w, r, "id", "question ID")
+	if !ok {
 		return
 	}
 
@@ -1119,18 +999,8 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(r.Context(), req.IssueID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(r.Context(), "Failed to fetch issue for question submit",
-			slog.Int64("issue_id", req.IssueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	issue, ok := s.requireIssue(w, r, req.IssueID)
+	if !ok {
 		return
 	}
 
@@ -1273,9 +1143,8 @@ type editBankQuestionRequest struct {
 // handleEditBankQuestion updates a bank question's text and category.
 // PATCH /api/question-bank/{id}
 func (s *Server) handleEditBankQuestion(w http.ResponseWriter, r *http.Request) {
-	questionID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid question ID")
+	questionID, ok := s.parseIDParam(w, r, "id", "question ID")
+	if !ok {
 		return
 	}
 
@@ -1319,9 +1188,8 @@ func (s *Server) handleEditBankQuestion(w http.ResponseWriter, r *http.Request) 
 // handleDeleteBankQuestion removes a bank question by ID.
 // DELETE /api/question-bank/{id}
 func (s *Server) handleDeleteBankQuestion(w http.ResponseWriter, r *http.Request) {
-	questionID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid question ID")
+	questionID, ok := s.parseIDParam(w, r, "id", "question ID")
+	if !ok {
 		return
 	}
 
@@ -1384,7 +1252,7 @@ func (s *Server) sendPublishNotifications(
 		return
 	}
 
-	monthStr := issue.OpensAt.Format("January 2006")
+	monthStr := formatDate(issue.OpensAt)
 	subject := fmt.Sprintf("%s — %s is published!", settings.LoopName, monthStr)
 
 	recipients := make([]email.BatchRecipient, 0, len(users))

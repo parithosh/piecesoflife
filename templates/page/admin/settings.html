@@ -157,7 +157,6 @@
 
 {{define "scripts"}}
 <script>
-const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
 
 function setStatus(msg, ok) {
     const el = document.getElementById('settings-status');
@@ -175,7 +174,7 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
     try {
         const res = await fetch('/api/admin/email/test', {
             method: 'POST',
-            headers: { 'X-CSRF-Token': csrfToken },
+            headers: { 'X-CSRF-Token': getCSRFToken() },
         });
         const data = await res.json().catch(() => ({}));
 
@@ -211,7 +210,7 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
         try {
             const res = await fetch(`/api/default-questions/${this.dataset.dqId}`, {
                 method: 'PATCH',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                headers: apiHeaders(),
                 body: JSON.stringify({ enabled: this.checked }),
             });
             if (!res.ok) throw new Error('Save failed');
@@ -229,7 +228,7 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
         try {
             const res = await fetch('/api/default-questions', {
                 method: 'PATCH',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                headers: apiHeaders(),
                 body: JSON.stringify({ enabled }),
             });
             if (!res.ok) throw new Error('Save failed');
@@ -264,7 +263,7 @@ document.getElementById('settings-form').addEventListener('submit', async functi
     try {
         const res = await fetch('/api/admin/settings', {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            headers: apiHeaders(),
             body: JSON.stringify(body),
         });
 

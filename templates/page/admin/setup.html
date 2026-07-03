@@ -172,7 +172,7 @@
 {{define "scripts"}}
 <script>
     let suggestedQuestions = {{jsonMarshal .SuggestedQuestions}} || [];
-    const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
+    const csrfToken = getCSRFToken();
 
     let currentStep = 1;
     const totalSteps = 4;

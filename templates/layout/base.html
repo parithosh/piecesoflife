@@ -23,6 +23,19 @@
     </style>
     {{end}}
 
+    <script>
+    /* Canonical CSRF helpers (double-submit cookie) — defined in <head> so
+       every page script and inline handler can rely on them. */
+    function getCSRFToken() {
+        return document.cookie.split('; ')
+            .find(function (row) { return row.indexOf('csrf_token=') === 0; })
+            ?.split('=')[1] || '';
+    }
+    function apiHeaders() {
+        return { 'Content-Type': 'application/json', 'X-CSRF-Token': getCSRFToken() };
+    }
+    </script>
+
     {{block "head" .}}{{end}}
 </head>
 <body>

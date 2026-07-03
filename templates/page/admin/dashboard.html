@@ -308,8 +308,6 @@
 
 {{define "scripts"}}
 <script>
-const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
-const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken };
 
 // --- Live question editing --------------------------------------------
 // Admins may reword or remove the round's questions while it collects.
@@ -398,7 +396,7 @@ const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok
             try {
                 const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
                     method: 'PATCH',
-                    headers: apiHeaders,
+                    headers: apiHeaders(),
                     body: JSON.stringify({ text }),
                 });
                 const data = await res.json().catch(() => ({}));
@@ -428,7 +426,7 @@ const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok
             try {
                 const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
                     method: 'DELETE',
-                    headers: { 'X-CSRF-Token': csrfToken },
+                    headers: { 'X-CSRF-Token': getCSRFToken() },
                 });
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
@@ -454,7 +452,7 @@ const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok
         try {
             const res = await fetch(`/api/issues/${container.dataset.issueId}/questions`, {
                 method: 'POST',
-                headers: apiHeaders,
+                headers: apiHeaders(),
                 body: JSON.stringify({ text }),
             });
             const data = await res.json().catch(() => ({}));
@@ -512,7 +510,7 @@ async function runPublish() {
     publishConfirmBtn.textContent = 'Publishing…';
 
     try {
-        const res = await fetch(`/api/issues/${id}/publish`, { method: 'POST', headers: apiHeaders });
+        const res = await fetch(`/api/issues/${id}/publish`, { method: 'POST', headers: apiHeaders() });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
             window.location.assign(data.redirect || '/issues');
@@ -538,7 +536,7 @@ publishDialog?.querySelector('[data-publish-cancel]')?.addEventListener('click',
 publishConfirmBtn?.addEventListener('click', runPublish);
 
 async function sendReminder(id) {
-    const res = await fetch(`/api/admin/send-reminder/${id}`, { method: 'POST', headers: apiHeaders });
+    const res = await fetch(`/api/admin/send-reminder/${id}`, { method: 'POST', headers: apiHeaders() });
     if (res.ok) alert('Reminders sent!');
     else alert('Failed to send reminders.');
 }
@@ -569,7 +567,7 @@ document.querySelector('[data-extend-trigger]')?.addEventListener('click', async
     try {
         const res = await fetch(`/api/issues/${issueID}/extend`, {
             method: 'POST',
-            headers: apiHeaders,
+            headers: apiHeaders(),
             body: JSON.stringify({ new_deadline: newDeadline.toISOString() }),
         });
         if (res.ok) {
@@ -591,7 +589,7 @@ async function nudge(id, btn) {
     btn.disabled = true;
     btn.textContent = 'Nudging…';
     try {
-        const res = await fetch(`/api/admin/send-reminder/${id}`, { method: 'POST', headers: apiHeaders });
+        const res = await fetch(`/api/admin/send-reminder/${id}`, { method: 'POST', headers: apiHeaders() });
         btn.textContent = res.ok ? 'Nudged ✓' : 'Failed';
     } catch {
         btn.textContent = 'Failed';
@@ -608,7 +606,7 @@ countAdminToggle?.addEventListener('change', async function () {
     try {
         const res = await fetch(`/api/issues/${id}/count-admin`, {
             method: 'POST',
-            headers: apiHeaders,
+            headers: apiHeaders(),
             body: JSON.stringify({ on: this.checked }),
         });
         if (res.ok) { location.reload(); return; }
@@ -637,7 +635,7 @@ function openCreateIssueDialog() {
 
 async function createIssue(title) {
     const body = title ? JSON.stringify({ title }) : undefined;
-    const res = await fetch('/api/issues', { method: 'POST', headers: apiHeaders, body });
+    const res = await fetch('/api/issues', { method: 'POST', headers: apiHeaders(), body });
     if (res.ok) { location.reload(); return; }
     let detail = '';
     try {

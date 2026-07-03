@@ -70,7 +70,6 @@
 
 {{define "scripts"}}
 <script>
-const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
 
 document.getElementById('invite-btn').addEventListener('click', () => {
     document.getElementById('invite-dialog').showModal();
@@ -82,7 +81,7 @@ document.getElementById('send-invite-btn').addEventListener('click', async () =>
 
     const res = await fetch('/api/users/invite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        headers: apiHeaders(),
         body: JSON.stringify({ email }),
     });
 
