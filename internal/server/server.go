@@ -87,7 +87,6 @@ func computeAssetVersion() string {
 type Pagination struct {
 	Page    int
 	PerPage int
-	Offset  int
 }
 
 // PageData is the base data passed to all page templates.
@@ -597,7 +596,6 @@ func parsePagination(r *http.Request) Pagination {
 	return Pagination{
 		Page:    page,
 		PerPage: perPage,
-		Offset:  (page - 1) * perPage,
 	}
 }
 

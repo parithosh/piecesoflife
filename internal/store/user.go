@@ -128,34 +128,6 @@ func (s *Store) SetUserName(ctx context.Context, id int64, name string) error {
 	return nil
 }
 
-// DeactivateUser sets a user as inactive and deletes all their sessions.
-func (s *Store) DeactivateUser(ctx context.Context, id int64) error {
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning deactivate transaction: %w", err)
-	}
-
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE users SET is_active = 0 WHERE id = ?", id,
-	); err != nil {
-		return fmt.Errorf("deactivating user %d: %w", id, err)
-	}
-
-	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE user_id = ?", id,
-	); err != nil {
-		return fmt.Errorf("deleting sessions for user %d: %w", id, err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing deactivation: %w", err)
-	}
-
-	return nil
-}
-
 // ReactivateUser sets a user as active again.
 func (s *Store) ReactivateUser(ctx context.Context, id int64) error {
 	_, err := s.write.ExecContext(ctx,
@@ -163,18 +135,6 @@ func (s *Store) ReactivateUser(ctx context.Context, id int64) error {
 	)
 	if err != nil {
 		return fmt.Errorf("reactivating user %d: %w", id, err)
-	}
-
-	return nil
-}
-
-// PromoteToAdmin sets a user's role to admin.
-func (s *Store) PromoteToAdmin(ctx context.Context, id int64) error {
-	_, err := s.write.ExecContext(ctx,
-		"UPDATE users SET role = 'admin' WHERE id = ?", id,
-	)
-	if err != nil {
-		return fmt.Errorf("promoting user %d to admin: %w", id, err)
 	}
 
 	return nil

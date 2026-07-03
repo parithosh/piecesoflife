@@ -115,11 +115,8 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -266,11 +263,8 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -439,11 +433,8 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -546,11 +537,8 @@ func (s *Server) handleAlbumsPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -568,11 +556,8 @@ func (s *Server) handleProfilePage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -634,11 +619,8 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	caller := UserFromContext(ctx)
 
-	idStr := r.PathValue("id")
-
-	userID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid user ID")
+	userID, ok := s.parseIDParam(w, r, "id", "user ID")
+	if !ok {
 		return
 	}
 
@@ -706,11 +688,8 @@ func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	caller := UserFromContext(ctx)
 
-	idStr := r.PathValue("id")
-
-	userID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid user ID")
+	userID, ok := s.parseIDParam(w, r, "id", "user ID")
+	if !ok {
 		return
 	}
 
@@ -738,11 +717,8 @@ func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	caller := UserFromContext(ctx)
 
-	idStr := r.PathValue("id")
-
-	userID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid user ID")
+	userID, ok := s.parseIDParam(w, r, "id", "user ID")
+	if !ok {
 		return
 	}
 
@@ -818,11 +794,8 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings for memento",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -934,11 +907,8 @@ func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings for memento file",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -1235,11 +1205,7 @@ func hasAnswerContent(blocks []store.ResponseBlock) bool {
 			if b.Content != nil && strings.TrimSpace(*b.Content) != "" {
 				return true
 			}
-		case "photo":
-			if b.FilePath != nil && *b.FilePath != "" {
-				return true
-			}
-		case "audio", "video":
+		case "photo", "audio", "video":
 			if b.FilePath != nil && *b.FilePath != "" {
 				return true
 			}

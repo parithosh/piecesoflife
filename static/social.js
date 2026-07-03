@@ -8,14 +8,7 @@
         'ul', 'ol', 'li', 'a',
     ]);
 
-    function csrfToken() {
-        return document.cookie.split('; ')
-            .find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
-    }
-
-    function apiHeaders() {
-        return { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() };
-    }
+    // CSRF helpers (getCSRFToken/apiHeaders) come from the base layout.
 
     function commentLabel(count) {
         if (count > 0) return `${count} ${count === 1 ? 'comment' : 'comments'}`;

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/parithosh/piecesoflife/internal/auth"
 	"github.com/parithosh/piecesoflife/internal/store"
 )
 
@@ -84,11 +83,8 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -171,11 +167,8 @@ func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -214,12 +207,8 @@ func (s *Server) handleAdminMemberSubmission(
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -299,11 +288,8 @@ func (s *Server) handleAdminQuestions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -335,11 +321,8 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
 		return
 	}
 
@@ -688,17 +671,9 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate a fresh auth token for the email CTA link.
-	raw, hash, err := auth.GenerateRandomToken(32)
+	raw, err := s.mintEmailCTAToken(ctx, user.ID)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to generate auth token",
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to generate token")
-		return
-	}
-
-	expiresAt := time.Now().Add(30 * 24 * time.Hour)
-	if err := s.store.CreateAuthToken(ctx, user.ID, hash, "email_cta", expiresAt); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to create auth token",
+		s.logger.ErrorContext(ctx, "Failed to mint auth token",
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create token")
 		return
@@ -723,10 +698,8 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 				questions = make([]store.Question, 0)
 			}
 
-			if logEntry.IssueID != nil {
-				authURL = fmt.Sprintf("%s/issues/%d/respond?auth=%s",
-					s.config.BaseURL, *logEntry.IssueID, raw)
-			}
+			authURL = fmt.Sprintf("%s/issues/%d/respond?auth=%s",
+				s.config.BaseURL, *logEntry.IssueID, raw)
 		}
 
 		var issue *store.Issue
@@ -741,7 +714,7 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 
 		monthStr := "this month"
 		if issue != nil {
-			monthStr = issue.OpensAt.Format("January 2006")
+			monthStr = formatDate(issue.OpensAt)
 		}
 
 		questionTexts := make([]string, 0, len(questions))
@@ -800,9 +773,8 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSendReminder(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	issueID, err := strconv.ParseInt(r.PathValue("issueId"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_id", "Invalid issue ID")
+	issueID, ok := s.parseIDParam(w, r, "issueId", "issue ID")
+	if !ok {
 		return
 	}
 

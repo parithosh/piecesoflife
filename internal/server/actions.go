@@ -20,6 +20,26 @@ const (
 	nextOpenLocalHour = 9
 )
 
+// emailCTATokenTTL is how long the magic-link tokens embedded in outgoing
+// emails stay valid.
+const emailCTATokenTTL = 30 * 24 * time.Hour
+
+// mintEmailCTAToken creates an "email_cta" auth token for userID and returns
+// the raw token to embed in an email link.
+func (s *Server) mintEmailCTAToken(ctx context.Context, userID int64) (string, error) {
+	raw, hash, err := auth.GenerateRandomToken(32)
+	if err != nil {
+		return "", fmt.Errorf("generating email CTA token: %w", err)
+	}
+
+	expiresAt := time.Now().Add(emailCTATokenTTL)
+	if err := s.store.CreateAuthToken(ctx, userID, hash, "email_cta", expiresAt); err != nil {
+		return "", fmt.Errorf("storing email CTA token: %w", err)
+	}
+
+	return raw, nil
+}
+
 // settingsLocation resolves the loop's configured timezone. Empty or invalid
 // values fall back to UTC with a warning so scheduling never fails outright.
 func (s *Server) settingsLocation(
@@ -45,6 +65,17 @@ func (s *Server) settingsLocation(
 func atLocalHour(t time.Time, hour int, loc *time.Location) time.Time {
 	lt := t.In(loc)
 	return time.Date(lt.Year(), lt.Month(), lt.Day(), hour, 0, 0, 0, loc)
+}
+
+// effectiveWindowDays returns the configured submission window, falling back
+// to a week when settings hold a nonsensical value (the wizard enforces a
+// 3-day minimum).
+func effectiveWindowDays(settings *store.Settings) int {
+	if settings.SubmissionWindowDays < 3 {
+		return 7
+	}
+
+	return settings.SubmissionWindowDays
 }
 
 // SendReminderForIssue sends a reminder email to every active member who has
@@ -100,7 +131,7 @@ func (s *Server) SendReminderForIssue(
 		questionTexts = append(questionTexts, q.Text)
 	}
 
-	monthStr := issue.OpensAt.Format("January 2006")
+	monthStr := formatDate(issue.OpensAt)
 	daysLeft := int(time.Until(issue.Deadline).Hours() / 24)
 	if daysLeft < 0 {
 		daysLeft = 0
@@ -145,25 +176,13 @@ func (s *Server) SendReminderForIssue(
 			logID, _ = s.store.LogEmail(ctx, &user.ID, &issueID, "reminder", "pending", nil)
 		}
 
-		raw, hash, err := auth.GenerateRandomToken(32)
+		raw, err := s.mintEmailCTAToken(ctx, user.ID)
 		if err != nil {
 			errStr := err.Error()
 			if logID > 0 {
 				_ = s.store.UpdateEmailLog(ctx, logID, "failed", nil, &errStr)
 			}
-			s.logger.ErrorContext(ctx, "Failed to generate reminder token",
-				slog.Int64("user_id", user.ID),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		expiresAt := time.Now().Add(30 * 24 * time.Hour)
-		if err := s.store.CreateAuthToken(ctx, user.ID, hash, "email_cta", expiresAt); err != nil {
-			errStr := err.Error()
-			if logID > 0 {
-				_ = s.store.UpdateEmailLog(ctx, logID, "failed", nil, &errStr)
-			}
-			s.logger.ErrorContext(ctx, "Failed to create reminder auth token",
+			s.logger.ErrorContext(ctx, "Failed to mint reminder token",
 				slog.Int64("user_id", user.ID),
 				slog.String("error", err.Error()))
 			continue
@@ -306,10 +325,7 @@ func (s *Server) queueNextIssueEvent(
 		return
 	}
 
-	windowDays := settings.SubmissionWindowDays
-	if windowDays < 3 {
-		windowDays = 7
-	}
+	windowDays := effectiveWindowDays(settings)
 
 	openLocal := nextOpen.In(loc)
 	deadline := atLocalHour(openLocal.AddDate(0, 0, windowDays), deadlineLocalHour, loc)
@@ -497,10 +513,7 @@ func (s *Server) CreateNextIssue(ctx context.Context) error {
 
 	// Fallback: no pre-created draft — build one now and open it.
 	now := time.Now().UTC()
-	windowDays := settings.SubmissionWindowDays
-	if windowDays < 3 {
-		windowDays = 7
-	}
+	windowDays := effectiveWindowDays(settings)
 
 	// All calendar math happens in the loop's timezone: the issue is labeled
 	// with the local month (a 00:30 IST open must not become last month's
@@ -576,16 +589,9 @@ func (s *Server) SendCommentNotification(
 		return
 	}
 
-	raw, hash, err := auth.GenerateRandomToken(32)
+	raw, err := s.mintEmailCTAToken(ctx, responseAuthor.ID)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to generate comment notification token",
-			slog.String("error", err.Error()))
-		return
-	}
-
-	expiresAt := time.Now().Add(30 * 24 * time.Hour)
-	if err := s.store.CreateAuthToken(ctx, responseAuthor.ID, hash, "email_cta", expiresAt); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to create comment notification token",
+		s.logger.ErrorContext(ctx, "Failed to mint comment notification token",
 			slog.String("error", err.Error()))
 		return
 	}

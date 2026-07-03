@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// issueColumns is the canonical issues SELECT list; its order must match the
+// Scan order in scanIssue.
+const issueColumns = `id, title, month, year, status, opens_at, deadline,
+	published_at, created_at`
+
 // Issue represents a newsletter issue.
 type Issue struct {
 	ID          int64      `json:"id"`
@@ -18,6 +23,21 @@ type Issue struct {
 	Deadline    time.Time  `json:"deadline"`
 	PublishedAt *time.Time `json:"published_at"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// scanIssue reads one issues row selected with issueColumns. Works for both
+// sql.Row and sql.Rows; the scan error is returned unwrapped so callers can
+// check sql.ErrNoRows.
+func scanIssue(row interface{ Scan(dest ...any) error }) (*Issue, error) {
+	var iss Issue
+
+	err := row.Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
+		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &iss, nil
 }
 
 // CreateIssue inserts a new issue and returns its ID.
@@ -49,62 +69,33 @@ func (s *Store) CreateIssue(
 
 // GetIssueByID returns an issue by its database ID.
 func (s *Store) GetIssueByID(ctx context.Context, id int64) (*Issue, error) {
-	var iss Issue
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id, title, month, year, status, opens_at, deadline,
-		        published_at, created_at
-		 FROM issues WHERE id = ?`, id,
-	).Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT `+issueColumns+` FROM issues WHERE id = ?`, id,
+	))
 	if err != nil {
 		return nil, fmt.Errorf("getting issue %d: %w", id, err)
 	}
 
-	return &iss, nil
-}
-
-// GetIssueByQuestionID returns the issue that owns a question.
-func (s *Store) GetIssueByQuestionID(
-	ctx context.Context, questionID int64,
-) (*Issue, error) {
-	var iss Issue
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT i.id, i.title, i.month, i.year, i.status, i.opens_at,
-		        i.deadline, i.published_at, i.created_at
-		 FROM issues i
-		 JOIN questions q ON q.issue_id = i.id
-		 WHERE q.id = ?`, questionID,
-	).Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("getting issue for question %d: %w", questionID, err)
-	}
-
-	return &iss, nil
+	return iss, nil
 }
 
 // GetIssueByResponseID returns the issue that owns a response.
 func (s *Store) GetIssueByResponseID(
 	ctx context.Context, responseID int64,
 ) (*Issue, error) {
-	var iss Issue
-
-	err := s.read.QueryRowContext(ctx,
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
 		`SELECT i.id, i.title, i.month, i.year, i.status, i.opens_at,
 		        i.deadline, i.published_at, i.created_at
 		 FROM issues i
 		 JOIN questions q ON q.issue_id = i.id
 		 JOIN responses r ON r.question_id = q.id
 		 WHERE r.id = ?`, responseID,
-	).Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+	))
 	if err != nil {
 		return nil, fmt.Errorf("getting issue for response %d: %w", responseID, err)
 	}
 
-	return &iss, nil
+	return iss, nil
 }
 
 // GetIssueByMonthYear returns an issue by its (month, year) tuple. Used by
@@ -113,44 +104,36 @@ func (s *Store) GetIssueByResponseID(
 func (s *Store) GetIssueByMonthYear(
 	ctx context.Context, month, year int,
 ) (*Issue, error) {
-	var iss Issue
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id, title, month, year, status, opens_at, deadline,
-		        published_at, created_at
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT `+issueColumns+`
 		 FROM issues WHERE month = ? AND year = ?
 		 ORDER BY created_at DESC LIMIT 1`, month, year,
-	).Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+	))
 	if err != nil {
 		return nil, fmt.Errorf("getting issue for %d-%02d: %w", year, month, err)
 	}
 
-	return &iss, nil
+	return iss, nil
 }
 
 // GetActiveIssue returns the current draft or collecting issue.
 func (s *Store) GetActiveIssue(ctx context.Context) (*Issue, error) {
-	var iss Issue
-
 	// A draft only counts as active once its open time has passed —
 	// pre-created upcoming issues (collecting question suggestions until
 	// they open) must not read as the current round.
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id, title, month, year, status, opens_at, deadline,
-		        published_at, created_at
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT `+issueColumns+`
 		 FROM issues
 		 WHERE status = 'collecting'
 		    OR (status = 'draft' AND opens_at <= ?)
 		 LIMIT 1`,
 		time.Now().UTC(),
-	).Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+	))
 	if err != nil {
 		return nil, fmt.Errorf("getting active issue: %w", err)
 	}
 
-	return &iss, nil
+	return iss, nil
 }
 
 // HasActiveIssue checks if there is a non-published issue.
@@ -176,18 +159,14 @@ func (s *Store) HasActiveIssue(ctx context.Context) (bool, error) {
 // open time is still in the future — or (nil, nil) when none exists. This is
 // the issue members may suggest questions to while reading the current one.
 func (s *Store) GetUpcomingDraftIssue(ctx context.Context) (*Issue, error) {
-	var iss Issue
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id, title, month, year, status, opens_at, deadline,
-		        published_at, created_at
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT `+issueColumns+`
 		 FROM issues
 		 WHERE status = 'draft' AND opens_at > ?
 		 ORDER BY opens_at ASC
 		 LIMIT 1`,
 		time.Now().UTC(),
-	).Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+	))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -195,24 +174,20 @@ func (s *Store) GetUpcomingDraftIssue(ctx context.Context) (*Issue, error) {
 		return nil, fmt.Errorf("getting upcoming draft issue: %w", err)
 	}
 
-	return &iss, nil
+	return iss, nil
 }
 
 // GetNextDraftIssue returns the earliest draft regardless of open time —
 // the scheduler uses it at fire time, when the draft's opens_at has just
 // passed. (nil, nil) when no draft exists.
 func (s *Store) GetNextDraftIssue(ctx context.Context) (*Issue, error) {
-	var iss Issue
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id, title, month, year, status, opens_at, deadline,
-		        published_at, created_at
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT `+issueColumns+`
 		 FROM issues
 		 WHERE status = 'draft'
 		 ORDER BY opens_at ASC
 		 LIMIT 1`,
-	).Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+	))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -220,7 +195,7 @@ func (s *Store) GetNextDraftIssue(ctx context.Context) (*Issue, error) {
 		return nil, fmt.Errorf("getting next draft issue: %w", err)
 	}
 
-	return &iss, nil
+	return iss, nil
 }
 
 // HasCollectingIssue reports whether a round is currently open for answers.
@@ -262,16 +237,13 @@ func (s *Store) ListIssues(
 
 	if status != nil {
 		rows, err = s.read.QueryContext(ctx,
-			`SELECT id, title, month, year, status, opens_at, deadline,
-			        published_at, created_at
+			`SELECT `+issueColumns+`
 			 FROM issues WHERE status = ? ORDER BY created_at DESC`,
 			*status,
 		)
 	} else {
 		rows, err = s.read.QueryContext(ctx,
-			`SELECT id, title, month, year, status, opens_at, deadline,
-			        published_at, created_at
-			 FROM issues ORDER BY created_at DESC`,
+			`SELECT `+issueColumns+` FROM issues ORDER BY created_at DESC`,
 		)
 	}
 
@@ -284,16 +256,12 @@ func (s *Store) ListIssues(
 	var issues []Issue
 
 	for rows.Next() {
-		var iss Issue
-
-		err := rows.Scan(&iss.ID, &iss.Title, &iss.Month, &iss.Year,
-			&iss.Status, &iss.OpensAt, &iss.Deadline,
-			&iss.PublishedAt, &iss.CreatedAt)
+		iss, err := scanIssue(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning issue: %w", err)
 		}
 
-		issues = append(issues, iss)
+		issues = append(issues, *iss)
 	}
 
 	if err := rows.Err(); err != nil {

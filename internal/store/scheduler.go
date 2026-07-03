@@ -75,27 +75,6 @@ func (s *Store) GetOverdueEvents(
 	return scanSchedulerEvents(rows)
 }
 
-// GetNextPendingEvent returns the next event that needs to fire.
-func (s *Store) GetNextPendingEvent(
-	ctx context.Context,
-) (*SchedulerEvent, error) {
-	var e SchedulerEvent
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id, issue_id, event_type, scheduled_at,
-		        fired_at, was_late, created_at
-		 FROM scheduler_events
-		 WHERE fired_at IS NULL
-		 ORDER BY scheduled_at ASC LIMIT 1`,
-	).Scan(&e.ID, &e.IssueID, &e.EventType, &e.ScheduledAt,
-		&e.FiredAt, &e.WasLate, &e.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("getting next pending event: %w", err)
-	}
-
-	return &e, nil
-}
-
 // GetNextPendingEventByType returns the earliest unfired event of the given
 // type, or (nil, nil) when none is queued. Used to surface "next issue opens
 // on …" in the UI without touching scheduler state.
@@ -121,60 +100,6 @@ func (s *Store) GetNextPendingEventByType(
 	}
 
 	return &e, nil
-}
-
-// GetLastFiredAt returns the most recent fired_at timestamp for a given event
-// type. Returns (nil, nil) if no event of that type has fired yet.
-func (s *Store) GetLastFiredAt(
-	ctx context.Context, eventType string,
-) (*time.Time, error) {
-	var raw sql.NullString
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT fired_at FROM scheduler_events
-		 WHERE event_type = ? AND fired_at IS NOT NULL
-		 ORDER BY datetime(fired_at) DESC
-		 LIMIT 1`,
-		eventType,
-	).Scan(&raw)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting last fired_at for %s: %w", eventType, err)
-	}
-
-	if !raw.Valid || raw.String == "" {
-		return nil, nil
-	}
-
-	v, err := parseSQLiteTime(raw.String)
-	if err != nil {
-		return nil, fmt.Errorf("parsing last fired_at for %s: %w", eventType, err)
-	}
-
-	return &v, nil
-}
-
-func parseSQLiteTime(raw string) (time.Time, error) {
-	formats := []string{
-		time.RFC3339Nano,
-		"2006-01-02 15:04:05.999999999-07:00",
-		"2006-01-02 15:04:05.999999999Z07:00",
-		"2006-01-02 15:04:05.999999999",
-		"2006-01-02 15:04:05",
-	}
-
-	var lastErr error
-	for _, format := range formats {
-		t, err := time.ParseInLocation(format, raw, time.UTC)
-		if err == nil {
-			return t, nil
-		}
-		lastErr = err
-	}
-
-	return time.Time{}, lastErr
 }
 
 // MarkEventFired records that a scheduled event has been executed.

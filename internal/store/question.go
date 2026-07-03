@@ -154,34 +154,6 @@ func (s *Store) DeleteQuestionsByIssue(
 	return nil
 }
 
-// ReorderQuestions updates sort_order for questions in an issue.
-func (s *Store) ReorderQuestions(
-	ctx context.Context, issueID int64, orderedIDs []int64,
-) error {
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning reorder transaction: %w", err)
-	}
-
-	defer tx.Rollback()
-
-	for i, id := range orderedIDs {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE questions SET sort_order = ?
-			 WHERE id = ? AND issue_id = ?`,
-			i, id, issueID,
-		); err != nil {
-			return fmt.Errorf("updating sort order for question %d: %w", id, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing reorder: %w", err)
-	}
-
-	return nil
-}
-
 // SelectRandomUnusedQuestions picks questions from the bank with category variety.
 func (s *Store) SelectRandomUnusedQuestions(
 	ctx context.Context, count int,

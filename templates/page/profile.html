@@ -69,8 +69,7 @@
 {{define "scripts"}}
 <script>
 const userID = {{.User.ID}};
-const csrfToken = document.cookie.split('; ').find(r => r.startsWith('csrf_token='))?.split('=')[1] || '';
-const apiHeaders = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken };
+const headers = apiHeaders();
 
 function setProfileStatus(msg, ok) {
     const el = document.getElementById('profile-status');
@@ -89,7 +88,7 @@ document.getElementById('profile-form').addEventListener('submit', async functio
     try {
         const res = await fetch(`/api/users/${userID}`, {
             method: 'PATCH',
-            headers: apiHeaders,
+            headers: headers,
             body: JSON.stringify({ name, bio, avatar_url: avatar }),
         });
 
@@ -121,7 +120,7 @@ document.getElementById('profile-form').addEventListener('submit', async functio
 });
 
 document.getElementById('logout-btn').addEventListener('click', async function() {
-    await fetch('/api/auth/logout', { method: 'POST', headers: apiHeaders });
+    await fetch('/api/auth/logout', { method: 'POST', headers: headers });
     window.location.href = '/login';
 });
 
@@ -177,7 +176,7 @@ async function loadPrefs() {
                 try {
                     const res = await fetch(`/api/users/${userID}/preferences`, {
                         method: 'PATCH',
-                        headers: apiHeaders,
+                        headers: headers,
                         body: JSON.stringify(update),
                     });
                     statusEl.textContent = res.ok ? 'saved' : 'failed';

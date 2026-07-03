@@ -74,10 +74,7 @@ document.getElementById('login-form').addEventListener('submit', async function(
     }
 
     try {
-        const csrfToken = document.cookie
-            .split('; ')
-            .find(row => row.startsWith('csrf_token='))
-            ?.split('=')[1] || '';
+        const csrfToken = getCSRFToken();
 
         const res = await fetch('/api/auth/login', {
             method: 'POST',
