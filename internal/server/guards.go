@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/parithosh/piecesoflife/internal/store"
 )
@@ -62,7 +63,7 @@ func (s *Server) requireIssue(
 	issue, err := s.store.GetIssueByID(r.Context(), issueID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
+			s.writeNotFound(w, r, "Issue not found")
 			return nil, false
 		}
 
@@ -83,12 +84,44 @@ func (s *Server) requireIssue(
 			return nil, false
 		}
 
-		writeError(w, http.StatusNotFound, "not_found", "Issue not found")
+		s.writeNotFound(w, r, "Issue not found")
 
 		return nil, false
 	}
 
 	return issue, true
+}
+
+// requireResponseInGroup resolves a response's owning issue and verifies it
+// belongs to the current Loop. Used by handlers that take a bare response
+// ID from the client (comments, listings) so IDs can't be walked across
+// Loops. No auto-switch here — these are fetch endpoints.
+func (s *Server) requireResponseInGroup(
+	w http.ResponseWriter, r *http.Request, responseID int64,
+) (*store.Issue, bool) {
+	issue, err := s.store.GetIssueByResponseID(r.Context(), responseID)
+	if err != nil {
+		s.writeNotFound(w, r, "Response not found")
+		return nil, false
+	}
+
+	if issue.GroupID != currentGroupID(r.Context()) {
+		s.writeNotFound(w, r, "Response not found")
+		return nil, false
+	}
+
+	return issue, true
+}
+
+// writeNotFound renders a 404 in the shape the caller expects: a JSON error
+// for API routes, a plain 404 for pages.
+func (s *Server) writeNotFound(w http.ResponseWriter, r *http.Request, msg string) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		writeError(w, http.StatusNotFound, "not_found", msg)
+		return
+	}
+
+	http.NotFound(w, r)
 }
 
 // switchGroup makes groupID the user's current Loop (session + last used)

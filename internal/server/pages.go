@@ -411,12 +411,8 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(ctx, issueID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to get issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		http.NotFound(w, r)
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 

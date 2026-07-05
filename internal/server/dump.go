@@ -66,18 +66,8 @@ func (s *Server) handleDumpUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(ctx, issueID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(ctx, "Failed to load issue for dump upload",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 
@@ -207,6 +197,11 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issue, err := s.store.GetIssueByID(ctx, item.IssueID)
+	if err == nil && issue.GroupID != currentGroupID(ctx) {
+		writeError(w, http.StatusNotFound, "not_found", "Dump item not found")
+		return
+	}
+
 	if err == nil && issue.Status == "published" {
 		writeError(w, http.StatusConflict, "issue_published",
 			"This issue is already woven & posted — the dump is closed")

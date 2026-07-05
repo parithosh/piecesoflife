@@ -3289,8 +3289,20 @@ nav.pl-memento-back a:hover { background: transparent; }
  * ================================================================== */
 
 /* Nav Loop switcher — a small details/summary dropdown that matches the
-   nav link treatment. Only rendered for people in 2+ Loops. */
-.pl-nav-loops { position: relative; }
+   nav link treatment. Only rendered for people in 2+ Loops. The resets
+   undo oat.css's card-style details treatment (border, overflow:hidden —
+   which would clip the absolutely-positioned menu — and the ::after
+   chevron). */
+.pl-nav-loops {
+    position: relative;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+}
+.pl-nav-loops > summary::after { display: none; }
+.pl-nav-loops > summary::marker { display: none; }
+.pl-nav-loops > summary:hover { background: transparent; }
 .pl-nav-loops > summary {
     list-style: none;
     cursor: pointer;
@@ -3308,6 +3320,7 @@ nav.pl-memento-back a:hover { background: transparent; }
 
 .pl-nav-loops-menu {
     position: absolute;
+    margin: 0;
     top: calc(100% + 2px);
     right: 0;
     min-width: 220px;

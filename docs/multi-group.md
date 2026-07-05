@@ -158,3 +158,7 @@ works independently per Loop.
 - Per-Loop custom domains/paths, per-Loop email sender identities.
 - Cross-Loop anything (shared albums, cross-posting).
 - Per-membership notification preferences (they stay per-user).
+- `/uploads/` file serving stays authenticated-instance-wide: file URLs are
+  unguessable random names, but a member of Loop A who somehow obtains a
+  Loop B file URL could fetch it. Per-file group checks would need a
+  path→owner index; noted for the productization pass.

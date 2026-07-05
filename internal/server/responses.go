@@ -122,6 +122,11 @@ func (s *Server) handleCreateResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if issue.GroupID != currentGroupID(r.Context()) {
+		writeError(w, http.StatusNotFound, "not_found", "Question not found")
+		return
+	}
+
 	if issue.Status != "collecting" {
 		writeError(w, http.StatusConflict, "not_collecting",
 			"This issue is not accepting responses")
@@ -682,6 +687,10 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, ok := s.requireResponseInGroup(w, r, responseID); !ok {
+		return
+	}
+
 	comments, err := s.store.ListCommentsByResponse(r.Context(), responseID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to list comments",
@@ -721,6 +730,10 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	if _, ok := s.requireResponseInGroup(w, r, responseID); !ok {
 		return
 	}
 
