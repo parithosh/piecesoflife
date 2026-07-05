@@ -200,22 +200,6 @@
         </div>
         {{end}}
 
-        {{/* ---- suggest a question ------------------------------ */}}
-        <section class="pl-suggest">
-          <h3>Suggest a question for this issue</h3>
-          <p>Got a prompt you'd love to hear everyone answer? It'll appear in this issue right away.</p>
-          <form id="friend-question-form">
-            <textarea id="friend-question-text" class="pl-field"
-                      placeholder="e.g. What's the best meal you ate this month?"
-                      style="min-height:80px;margin-top:0;" maxlength="500" required
-                      aria-describedby="friend-question-count"></textarea>
-            <div style="display:flex;align-items:center;gap:14px;margin-top:12px;">
-              <button type="submit" id="friend-question-submit" class="pl-btn pl-btn--outline">Send suggestion</button>
-              <span id="friend-question-status" style="font-family:var(--font-ui);font-size:12px;color:var(--ink-soft);"></span>
-              <span id="friend-question-count" style="margin-left:auto;font-family:var(--font-ui);font-size:11px;color:var(--muted);" hidden></span>
-            </div>
-          </form>
-        </section>
       </div>
 
     </div>
@@ -767,47 +751,5 @@ fqText?.addEventListener('input', function() {
 });
 
 // Friend question submission.
-document.getElementById('friend-question-form').addEventListener('submit', async function(ev) {
-    ev.preventDefault();
-    const textarea = document.getElementById('friend-question-text');
-    const button = document.getElementById('friend-question-submit');
-    const status = document.getElementById('friend-question-status');
-    const text = textarea.value.trim();
-
-    if (!text) {
-        status.textContent = 'Please write a question first.';
-        status.style.color = 'var(--sindoor)';
-        return;
-    }
-
-    button.disabled = true;
-    status.textContent = 'Submitting…';
-    status.style.color = 'var(--ink-soft)';
-
-    try {
-        const res = await fetch('/api/questions/submit', {
-            method: 'POST',
-            headers: apiHeaders(),
-            body: JSON.stringify({ issue_id: issueID, text }),
-        });
-
-        if (res.ok) {
-            textarea.value = '';
-            status.textContent = 'Added — thanks! Reloading to show it.';
-            status.style.color = 'var(--peacock)';
-            setTimeout(() => window.location.reload(), 800);
-            return;
-        }
-
-        const data = await res.json().catch(() => ({}));
-        status.textContent = data?.error?.message || 'Could not submit. Try again?';
-        status.style.color = 'var(--sindoor)';
-    } catch {
-        status.textContent = 'Network error — please retry.';
-        status.style.color = 'var(--sindoor)';
-    } finally {
-        button.disabled = false;
-    }
-});
 </script>
 {{end}}

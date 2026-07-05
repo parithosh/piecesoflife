@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -120,6 +121,57 @@ func (s *Store) UpdateQuestion(
 	)
 	if err != nil {
 		return fmt.Errorf("updating question %d: %w", id, err)
+	}
+
+	return nil
+}
+
+// ErrOrderMismatch is returned by the reorder methods when the submitted ID
+// list doesn't cover the current question set exactly — the caller is
+// working from a stale list and should reload.
+var ErrOrderMismatch = errors.New("question order does not match current set")
+
+// ReorderQuestions rewrites the sort_order of an issue's questions to match
+// the given ID order. The IDs must cover the issue's questions exactly — a
+// stale list (a question was added or removed meanwhile) is rejected whole
+// with ErrOrderMismatch.
+func (s *Store) ReorderQuestions(
+	ctx context.Context, issueID int64, ids []int64,
+) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning question reorder: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var count int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM questions WHERE issue_id = ?", issueID,
+	).Scan(&count); err != nil {
+		return fmt.Errorf("counting questions for issue %d: %w", issueID, err)
+	}
+
+	if count != len(ids) {
+		return fmt.Errorf("reordering issue %d questions (%d ids for %d questions): %w",
+			issueID, len(ids), count, ErrOrderMismatch)
+	}
+
+	for i, id := range ids {
+		res, err := tx.ExecContext(ctx,
+			"UPDATE questions SET sort_order = ? WHERE id = ? AND issue_id = ?",
+			i, id, issueID,
+		)
+		if err != nil {
+			return fmt.Errorf("reordering question %d: %w", id, err)
+		}
+
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			return fmt.Errorf("question %d not in issue %d: %w", id, issueID, ErrOrderMismatch)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing question reorder: %w", err)
 	}
 
 	return nil

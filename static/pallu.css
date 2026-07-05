@@ -2986,6 +2986,20 @@ select.pl-field {
     accent-color: var(--rani);
 }
 .pl-export-row { display: flex; gap: 12px; flex-wrap: wrap; }
+
+/* Default-question manager rows: the enable toggle + text on the left,
+ * qadmin-style move/edit/remove buttons on the right. */
+.pl-dq-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--line);
+}
+.pl-dq-row:last-child { border-bottom: 0; }
+.pl-dq-check { flex: 1; min-height: 40px; }
+.pl-dq-row .pl-qadmin-actions { flex: none; }
+
 .pl-settings .pl-form-actions {
     margin-top: 28px;
     padding-top: 22px;

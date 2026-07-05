@@ -743,6 +743,45 @@ func TestLiveQuestionEditing(t *testing.T) {
 		fmt.Sprintf("/api/questions/%d", questionIDs[1]), nil))
 	require.Equal(t, http.StatusNoContent, env.do(t, delReq).Code)
 
+	// Reorder: reverse the remaining questions and save the new order.
+	remaining, err := env.store.ListQuestionsByIssue(ctx, issueID)
+	require.NoError(t, err)
+
+	reversed := make([]string, 0, len(remaining))
+	for i := len(remaining) - 1; i >= 0; i-- {
+		reversed = append(reversed, fmt.Sprintf("%d", remaining[i].ID))
+	}
+
+	reorderReq := authed(newJSONRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/questions/reorder", issueID),
+		fmt.Sprintf(`{"question_ids": [%s]}`, strings.Join(reversed, ","))))
+	reorderRR := env.do(t, reorderReq)
+	require.Equal(t, http.StatusOK, reorderRR.Code, "reorder: %s", reorderRR.Body.String())
+
+	reordered, err := env.store.ListQuestionsByIssue(ctx, issueID)
+	require.NoError(t, err)
+	require.Len(t, reordered, len(remaining))
+	assert.Equal(t, remaining[len(remaining)-1].ID, reordered[0].ID,
+		"reversed order persisted")
+
+	// A stale list (one ID missing) is rejected whole.
+	staleReq := authed(newJSONRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/questions/reorder", issueID),
+		fmt.Sprintf(`{"question_ids": [%d]}`, remaining[0].ID)))
+	assert.Equal(t, http.StatusConflict, env.do(t, staleReq).Code,
+		"partial order must be rejected")
+
+	// Members cannot suggest questions to the CURRENT round — suggestions
+	// only land on the next (upcoming draft) issue.
+	memberSession := env.sessionCookie(t, member.ID)
+	suggestReq := newJSONRequest(http.MethodPost, "/api/questions/submit",
+		fmt.Sprintf(`{"issue_id": %d, "text": "Sneaking one in?"}`, issueID))
+	suggestReq.AddCookie(memberSession)
+	suggestReq.AddCookie(csrfCookie)
+	suggestReq.Header.Set("X-CSRF-Token", csrfHeader)
+	assert.Equal(t, http.StatusConflict, env.do(t, suggestReq).Code,
+		"collecting rounds accept no member suggestions")
+
 	// Dashboard renders the editor with the answered warning count.
 	dashReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	dashReq.AddCookie(session)

@@ -46,13 +46,13 @@ func (s *Store) CreateIssue(
 	title *string, month, year int,
 	opensAt, deadline time.Time,
 ) (int64, error) {
-	// count_admin_in stays off by default: admins are left out of the
-	// progress denominator unless they opt in via the dashboard's
-	// "Count me in this round" toggle (matches the UI copy and the
-	// schema default).
+	// count_admin_in starts on: admins count toward the progress
+	// denominator unless they opt out via the dashboard's "Count me in
+	// this round" toggle. Set explicitly because the column's schema
+	// default is still 0 (SQLite can't change a default in place).
 	result, err := s.write.ExecContext(ctx,
-		`INSERT INTO issues (title, month, year, opens_at, deadline)
-		 VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO issues (title, month, year, opens_at, deadline, count_admin_in)
+		 VALUES (?, ?, ?, ?, ?, 1)`,
 		title, month, year, opensAt, deadline,
 	)
 	if err != nil {

@@ -82,7 +82,7 @@
               <span class="pl-switch-track" aria-hidden="true"></span>
               Count me in this round
             </label>
-            <p class="pl-switch-note">Admins are left out of progress unless this is on.</p>
+            <p class="pl-switch-note">Admins count toward progress unless this is turned off.</p>
           </div>
 
           <div class="pl-stat">
@@ -113,6 +113,8 @@
               </p>
             </div>
             <div class="pl-qadmin-actions">
+              <button type="button" class="pl-btn pl-btn--outline" data-q-move="up" aria-label="Move question up" {{if eq $idx 0}}disabled{{end}}>↑</button>
+              <button type="button" class="pl-btn pl-btn--outline" data-q-move="down" aria-label="Move question down" {{if eq (add $idx 1) (len $.Questions)}}disabled{{end}}>↓</button>
               <button type="button" class="pl-btn pl-btn--outline" data-q-edit>Edit</button>
               {{if eq $n 0}}
               <button type="button" class="pl-btn pl-btn--outline" data-q-remove>Remove</button>
@@ -412,8 +414,52 @@
         };
     }
 
+    // Reordering: move the row in the DOM, renumber, then persist the full
+    // order. On failure, reload — the server list is the source of truth.
+    function refreshOrderChrome() {
+        const rows = [...container.querySelectorAll('.pl-qadmin-row')];
+        rows.forEach((r, i) => {
+            r.querySelector('.pl-qadmin-num').textContent = String(i + 1).padStart(2, '0');
+            r.querySelector('[data-q-move="up"]').disabled = i === 0;
+            r.querySelector('[data-q-move="down"]').disabled = i === rows.length - 1;
+        });
+    }
+
+    async function persistOrder() {
+        const ids = [...container.querySelectorAll('.pl-qadmin-row')]
+            .map(r => Number(r.dataset.questionId));
+        try {
+            const res = await fetch(`/api/issues/${container.dataset.issueId}/questions/reorder`, {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify({ question_ids: ids }),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data?.error?.message || 'Reorder failed');
+            }
+            setStatus('Order saved ✓');
+        } catch (err) {
+            setStatus(`${err.message} — reloading`, true);
+            setTimeout(() => window.location.reload(), 1200);
+        }
+    }
+
     container.addEventListener('click', async ev => {
         const row = ev.target.closest('.pl-qadmin-row');
+
+        const move = ev.target.closest('[data-q-move]');
+        if (move) {
+            const sibling = move.dataset.qMove === 'up'
+                ? row.previousElementSibling
+                : row.nextElementSibling;
+            if (!sibling || !sibling.classList.contains('pl-qadmin-row')) return;
+            if (move.dataset.qMove === 'up') sibling.before(row);
+            else sibling.after(row);
+            refreshOrderChrome();
+            await persistOrder();
+            return;
+        }
 
         if (ev.target.closest('[data-q-edit]')) {
             startEdit(row);
@@ -433,6 +479,7 @@
                     throw new Error(data?.error?.message || 'Remove failed');
                 }
                 row.remove();
+                refreshOrderChrome();
                 setStatus('Question removed');
             } catch (err) {
                 setStatus(err.message, true);
@@ -457,6 +504,10 @@
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data?.error?.message || 'Add failed');
+
+            // Clear the field before reloading — browsers restore form
+            // state across location.reload(), which reads as "not added".
+            input.value = '';
 
             // Simplest correct refresh: new row needs numbering + wiring.
             window.location.reload();

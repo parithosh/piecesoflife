@@ -1,13 +1,14 @@
 {{define "email_title"}}Log in to {{.LoopName}}{{end}}
 
 {{define "email_content"}}
-<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">Log in to {{.LoopName}}</h2>
+<p style="margin:0 0 8px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#0e6b6b;">Your key to the archive</p>
+<h2 style="margin:0 0 16px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;color:#7a0f38;font-size:24px;">Log in to {{.LoopName}}</h2>
 <p style="margin:0 0 16px;">Hi {{.Name}},</p>
-<p style="margin:0 0 16px;">Click the button below to sign in. This link is single-use and expires in 30 minutes.</p>
+<p style="margin:0 0 16px;">Press the button below to sign in. This link is single-use and expires in 30&nbsp;minutes.</p>
 
 {{template "cta_button" .CTA}}
 
-<p style="margin:24px 0 0;color:#666;font-size:14px;">
+<p style="margin:24px 0 0;color:#8a6d55;font-size:14px;font-style:italic;">
   If you didn't request this, you can safely ignore the email — nothing will happen.
 </p>
 {{end}}

@@ -6,19 +6,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{block "email_title" .}}{{end}}</title>
 </head>
-<body style="margin:0;padding:0;background-color:#fbf4e3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif;">
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-<tr><td style="padding:20px 0;">
-<table class="email-container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="margin:0 auto;background-color:#ffffff;border-radius:8px;overflow:hidden;">
-    <tr><td style="padding:24px 32px;background-color:#7a0f38;color:#ffffff;">
-        <h1 style="margin:0;font-size:20px;font-weight:600;">{{.LoopName}}</h1>
+<body style="margin:0;padding:0;background-color:#fbf4e3;">
+<!-- Pallu palette: rani #7a0f38 · marigold #e6b23c · zari #c8962c · ivory #fbf4e3 · ink #2a0e15 -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#fbf4e3;">
+<tr><td style="padding:28px 12px;">
+<table class="email-container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="width:600px;max-width:100%;margin:0 auto;background-color:#fffaf0;border:1px solid #ddc9a6;">
+    <tr><td style="height:8px;background-color:#c8962c;background-image:repeating-linear-gradient(90deg,#c8962c 0 8px,#e6b23c 8px 12px,#c8962c 12px 20px);font-size:0;line-height:8px;">&nbsp;</td></tr>
+    <tr><td style="padding:26px 36px 22px;background-color:#7a0f38;border-bottom:3px solid #c8962c;">
+        <p style="margin:0 0 6px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#e6b23c;">&#10022; A letter from</p>
+        <h1 style="margin:0;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:28px;letter-spacing:0.5px;color:#fbf4e3;">{{.LoopName}}</h1>
     </td></tr>
-    <tr><td class="email-body" style="padding:32px;color:#333333;font-size:16px;line-height:1.6;">
+    <tr><td class="email-body" style="padding:32px 36px;font-family:'Newsreader',Georgia,'Times New Roman',serif;color:#2a0e15;font-size:16px;line-height:1.65;">
         {{block "email_content" .}}{{end}}
     </td></tr>
-    <tr><td style="padding:16px 32px;background-color:#fbf4e3;color:#999999;font-size:12px;text-align:center;">
-        Sent with {{.LoopName}}
+    <tr><td style="padding:0 36px;">
+        <div style="height:1px;line-height:1px;font-size:0;background-color:#ddc9a6;">&nbsp;</div>
     </td></tr>
+    <tr><td style="padding:18px 36px 24px;text-align:center;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#8a6d55;">
+        &#10022; Sent with {{.LoopName}} &#10022;
+    </td></tr>
+    <tr><td style="height:8px;background-color:#c8962c;background-image:repeating-linear-gradient(90deg,#c8962c 0 8px,#e6b23c 8px 12px,#c8962c 12px 20px);font-size:0;line-height:8px;">&nbsp;</td></tr>
 </table>
 </td></tr>
 </table>
@@ -27,9 +34,9 @@
 {{end}}
 
 {{define "cta_button"}}
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:24px auto;">
-<tr><td style="background-color:#7a0f38;border-radius:6px;">
-    <a href="{{.URL}}" style="display:inline-block;padding:14px 32px;color:#ffffff;text-decoration:none;font-weight:600;font-size:16px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:26px auto;">
+<tr><td style="background-color:#e6b23c;border:1px solid #a8791f;border-radius:3px;">
+    <a href="{{.URL}}" style="display:inline-block;padding:13px 34px;color:#2a0e15;text-decoration:none;font-weight:600;font-size:14px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;letter-spacing:1px;text-transform:uppercase;">
         {{.Label}}
     </a>
 </td></tr>

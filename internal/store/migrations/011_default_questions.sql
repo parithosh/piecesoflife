@@ -39,10 +39,9 @@ CREATE TABLE default_questions (
 );
 
 INSERT INTO default_questions (text, sort_order) VALUES
-    ('Tell us about one good thing that happened to you this month!', 0),
-    ('Tell us about one bad thing that happened to you this month!', 1),
-    ('What''s been on your mind?', 2),
-    ('Free Space for random thoughts.', 3);
+    ('What good thing happened this month?', 0),
+    ('What bad thing happened this month?', 1),
+    ('Free space for random thoughts', 2);
 
 -- How many questions each issue aims for from friend suggestions + the bank
 -- (default questions ride on top of this number).

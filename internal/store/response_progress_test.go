@@ -9,11 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSubmissionProgressExcludesAdmins locks in the "Pallu" product decision:
-// admins are left out of the progress denominator by default, and folded back
-// in only when the issue's count_admin_in flag is set. The roster always lists
-// everyone, with admins sorted last.
-func TestSubmissionProgressExcludesAdmins(t *testing.T) {
+// TestSubmissionProgressCountsAdminsByDefault locks in the "Pallu" product
+// decision: admins count toward the progress denominator by default, and are
+// left out only when the issue's count_admin_in flag is switched off. The
+// roster always lists everyone, with admins sorted last.
+func TestSubmissionProgressCountsAdminsByDefault(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
 
@@ -37,22 +37,22 @@ func TestSubmissionProgressExcludesAdmins(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, st.SubmitResponse(ctx, adminResp))
 
-	// Default: admin excluded from the counts, still shown in the roster last.
+	// Default: admin included in the counts, shown in the roster last.
 	prog, err := st.GetSubmissionProgress(ctx, issueID)
 	require.NoError(t, err)
-	assert.False(t, prog.CountAdminIn)
-	assert.Equal(t, 1, prog.TotalMembers, "denominator excludes the admin")
-	assert.Equal(t, 0, prog.Responded, "admin's submission is not counted")
-	require.Len(t, prog.Members, 2, "roster still lists everyone")
+	assert.True(t, prog.CountAdminIn)
+	assert.Equal(t, 2, prog.TotalMembers, "denominator includes the admin")
+	assert.Equal(t, 1, prog.Responded, "admin's submission is counted")
+	require.Len(t, prog.Members, 2, "roster lists everyone")
 	assert.Equal(t, memberID, prog.Members[0].User.ID, "non-admins sort first")
 	assert.Equal(t, adminID, prog.Members[1].User.ID, "admins sort last")
 
-	// Opt the admin in: denominator and responded count grow by one.
-	require.NoError(t, st.SetIssueCountAdminIn(ctx, issueID, true))
+	// Opt the admin out: denominator and responded count shrink by one.
+	require.NoError(t, st.SetIssueCountAdminIn(ctx, issueID, false))
 
 	prog, err = st.GetSubmissionProgress(ctx, issueID)
 	require.NoError(t, err)
-	assert.True(t, prog.CountAdminIn)
-	assert.Equal(t, 2, prog.TotalMembers, "admin folded into denominator")
-	assert.Equal(t, 1, prog.Responded, "admin's submission now counts")
+	assert.False(t, prog.CountAdminIn)
+	assert.Equal(t, 1, prog.TotalMembers, "admin left out of denominator")
+	assert.Equal(t, 0, prog.Responded, "admin's submission no longer counts")
 }

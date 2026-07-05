@@ -928,6 +928,64 @@ func (s *Server) handleEditQuestion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"question": question})
 }
 
+// reorderQuestionsRequest is the expected JSON body for
+// POST /api/issues/{id}/questions/reorder.
+type reorderQuestionsRequest struct {
+	QuestionIDs []int64 `json:"question_ids"`
+}
+
+// handleReorderQuestions saves a new order for an issue's questions. The
+// list must cover the issue's questions exactly.
+// POST /api/issues/{id}/questions/reorder
+func (s *Server) handleReorderQuestions(w http.ResponseWriter, r *http.Request) {
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
+		return
+	}
+
+	var req reorderQuestionsRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	if len(req.QuestionIDs) == 0 {
+		writeValidationError(w, map[string]string{
+			"question_ids": "question_ids is required",
+		})
+
+		return
+	}
+
+	if _, ok := s.requireIssue(w, r, issueID); !ok {
+		return
+	}
+
+	if err := s.store.ReorderQuestions(r.Context(), issueID, req.QuestionIDs); err != nil {
+		if errors.Is(err, store.ErrOrderMismatch) {
+			writeError(w, http.StatusConflict, "stale_order",
+				"The question list changed — reload and try again")
+			return
+		}
+
+		s.logger.ErrorContext(r.Context(), "Failed to reorder questions",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error",
+			"Failed to reorder questions")
+
+		return
+	}
+
+	questions, err := s.store.ListQuestionsByIssue(r.Context(), issueID)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"questions": questions})
+}
+
 // handleDeleteQuestion removes a question by ID.
 // DELETE /api/questions/{id}
 func (s *Server) handleDeleteQuestion(w http.ResponseWriter, r *http.Request) {
@@ -1004,14 +1062,13 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Questions are welcome while a round is collecting answers and while
-	// the next round sits upcoming as a draft (suggestions sent from the
-	// published reading view land there until it opens).
-	acceptsQuestions := issue.Status == "collecting" ||
-		(issue.Status == "draft" && issue.OpensAt.After(time.Now()))
+	// Member suggestions only land on the NEXT round — the upcoming draft
+	// pre-created at publish time. The current collecting round is curated
+	// by the admin alone (dashboard question editor).
+	acceptsQuestions := issue.Status == "draft" && issue.OpensAt.After(time.Now())
 	if !acceptsQuestions {
-		writeError(w, http.StatusConflict, "not_collecting",
-			"This issue is not currently accepting question submissions")
+		writeError(w, http.StatusConflict, "not_accepting_suggestions",
+			"Suggestions are only accepted for the next issue, before it opens")
 		return
 	}
 

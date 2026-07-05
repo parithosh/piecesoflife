@@ -76,21 +76,36 @@
             </p>
           </div>
 
-          <div class="pl-form-field">
+          <div class="pl-form-field" id="dq-manager">
             <span class="pl-login-label">Default questions</span>
             <p class="pl-field-help">
-              These are stitched into every new issue and count toward the
-              number above. Turn one off to keep it out of all future rounds;
-              you can still reword or remove its copy on a specific issue from
-              the dashboard.
+              These are stitched into every new issue, in this order, and count
+              toward the number above. Add your own, reorder, or turn one off to
+              keep it out of all future rounds; copies already on an issue are
+              edited from the dashboard.
             </p>
-            {{range .DefaultQuestions}}
-            <label class="pl-check-row">
-              <input type="checkbox" data-dq-toggle data-dq-id="{{.ID}}"
-                     {{if .Enabled}}checked{{end}}>
-              <span>{{.Text}}</span>
-            </label>
-            {{end}}
+            <div id="dq-list">
+              {{$count := len .DefaultQuestions}}
+              {{range $idx, $dq := .DefaultQuestions}}
+              <div class="pl-dq-row" data-dq-id="{{$dq.ID}}">
+                <label class="pl-check-row pl-dq-check">
+                  <input type="checkbox" data-dq-toggle {{if $dq.Enabled}}checked{{end}}>
+                  <span data-dq-text>{{$dq.Text}}</span>
+                </label>
+                <div class="pl-qadmin-actions">
+                  <button type="button" class="pl-btn pl-btn--outline" data-dq-move="up" aria-label="Move up" {{if eq $idx 0}}disabled{{end}}>↑</button>
+                  <button type="button" class="pl-btn pl-btn--outline" data-dq-move="down" aria-label="Move down" {{if eq (add $idx 1) $count}}disabled{{end}}>↓</button>
+                  <button type="button" class="pl-btn pl-btn--outline" data-dq-edit>Edit</button>
+                  <button type="button" class="pl-btn pl-btn--outline" data-dq-remove>Remove</button>
+                </div>
+              </div>
+              {{end}}
+            </div>
+            <div class="pl-qadmin-add" style="margin-top:12px;">
+              <input type="text" id="dq-add-text" class="pl-field"
+                     placeholder="Add your own default question…" maxlength="500">
+              <button type="button" id="dq-add-btn" class="pl-btn pl-btn--outline">Add</button>
+            </div>
             <div class="pl-export-row" style="margin-top:8px;">
               <button type="button" id="dq-enable-all" class="pl-btn pl-btn--outline">Enable all</button>
               <button type="button" id="dq-disable-all" class="pl-btn pl-btn--outline">Disable all</button>
@@ -193,35 +208,165 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
     }
 });
 
-// Default questions save instantly — each toggle PATCHes on change, and the
-// all-at-once buttons flip every switch in one call.
+// Default questions save instantly — toggles, edits, adds, removes, and
+// reorders each hit the API on the spot; only the fields above go through
+// the Save button.
 (function () {
+    const manager = document.getElementById('dq-manager');
+    if (!manager) return;
+
     const status = document.getElementById('dq-status');
-    const toggles = Array.from(document.querySelectorAll('[data-dq-toggle]'));
-    if (!toggles.length) return;
+    const list = document.getElementById('dq-list');
 
     const setDqStatus = (msg, isError) => {
         status.textContent = msg || '';
         status.style.color = isError ? 'var(--sindoor)' : 'var(--peacock)';
     };
 
-    toggles.forEach(toggle => toggle.addEventListener('change', async function () {
-        this.disabled = true;
+    const errorMessage = async (res, fallback) => {
+        const data = await res.json().catch(() => ({}));
+        return data?.error?.message
+            || (data?.error?.fields && Object.values(data.error.fields)[0])
+            || fallback;
+    };
+
+    function refreshMoveChrome() {
+        const rows = [...list.querySelectorAll('.pl-dq-row')];
+        rows.forEach((r, i) => {
+            r.querySelector('[data-dq-move="up"]').disabled = i === 0;
+            r.querySelector('[data-dq-move="down"]').disabled = i === rows.length - 1;
+        });
+    }
+
+    async function persistOrder() {
+        const ids = [...list.querySelectorAll('.pl-dq-row')]
+            .map(r => Number(r.dataset.dqId));
         try {
-            const res = await fetch(`/api/default-questions/${this.dataset.dqId}`, {
+            const res = await fetch('/api/default-questions/reorder', {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify({ ids }),
+            });
+            if (!res.ok) throw new Error(await errorMessage(res, 'Reorder failed'));
+            setDqStatus('Order saved ✓');
+        } catch (err) {
+            setDqStatus(`${err.message} — reloading`, true);
+            setTimeout(() => window.location.reload(), 1200);
+        }
+    }
+
+    list.addEventListener('change', async ev => {
+        const toggle = ev.target.closest('[data-dq-toggle]');
+        if (!toggle) return;
+
+        const row = toggle.closest('.pl-dq-row');
+        toggle.disabled = true;
+        try {
+            const res = await fetch(`/api/default-questions/${row.dataset.dqId}`, {
                 method: 'PATCH',
                 headers: apiHeaders(),
-                body: JSON.stringify({ enabled: this.checked }),
+                body: JSON.stringify({ enabled: toggle.checked }),
             });
             if (!res.ok) throw new Error('Save failed');
-            setDqStatus(this.checked ? 'Enabled for future issues ✓' : 'Disabled for future issues ✓');
+            setDqStatus(toggle.checked ? 'Enabled for future issues ✓' : 'Disabled for future issues ✓');
         } catch {
-            this.checked = !this.checked;
+            toggle.checked = !toggle.checked;
             setDqStatus('Could not save the change', true);
         } finally {
-            this.disabled = false;
+            toggle.disabled = false;
         }
-    }));
+    });
+
+    list.addEventListener('click', async ev => {
+        const row = ev.target.closest('.pl-dq-row');
+        if (!row) return;
+
+        const move = ev.target.closest('[data-dq-move]');
+        if (move) {
+            const sibling = move.dataset.dqMove === 'up'
+                ? row.previousElementSibling
+                : row.nextElementSibling;
+            if (!sibling) return;
+            if (move.dataset.dqMove === 'up') sibling.before(row);
+            else sibling.after(row);
+            refreshMoveChrome();
+            await persistOrder();
+            return;
+        }
+
+        if (ev.target.closest('[data-dq-edit]')) {
+            const textEl = row.querySelector('[data-dq-text]');
+            const next = prompt('Reword this default question (future issues only):',
+                textEl.textContent.trim());
+            if (next === null) return;
+            const text = next.trim();
+            if (!text) return;
+
+            try {
+                const res = await fetch(`/api/default-questions/${row.dataset.dqId}`, {
+                    method: 'PATCH',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({ text }),
+                });
+                if (!res.ok) throw new Error(await errorMessage(res, 'Save failed'));
+                textEl.textContent = text;
+                setDqStatus('Question updated ✓');
+            } catch (err) {
+                setDqStatus(err.message, true);
+            }
+            return;
+        }
+
+        if (ev.target.closest('[data-dq-remove]')) {
+            if (!confirm('Remove this default question from all future issues?')) return;
+            const btn = ev.target.closest('[data-dq-remove]');
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/default-questions/${row.dataset.dqId}`, {
+                    method: 'DELETE',
+                    headers: { 'X-CSRF-Token': getCSRFToken() },
+                });
+                if (!res.ok) throw new Error(await errorMessage(res, 'Remove failed'));
+                row.remove();
+                refreshMoveChrome();
+                setDqStatus('Question removed');
+            } catch (err) {
+                setDqStatus(err.message, true);
+                btn.disabled = false;
+            }
+        }
+    });
+
+    async function addDefaultQuestion() {
+        const input = document.getElementById('dq-add-text');
+        const text = input.value.trim();
+        if (!text) return;
+
+        setDqStatus('Adding…');
+        try {
+            const res = await fetch('/api/default-questions', {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify({ text }),
+            });
+            if (!res.ok) throw new Error(await errorMessage(res, 'Add failed'));
+
+            // Clear before reloading — browsers restore form state across
+            // location.reload(), which reads as "not added".
+            input.value = '';
+            window.location.reload();
+        } catch (err) {
+            setDqStatus(err.message, true);
+        }
+    }
+
+    document.getElementById('dq-add-btn').addEventListener('click', addDefaultQuestion);
+    document.getElementById('dq-add-text').addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') {
+            ev.preventDefault();
+            addDefaultQuestion();
+        }
+    });
 
     async function setAll(enabled) {
         setDqStatus('Saving…');
@@ -232,7 +377,7 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
                 body: JSON.stringify({ enabled }),
             });
             if (!res.ok) throw new Error('Save failed');
-            toggles.forEach(t => { t.checked = enabled; });
+            list.querySelectorAll('[data-dq-toggle]').forEach(t => { t.checked = enabled; });
             setDqStatus(enabled ? 'All enabled ✓' : 'All disabled ✓');
         } catch {
             setDqStatus('Could not save the change', true);

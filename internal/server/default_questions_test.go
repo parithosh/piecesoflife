@@ -51,16 +51,16 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 		require.NoError(t, err, "seed bank question")
 	}
 
-	// The migration ships the four defaults, all enabled.
+	// The migration ships the three defaults, all enabled.
 	defaults, err := env.store.ListDefaultQuestions(ctx)
 	require.NoError(t, err)
-	require.Len(t, defaults, 4, "migration seeds four default questions")
+	require.Len(t, defaults, 3, "migration seeds three default questions")
 	for _, dq := range defaults {
 		assert.True(t, dq.Enabled, "defaults start enabled: %s", dq.Text)
 	}
 
-	// A fresh issue with the seeded target of 6: the 4 defaults count toward
-	// it, so the bank supplies only 2.
+	// A fresh issue with the seeded target of 6: the 3 defaults count toward
+	// it, so the bank supplies 3.
 	createRR := env.do(t, authed(newJSONRequest(http.MethodPost,
 		"/api/issues", `{"title": "Round one"}`)))
 	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
@@ -71,8 +71,8 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	questions, err := env.store.ListQuestionsByIssue(ctx, first.ID)
 	require.NoError(t, err)
 	counts := countBySource(questions)
-	assert.Equal(t, 4, counts["default"], "all defaults stitched in")
-	assert.Equal(t, 2, counts["bank"], "bank pads 6-target minus 4 defaults")
+	assert.Equal(t, 3, counts["default"], "all defaults stitched in")
+	assert.Equal(t, 3, counts["bank"], "bank pads 6-target minus 3 defaults")
 	assert.Len(t, questions, 6, "total hits the target exactly")
 	assert.Equal(t, "default", questions[0].Source, "defaults lead a fresh issue")
 
@@ -86,7 +86,7 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	require.NotNil(t, draft, "publish pre-creates the next draft")
 
 	// One friend suggestion lands in the draft. It counts toward the target
-	// of 6 alongside the 4 defaults, so the bank supplies exactly 1.
+	// of 6 alongside the 3 defaults, so the bank supplies exactly 2.
 	suggest := func(issueID int64, n int) {
 		for i := 0; i < n; i++ {
 			body := strings.NewReader(fmt.Sprintf(
@@ -106,8 +106,8 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	counts = countBySource(questions)
 	assert.Equal(t, "friend", questions[0].Source, "suggestions stay first")
 	assert.Equal(t, 1, counts["friend"])
-	assert.Equal(t, 4, counts["default"])
-	assert.Equal(t, 1, counts["bank"], "4 defaults + 1 friend leave room for 1 bank")
+	assert.Equal(t, 3, counts["default"])
+	assert.Equal(t, 2, counts["bank"], "3 defaults + 1 friend leave room for 2 bank")
 	assert.Len(t, questions, 6, "total hits the target exactly")
 
 	// Globally disable all defaults, re-enable just one, and shrink the
@@ -155,6 +155,103 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, badRR.Code, "cap enforced")
 }
 
+// TestManageDefaultQuestions covers the admin's control over the default
+// set: adding custom prompts, rewording, reordering, and deleting — plus
+// the guards (duplicates, stale reorder lists, unknown IDs).
+func TestManageDefaultQuestions(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
+	require.NoError(t, err, "create admin")
+	session := env.sessionCookie(t, adminID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	authed := func(req *http.Request) *http.Request {
+		req.AddCookie(session)
+		req.AddCookie(csrfCookie)
+		req.Header.Set("X-CSRF-Token", csrfHeader)
+		return req
+	}
+
+	// Add a custom default — it lands at the end, enabled.
+	addRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/default-questions", `{"text": "What made you laugh this month?"}`)))
+	require.Equal(t, http.StatusCreated, addRR.Code, "add: %s", addRR.Body.String())
+
+	defaults, err := env.store.ListDefaultQuestions(ctx)
+	require.NoError(t, err)
+	require.Len(t, defaults, 4, "custom default joins the seeded three")
+	custom := defaults[3]
+	assert.Equal(t, "What made you laugh this month?", custom.Text)
+	assert.True(t, custom.Enabled, "custom defaults start enabled")
+
+	// Duplicates are a validation problem, not a server error.
+	dupRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/default-questions", `{"text": "What made you laugh this month?"}`)))
+	assert.Equal(t, http.StatusBadRequest, dupRR.Code, "duplicate rejected")
+
+	// Reword the custom default.
+	editRR := env.do(t, authed(newJSONRequest(http.MethodPatch,
+		fmt.Sprintf("/api/default-questions/%d", custom.ID),
+		`{"text": "What made you laugh out loud?"}`)))
+	require.Equal(t, http.StatusOK, editRR.Code, "reword: %s", editRR.Body.String())
+
+	// Reorder: move the custom default to the front.
+	ids := []string{fmt.Sprintf("%d", custom.ID)}
+	for _, dq := range defaults[:3] {
+		ids = append(ids, fmt.Sprintf("%d", dq.ID))
+	}
+	reorderRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/default-questions/reorder",
+		fmt.Sprintf(`{"ids": [%s]}`, strings.Join(ids, ",")))))
+	require.Equal(t, http.StatusOK, reorderRR.Code, "reorder: %s", reorderRR.Body.String())
+
+	defaults, err = env.store.ListDefaultQuestions(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, custom.ID, defaults[0].ID, "custom default now leads")
+	assert.Equal(t, "What made you laugh out loud?", defaults[0].Text, "reword persisted")
+
+	// A stale reorder list (missing an ID) is rejected whole.
+	staleRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/default-questions/reorder",
+		fmt.Sprintf(`{"ids": [%d]}`, custom.ID))))
+	assert.Equal(t, http.StatusConflict, staleRR.Code, "partial order rejected")
+
+	// A fresh issue stitches the custom default in first.
+	createRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/issues", `{"title": "Round one"}`)))
+	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
+
+	issue, err := env.store.GetActiveIssue(ctx)
+	require.NoError(t, err)
+
+	questions, err := env.store.ListQuestionsByIssue(ctx, issue.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, questions)
+	assert.Equal(t, "What made you laugh out loud?", questions[0].Text,
+		"custom default leads the new issue")
+
+	// Delete the custom default; a second delete 404s. The copy already on
+	// the issue survives.
+	delRR := env.do(t, authed(httptest.NewRequest(http.MethodDelete,
+		fmt.Sprintf("/api/default-questions/%d", custom.ID), nil)))
+	require.Equal(t, http.StatusNoContent, delRR.Code)
+
+	againRR := env.do(t, authed(httptest.NewRequest(http.MethodDelete,
+		fmt.Sprintf("/api/default-questions/%d", custom.ID), nil)))
+	assert.Equal(t, http.StatusNotFound, againRR.Code)
+
+	defaults, err = env.store.ListDefaultQuestions(ctx)
+	require.NoError(t, err)
+	assert.Len(t, defaults, 3, "back to the seeded three")
+
+	questions, err = env.store.ListQuestionsByIssue(ctx, issue.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "What made you laugh out loud?", questions[0].Text,
+		"the issue's copy survives the default's deletion")
+}
+
 // TestOnboardingQuestionsPerIssue drives the setup wizard end to end and
 // checks that the chosen questions-per-issue and default-question switches
 // land in settings, and that the first issue carries the enabled defaults
@@ -170,10 +267,10 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 
 	defaults, err := env.store.ListDefaultQuestions(ctx)
 	require.NoError(t, err)
-	require.Len(t, defaults, 4)
+	require.Len(t, defaults, 3)
 	assert.Equal(t,
-		"Tell us about one good thing that happened to you this month!",
-		defaults[0].Text, "migration seeds the full wording")
+		"What good thing happened this month?",
+		defaults[0].Text, "migration seeds the reworded prompts")
 
 	// The wizard keeps the first two defaults and switches the rest off.
 	body := fmt.Sprintf(`{
@@ -186,11 +283,11 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 		"questions_per_issue": 8,
 		"default_questions": [
 			{"id": %d, "enabled": true}, {"id": %d, "enabled": true},
-			{"id": %d, "enabled": false}, {"id": %d, "enabled": false}
+			{"id": %d, "enabled": false}
 		],
 		"questions": [{"text": "A hand-picked prompt?", "category": null, "bank_id": null}],
 		"invite_emails": []
-	}`, defaults[0].ID, defaults[1].ID, defaults[2].ID, defaults[3].ID)
+	}`, defaults[0].ID, defaults[1].ID, defaults[2].ID)
 
 	req := newJSONRequest(http.MethodPost, "/api/onboarding/complete", body)
 	req.AddCookie(session)
