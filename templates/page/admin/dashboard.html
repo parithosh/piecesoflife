@@ -113,8 +113,8 @@
               </p>
             </div>
             <div class="pl-qadmin-actions">
-              <button type="button" class="pl-btn pl-btn--outline" data-q-move="up" aria-label="Move question up" {{if eq $idx 0}}disabled{{end}}>↑</button>
-              <button type="button" class="pl-btn pl-btn--outline" data-q-move="down" aria-label="Move question down" {{if eq (add $idx 1) (len $.Questions)}}disabled{{end}}>↓</button>
+              <button type="button" class="pl-btn pl-btn--outline" data-move="up" aria-label="Move question up" {{if eq $idx 0}}disabled{{end}}>↑</button>
+              <button type="button" class="pl-btn pl-btn--outline" data-move="down" aria-label="Move question down" {{if eq (add $idx 1) (len $.Questions)}}disabled{{end}}>↓</button>
               <button type="button" class="pl-btn pl-btn--outline" data-q-edit>Edit</button>
               {{if eq $n 0}}
               <button type="button" class="pl-btn pl-btn--outline" data-q-remove>Remove</button>
@@ -309,6 +309,7 @@
 {{end}}
 
 {{define "scripts"}}
+<script src="/static/reorder.js?v={{assetVersion}}"></script>
 <script>
 
 // --- Live question editing --------------------------------------------
@@ -414,17 +415,9 @@
         };
     }
 
-    // Reordering: move the row in the DOM, renumber, then persist the full
-    // order. On failure, reload — the server list is the source of truth.
-    function refreshOrderChrome() {
-        const rows = [...container.querySelectorAll('.pl-qadmin-row')];
-        rows.forEach((r, i) => {
-            r.querySelector('.pl-qadmin-num').textContent = String(i + 1).padStart(2, '0');
-            r.querySelector('[data-q-move="up"]').disabled = i === 0;
-            r.querySelector('[data-q-move="down"]').disabled = i === rows.length - 1;
-        });
-    }
-
+    // Reordering: shared arrow-button helper (static/reorder.js) moves the
+    // row, renumbers, and serializes the persists. On failure, reload — the
+    // server list is the source of truth.
     async function persistOrder() {
         const ids = [...container.querySelectorAll('.pl-qadmin-row')]
             .map(r => Number(r.dataset.questionId));
@@ -445,21 +438,16 @@
         }
     }
 
+    const reorder = wireReorder(container, {
+        rowSelector: '.pl-qadmin-row',
+        onMoved: rows => rows.forEach((r, i) => {
+            r.querySelector('.pl-qadmin-num').textContent = String(i + 1).padStart(2, '0');
+        }),
+        persist: persistOrder,
+    });
+
     container.addEventListener('click', async ev => {
         const row = ev.target.closest('.pl-qadmin-row');
-
-        const move = ev.target.closest('[data-q-move]');
-        if (move) {
-            const sibling = move.dataset.qMove === 'up'
-                ? row.previousElementSibling
-                : row.nextElementSibling;
-            if (!sibling || !sibling.classList.contains('pl-qadmin-row')) return;
-            if (move.dataset.qMove === 'up') sibling.before(row);
-            else sibling.after(row);
-            refreshOrderChrome();
-            await persistOrder();
-            return;
-        }
 
         if (ev.target.closest('[data-q-edit]')) {
             startEdit(row);
@@ -479,7 +467,7 @@
                     throw new Error(data?.error?.message || 'Remove failed');
                 }
                 row.remove();
-                refreshOrderChrome();
+                reorder.refresh();
                 setStatus('Question removed');
             } catch (err) {
                 setStatus(err.message, true);

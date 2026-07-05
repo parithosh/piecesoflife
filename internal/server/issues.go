@@ -308,7 +308,11 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Queue reminders and auto-close anchored to the deadline.
-	s.scheduleIssueEvents(r.Context(), settings, issueID, deadline)
+	if _, evErr := s.scheduleIssueEvents(r.Context(), settings, issueID, deadline); evErr != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to schedule issue events — round will not auto-close; extend the deadline to requeue",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", evErr.Error()))
+	}
 
 	s.logger.InfoContext(r.Context(), "Issue created",
 		slog.Int64("issue_id", issueID),
@@ -554,7 +558,25 @@ func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Re-queue reminders and auto-close anchored to the new deadline.
-	s.scheduleIssueEvents(r.Context(), extSettings, issueID, newDeadline)
+	remindersQueued, evErr := s.scheduleIssueEvents(r.Context(), extSettings, issueID, newDeadline)
+	if evErr != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to schedule issue events after extend — round will not auto-close; extend again to requeue",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", evErr.Error()))
+	}
+
+	// The extend dialog promises non-responders a heads-up. When the new
+	// deadline is too close for any standard reminder slot, queue an
+	// immediate last-chance reminder — the next scheduler tick sends it.
+	if remindersQueued == 0 {
+		if err := s.store.CreateSchedulerEvent(
+			r.Context(), &issueID, "reminder_2", time.Now(),
+		); err != nil {
+			s.logger.ErrorContext(r.Context(), "Failed to queue immediate reminder after extend",
+				slog.Int64("issue_id", issueID),
+				slog.String("error", err.Error()))
+		}
+	}
 
 	s.logger.InfoContext(r.Context(), "Issue deadline extended",
 		slog.Int64("issue_id", issueID),

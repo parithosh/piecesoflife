@@ -738,18 +738,5 @@ document.querySelectorAll('.pl-record-btn').forEach(btn => {
     });
 });
 
-// Character counter for the friend-question box — appears near the limit
-// so users aren't silently blocked at 500 characters.
-const fqText = document.getElementById('friend-question-text');
-const fqCount = document.getElementById('friend-question-count');
-fqText?.addEventListener('input', function() {
-    if (!fqCount) return;
-    const remaining = 500 - this.value.length;
-    fqCount.hidden = remaining > 100;
-    fqCount.textContent = `${remaining} characters left`;
-    fqCount.style.color = remaining <= 20 ? 'var(--sindoor)' : 'var(--muted)';
-});
-
-// Friend question submission.
 </script>
 {{end}}

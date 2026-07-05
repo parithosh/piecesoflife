@@ -771,6 +771,15 @@ func TestLiveQuestionEditing(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, env.do(t, staleReq).Code,
 		"partial order must be rejected")
 
+	// Duplicate IDs pass the count guard but not the uniqueness one.
+	dupIDs := append([]string{}, reversed[:len(reversed)-1]...)
+	dupIDs = append(dupIDs, reversed[0])
+	dupReq := authed(newJSONRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/questions/reorder", issueID),
+		fmt.Sprintf(`{"question_ids": [%s]}`, strings.Join(dupIDs, ","))))
+	assert.Equal(t, http.StatusConflict, env.do(t, dupReq).Code,
+		"duplicate IDs must be rejected")
+
 	// Members cannot suggest questions to the CURRENT round — suggestions
 	// only land on the next (upcoming draft) issue.
 	memberSession := env.sessionCookie(t, member.ID)
@@ -817,7 +826,7 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 		events, err := env.store.GetPendingEvents(ctx)
 		require.NoError(t, err)
 
-		byType := make(map[string]time.Time)
+		byType := make(map[string]time.Time, 4)
 		for _, ev := range events {
 			if ev.IssueID != nil && *ev.IssueID == issueID {
 				byType[ev.EventType] = ev.ScheduledAt
@@ -838,6 +847,7 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 	events := pendingFor(issue.ID)
 	require.Contains(t, events, "reminder_1", "7-day window keeps the 3-days-out reminder")
 	require.Contains(t, events, "reminder_2", "7-day window keeps the last-chance reminder")
+	require.Contains(t, events, "admin_summary", "admin gets the pre-publish roster")
 	require.Contains(t, events, "auto_close")
 
 	// The seeded loop timezone is UTC.
@@ -851,6 +861,8 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 		"reminder_2 lands 1 day before the deadline")
 	assert.Equal(t, 10, r1.Hour(), "reminders fire mid-morning local time")
 	assert.Equal(t, 10, r2.Hour(), "reminders fire mid-morning local time")
+	assert.True(t, events["admin_summary"].Equal(events["reminder_2"]),
+		"admin summary rides the last-chance slot, the day before publish")
 	assert.True(t, events["auto_close"].Equal(issue.Deadline), "auto_close at the deadline")
 
 	// A 3-day window puts the 3-days-out slot at (or before) the open —
@@ -874,4 +886,117 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 	assert.NotContains(t, events, "reminder_1", "3-day window drops the 3-days-out reminder")
 	require.Contains(t, events, "reminder_2", "last-chance reminder survives a short window")
 	require.Contains(t, events, "auto_close")
+
+	// Extending to a deadline too close for any standard reminder slot
+	// still nudges non-responders: an immediate reminder is queued in
+	// place of the skipped slots (the extend dialog promises one).
+	nearDeadline := time.Now().Add(20 * time.Hour)
+	extRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/extend", short.ID),
+		fmt.Sprintf(`{"new_deadline": %q}`, time.Now().Add(4*24*time.Hour).Format(time.RFC3339)))))
+	require.Equal(t, http.StatusOK, extRR.Code, "extend far: %s", extRR.Body.String())
+
+	// Shrink is not allowed via the API, so simulate a near deadline in
+	// the store and extend by a few hours — no slot has 12h of lead.
+	require.NoError(t, env.store.UpdateIssue(ctx, short.ID, nil, &nearDeadline))
+	extRR = env.do(t, authed(newJSONRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/extend", short.ID),
+		fmt.Sprintf(`{"new_deadline": %q}`, time.Now().Add(22*time.Hour).Format(time.RFC3339)))))
+	require.Equal(t, http.StatusOK, extRR.Code, "extend near: %s", extRR.Body.String())
+
+	events = pendingFor(short.ID)
+	require.Contains(t, events, "reminder_2", "an immediate nudge replaces the skipped slots")
+	assert.True(t, events["reminder_2"].Before(time.Now().Add(time.Minute)),
+		"the fallback reminder fires on the next scheduler tick")
+}
+
+// TestEmailCTATokenReuse locks in the forgiving ?auth= semantics: email_cta
+// tokens are reusable until expiry (mail scanners prefetch links, and a
+// member may click an email button more than once), and a visitor with a
+// live session is never bounced to a login error by a stale token.
+func TestEmailCTATokenReuse(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	user := env.createUser(t, "Fay", "fay@example.com")
+
+	raw, hash, err := auth.GenerateRandomToken(32)
+	require.NoError(t, err)
+	require.NoError(t, env.store.CreateAuthToken(
+		ctx, user.ID, hash, "email_cta", time.Now().Add(30*24*time.Hour)))
+
+	// First use (e.g. a mail scanner prefetch): mints a session and
+	// redirects to the target without the auth param.
+	rr := env.do(t, httptest.NewRequest(http.MethodGet, "/issues?auth="+raw, nil))
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	assert.Equal(t, "/issues", rr.Header().Get("Location"))
+	require.NotNil(t, findCookie(rr, "session"), "first use logs in")
+
+	// Second cold use (the member's real click after the scanner's): the
+	// token is not burned — it still logs in.
+	rr2 := env.do(t, httptest.NewRequest(http.MethodGet, "/issues?auth="+raw, nil))
+	require.Equal(t, http.StatusSeeOther, rr2.Code)
+	assert.Equal(t, "/issues", rr2.Header().Get("Location"))
+	assert.NotNil(t, findCookie(rr2, "session"), "email_cta tokens are reusable")
+
+	// A visitor who is already logged in keeps their session — even when
+	// the link carries an expired token.
+	session := env.sessionCookie(t, user.ID)
+
+	expRaw, expHash, err := auth.GenerateRandomToken(32)
+	require.NoError(t, err)
+	require.NoError(t, env.store.CreateAuthToken(
+		ctx, user.ID, expHash, "email_cta", time.Now().Add(-time.Hour)))
+
+	req := httptest.NewRequest(http.MethodGet, "/issues?auth="+expRaw, nil)
+	req.AddCookie(session)
+	rr3 := env.do(t, req)
+	require.Equal(t, http.StatusSeeOther, rr3.Code)
+	assert.Equal(t, "/issues", rr3.Header().Get("Location"),
+		"a live session wins over a stale token")
+}
+
+// TestAdminSummaryEmail covers the pre-publish roster email: only admins
+// receive it, sends land in the email log, and rounds that are no longer
+// collecting are skipped silently.
+func TestAdminSummaryEmail(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
+	require.NoError(t, err, "create admin")
+	member := env.createUser(t, "Zara", "zara@example.com")
+
+	issueID, questionIDs := env.seedIssue(t, "collecting", 6, 2026, 2)
+
+	respID, err := env.store.CreateResponse(ctx, member.ID, questionIDs[0])
+	require.NoError(t, err)
+	require.NoError(t, env.store.SubmitResponse(ctx, respID))
+
+	require.NoError(t, env.srv.SendAdminSummaryForIssue(ctx, issueID, nil))
+
+	countSummaries := func() int {
+		logs, _, err := env.store.ListEmailLogs(ctx, 1, 100)
+		require.NoError(t, err)
+
+		n := 0
+		for _, l := range logs {
+			if l.Type != "admin_summary" {
+				continue
+			}
+			n++
+			require.NotNil(t, l.UserID)
+			assert.Equal(t, adminID, *l.UserID, "only admins receive the roster")
+			assert.Equal(t, "sent", l.Status)
+		}
+
+		return n
+	}
+
+	assert.Equal(t, 1, countSummaries(), "one summary, to the admin only")
+
+	// Published rounds are skipped silently — no second log entry.
+	require.NoError(t, env.store.PublishIssue(ctx, issueID))
+	require.NoError(t, env.srv.SendAdminSummaryForIssue(ctx, issueID, nil))
+	assert.Equal(t, 1, countSummaries(), "no summary after publish")
 }

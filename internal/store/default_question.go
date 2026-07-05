@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -69,9 +71,20 @@ func (s *Store) ListEnabledDefaultQuestions(ctx context.Context) ([]DefaultQuest
 	return enabled, nil
 }
 
+// ErrDuplicateText is returned when a default question's text collides with
+// an existing one (default_questions.text is UNIQUE).
+var ErrDuplicateText = errors.New("default question text already exists")
+
+// isUniqueViolation reports whether err is SQLite's UNIQUE constraint
+// failure. The string match is confined to this one helper —
+// modernc/sqlite doesn't export a stable sentinel to errors.Is against.
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
 // CreateDefaultQuestion adds a custom default prompt at the end of the
-// list, enabled, and returns its ID. Text is UNIQUE — inserting a duplicate
-// returns an error.
+// list, enabled, and returns its ID. A text collision with an existing
+// default returns ErrDuplicateText.
 func (s *Store) CreateDefaultQuestion(
 	ctx context.Context, text string,
 ) (int64, error) {
@@ -81,6 +94,10 @@ func (s *Store) CreateDefaultQuestion(
 		text,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return 0, fmt.Errorf("creating default question: %w", ErrDuplicateText)
+		}
+
 		return 0, fmt.Errorf("creating default question: %w", err)
 	}
 
@@ -92,21 +109,55 @@ func (s *Store) CreateDefaultQuestion(
 	return id, nil
 }
 
-// UpdateDefaultQuestionText rewords a default question for all future
-// issues. Copies already landed on issues keep the text they were sent with.
-func (s *Store) UpdateDefaultQuestionText(
-	ctx context.Context, id int64, text string,
+// UpdateDefaultQuestion applies a reword and/or an enabled flip in one
+// transaction, so a request carrying both fields can never half-apply.
+// A text collision with another default returns ErrDuplicateText; copies
+// already landed on issues keep the text they were sent with.
+func (s *Store) UpdateDefaultQuestion(
+	ctx context.Context, id int64, text *string, enabled *bool,
 ) error {
-	res, err := s.write.ExecContext(ctx,
-		"UPDATE default_questions SET text = ? WHERE id = ?", text, id,
-	)
-	if err != nil {
-		return fmt.Errorf("updating default question %d text: %w", id, err)
+	if text == nil && enabled == nil {
+		return nil
 	}
 
-	n, err := res.RowsAffected()
-	if err == nil && n == 0 {
-		return fmt.Errorf("default question %d: %w", id, sql.ErrNoRows)
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning default question update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if text != nil {
+		res, err := tx.ExecContext(ctx,
+			"UPDATE default_questions SET text = ? WHERE id = ?", *text, id,
+		)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return fmt.Errorf("updating default question %d text: %w", id, ErrDuplicateText)
+			}
+
+			return fmt.Errorf("updating default question %d text: %w", id, err)
+		}
+
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			return fmt.Errorf("default question %d: %w", id, sql.ErrNoRows)
+		}
+	}
+
+	if enabled != nil {
+		res, err := tx.ExecContext(ctx,
+			"UPDATE default_questions SET enabled = ? WHERE id = ?", *enabled, id,
+		)
+		if err != nil {
+			return fmt.Errorf("updating default question %d enabled: %w", id, err)
+		}
+
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			return fmt.Errorf("default question %d: %w", id, sql.ErrNoRows)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing default question update: %w", err)
 	}
 
 	return nil
@@ -150,6 +201,10 @@ func (s *Store) ReorderDefaultQuestions(ctx context.Context, ids []int64) error 
 	if count != len(ids) {
 		return fmt.Errorf("reordering default questions (%d ids for %d questions): %w",
 			len(ids), count, ErrOrderMismatch)
+	}
+
+	if err := checkUniqueIDs(ids); err != nil {
+		return fmt.Errorf("reordering default questions: %w", err)
 	}
 
 	for i, id := range ids {

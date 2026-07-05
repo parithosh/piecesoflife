@@ -133,37 +133,37 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	}
 
 	// Validate required fields.
-	errors := make(map[string]string, 4)
+	validationErrs := make(map[string]string, 4)
 	if strings.TrimSpace(req.AdminName) == "" {
-		errors["admin_name"] = "Name is required"
+		validationErrs["admin_name"] = "Name is required"
 	}
 	if strings.TrimSpace(req.LoopName) == "" {
-		errors["loop_name"] = "Newsletter name is required"
+		validationErrs["loop_name"] = "Newsletter name is required"
 	}
 	if req.StartDatetime == "" {
-		errors["start_datetime"] = "Start date is required"
+		validationErrs["start_datetime"] = "Start date is required"
 	}
 
 	validFreq := map[string]bool{"biweekly": true, "monthly": true, "quarterly": true}
 	if !validFreq[req.Frequency] {
-		errors["frequency"] = "Must be biweekly, monthly, or quarterly"
+		validationErrs["frequency"] = "Must be biweekly, monthly, or quarterly"
 	}
 
 	if req.SubmissionWindowDays < 3 || req.SubmissionWindowDays > 21 {
-		errors["submission_window_days"] = "Must be between 3 and 21 days"
+		validationErrs["submission_window_days"] = "Must be between 3 and 21 days"
 	}
 
 	// Zero means "not provided" and keeps the seeded default.
 	if req.QuestionsPerIssue < 0 || req.QuestionsPerIssue > 20 {
-		errors["questions_per_issue"] = "Must be between 1 and 20 questions"
+		validationErrs["questions_per_issue"] = "Must be between 1 and 20 questions"
 	}
 
 	if len(req.Questions) == 0 {
-		errors["questions"] = "At least one question is required"
+		validationErrs["questions"] = "At least one question is required"
 	}
 
-	if len(errors) > 0 {
-		writeValidationError(w, errors)
+	if len(validationErrs) > 0 {
+		writeValidationError(w, validationErrs)
 		return
 	}
 
@@ -330,9 +330,11 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	// Enabled default questions lead the first round; the admin's picks follow.
 	numDefaults := s.insertDefaultQuestions(ctx, issueID, 0)
 
-	// A retried wizard may have already promoted picks to global defaults
-	// (Step 6b) — insertDefaultQuestions just stitched those in, so skip
-	// re-inserting them as picks.
+	// A retried wizard may have already promoted make_default picks to
+	// global defaults (Step 6b) — insertDefaultQuestions just stitched
+	// those in, so skip re-inserting them as picks. Only make_default
+	// picks are deduped: an ordinary pick whose text happens to match a
+	// default is the admin's deliberate choice and stays.
 	alreadyInserted := make(map[string]bool, numDefaults)
 	if inserted, listErr := s.store.ListQuestionsByIssue(ctx, issueID); listErr == nil {
 		for _, q := range inserted {
@@ -343,7 +345,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	sortOrder := numDefaults
 
 	for _, q := range req.Questions {
-		if alreadyInserted[strings.TrimSpace(q.Text)] {
+		if q.MakeDefault && alreadyInserted[strings.TrimSpace(q.Text)] {
 			continue
 		}
 
@@ -379,7 +381,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		}
 
 		if _, err := s.store.CreateDefaultQuestion(ctx, text); err != nil &&
-			!strings.Contains(err.Error(), "UNIQUE") {
+			!errors.Is(err, store.ErrDuplicateText) {
 			s.logger.WarnContext(ctx, "Failed to save wizard pick as default question",
 				slog.String("text", text),
 				slog.String("error", err.Error()))
@@ -398,7 +400,15 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	s.scheduleIssueEvents(ctx, settings, issueID, deadline)
+	// A round without its auto_close event never closes or publishes —
+	// that failure aborts the launch so the admin can retry the wizard.
+	if _, err := s.scheduleIssueEvents(ctx, settings, issueID, deadline); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to schedule setup issue events",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create scheduler event")
+
+		return
+	}
 
 	// Step 8: Invite friends. Each invite self-guards against existing
 	// active users, so retries don't create duplicates at the user level.

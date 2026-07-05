@@ -61,9 +61,11 @@ func (s *Server) handleUpdateDefaultQuestion(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	var text *string
+
 	if req.Text != nil {
-		text := strings.TrimSpace(*req.Text)
-		if text == "" {
+		trimmed := strings.TrimSpace(*req.Text)
+		if trimmed == "" {
 			writeValidationError(w, map[string]string{
 				"text": "Question text is required",
 			})
@@ -71,17 +73,21 @@ func (s *Server) handleUpdateDefaultQuestion(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		if err := s.store.UpdateDefaultQuestionText(r.Context(), questionID, text); err != nil {
-			s.writeDefaultQuestionError(w, r, questionID, err, "reword")
-			return
-		}
+		text = &trimmed
 	}
 
-	if req.Enabled != nil {
-		if err := s.store.SetDefaultQuestionEnabled(r.Context(), questionID, *req.Enabled); err != nil {
-			s.writeDefaultQuestionError(w, r, questionID, err, "update")
+	if err := s.store.UpdateDefaultQuestion(r.Context(), questionID, text, req.Enabled); err != nil {
+		if errors.Is(err, store.ErrDuplicateText) {
+			writeValidationError(w, map[string]string{
+				"text": "That question is already a default",
+			})
+
 			return
 		}
+
+		s.writeDefaultQuestionError(w, r, questionID, err, "update")
+
+		return
 	}
 
 	question, err := s.getDefaultQuestion(r.Context(), questionID)
@@ -122,7 +128,7 @@ func (s *Server) handleCreateDefaultQuestion(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		// default_questions.text is UNIQUE — surface duplicates as a
 		// validation problem, not a server error.
-		if strings.Contains(err.Error(), "UNIQUE") {
+		if errors.Is(err, store.ErrDuplicateText) {
 			writeValidationError(w, map[string]string{
 				"text": "That question is already a default",
 			})

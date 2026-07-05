@@ -20,6 +20,9 @@ type Actions interface {
 	SendReminderForIssue(
 		ctx context.Context, issueID int64, isFinal bool, schedulerEventID *int64,
 	) error
+	SendAdminSummaryForIssue(
+		ctx context.Context, issueID int64, schedulerEventID *int64,
+	) error
 	AutoPublishIssue(ctx context.Context, issueID int64) error
 	CreateNextIssue(ctx context.Context) error
 }
@@ -148,6 +151,13 @@ func (s *Scheduler) fireEvent(
 			break
 		}
 		err = s.actions.SendReminderForIssue(ctx, *ev.IssueID, true, &ev.ID)
+
+	case "admin_summary":
+		if ev.IssueID == nil {
+			err = errInvalidEvent("admin_summary missing issue_id")
+			break
+		}
+		err = s.actions.SendAdminSummaryForIssue(ctx, *ev.IssueID, &ev.ID)
 
 	case "auto_close":
 		if ev.IssueID == nil {

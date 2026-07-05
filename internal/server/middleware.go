@@ -223,13 +223,38 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// handleAuthParam exchanges an ?auth=TOKEN query parameter (the magic links
+// embedded in emails) for a session and redirects to the same URL without
+// the parameter. Two forgiving rules keep those links working in the real
+// world:
+//
+//   - A visitor who already carries a valid session keeps it: the token is
+//     ignored, not consumed, so a second click on an email button never
+//     bounces a logged-in member to a login error.
+//   - email_cta tokens are NOT single-use. Mail clients and corporate link
+//     scanners prefetch URLs, and burning the token on that fetch would
+//     break the member's real click. They stay valid until they expire.
+//     Short-lived login tokens keep their single-use semantics.
 func (s *Server) handleAuthParam(
 	w http.ResponseWriter, r *http.Request, rawToken string,
 ) {
+	redirectSansAuth := func() {
+		q := r.URL.Query()
+		q.Del("auth")
+		r.URL.RawQuery = q.Encode()
+
+		http.Redirect(w, r, r.URL.String(), http.StatusSeeOther)
+	}
+
+	if s.hasValidSession(r) {
+		redirectSansAuth()
+		return
+	}
+
 	tokenHash := hashSessionToken(rawToken)
 
 	token, err := s.store.GetAuthTokenByHash(r.Context(), tokenHash)
-	if err != nil || token.ConsumedAt != nil {
+	if err != nil {
 		http.Redirect(w, r, "/login?error=invalid", http.StatusSeeOther)
 		return
 	}
@@ -247,17 +272,24 @@ func (s *Server) handleAuthParam(
 		return
 	}
 
-	if err := s.store.ConsumeAuthToken(r.Context(), token.ID); err != nil {
-		if errors.Is(err, store.ErrTokenAlreadyConsumed) {
+	if token.Type != "email_cta" {
+		if token.ConsumedAt != nil {
 			http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
 			return
 		}
 
-		s.logger.ErrorContext(r.Context(), "Failed to consume auth token",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		if err := s.store.ConsumeAuthToken(r.Context(), token.ID); err != nil {
+			if errors.Is(err, store.ErrTokenAlreadyConsumed) {
+				http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
+				return
+			}
 
-		return
+			s.logger.ErrorContext(r.Context(), "Failed to consume auth token",
+				slog.String("error", err.Error()))
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+
+			return
+		}
 	}
 
 	if err := s.createSessionAndSetCookie(
@@ -270,12 +302,25 @@ func (s *Server) handleAuthParam(
 		return
 	}
 
-	// Redirect to same URL without the auth parameter.
-	q := r.URL.Query()
-	q.Del("auth")
-	r.URL.RawQuery = q.Encode()
+	redirectSansAuth()
+}
 
-	http.Redirect(w, r, r.URL.String(), http.StatusSeeOther)
+// hasValidSession reports whether the request carries a session cookie that
+// maps to a live session for an active user.
+func (s *Server) hasValidSession(r *http.Request) bool {
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		return false
+	}
+
+	session, err := s.store.GetSessionByHash(r.Context(), hashSessionToken(cookie.Value))
+	if err != nil || session.ExpiresAt.Before(time.Now()) {
+		return false
+	}
+
+	user, err := s.store.GetUserByID(r.Context(), session.UserID)
+
+	return err == nil && user.IsActive
 }
 
 func (s *Server) respondUnauthorized(

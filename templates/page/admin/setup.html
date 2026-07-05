@@ -176,6 +176,7 @@
 {{end}}
 
 {{define "scripts"}}
+<script src="/static/reorder.js?v={{assetVersion}}"></script>
 <script>
     let suggestedQuestions = {{jsonMarshal .SuggestedQuestions}} || [];
     const csrfToken = getCSRFToken();
@@ -242,6 +243,7 @@
         list.innerHTML = '';
         (suggestedQuestions || []).forEach(q => list.appendChild(buildQuestionRow(q)));
         wireQuestionRows();
+        picksReorder.refresh();
     }
 
     function buildQuestionRow(q) {
@@ -263,36 +265,29 @@
         return div;
     }
 
-    // Row tools, delegated per list: ↑↓ move the row (order is submitted
-    // as-is), ☆ flags a pick to also become a global default question.
+    // Row tools: ↑↓ moves come from the shared helper (order is submitted
+    // as-is); ☆ flags a pick to also become a global default question.
     // preventDefault keeps the buttons from toggling the row's checkbox
     // through the wrapping <label>.
     function wireRowTools(list) {
+        const reorder = wireReorder(list, { rowSelector: '.question-pick' });
+
         list.addEventListener('click', ev => {
-            const btn = ev.target.closest('.q-move, .q-default');
+            const btn = ev.target.closest('.q-default');
             if (!btn) return;
             ev.preventDefault();
 
             const row = btn.closest('.question-pick');
-
-            if (btn.classList.contains('q-default')) {
-                const on = row.dataset.makeDefault === '1';
-                row.dataset.makeDefault = on ? '' : '1';
-                btn.classList.toggle('is-on', !on);
-                btn.textContent = on ? '☆ default' : '★ default';
-                return;
-            }
-
-            const sibling = btn.dataset.move === 'up'
-                ? row.previousElementSibling
-                : row.nextElementSibling;
-            if (!sibling || !sibling.classList.contains('question-pick')) return;
-            if (btn.dataset.move === 'up') sibling.before(row);
-            else sibling.after(row);
+            const on = row.dataset.makeDefault === '1';
+            row.dataset.makeDefault = on ? '' : '1';
+            btn.classList.toggle('is-on', !on);
+            btn.textContent = on ? '☆ default' : '★ default';
         });
+
+        return reorder;
     }
     wireRowTools(document.getElementById('default-question-list'));
-    wireRowTools(document.getElementById('question-list'));
+    const picksReorder = wireRowTools(document.getElementById('question-list'));
 
     function wireQuestionRows() {
         document.querySelectorAll('.question-pick .q-check').forEach(cb => {

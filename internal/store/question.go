@@ -131,6 +131,23 @@ func (s *Store) UpdateQuestion(
 // working from a stale list and should reload.
 var ErrOrderMismatch = errors.New("question order does not match current set")
 
+// checkUniqueIDs rejects reorder lists containing the same ID twice — a
+// duplicate would match the count guard while silently leaving an omitted
+// row with its stale sort_order.
+func checkUniqueIDs(ids []int64) error {
+	seen := make(map[int64]struct{}, len(ids))
+
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("duplicate id %d: %w", id, ErrOrderMismatch)
+		}
+
+		seen[id] = struct{}{}
+	}
+
+	return nil
+}
+
 // ReorderQuestions rewrites the sort_order of an issue's questions to match
 // the given ID order. The IDs must cover the issue's questions exactly — a
 // stale list (a question was added or removed meanwhile) is rejected whole
@@ -154,6 +171,10 @@ func (s *Store) ReorderQuestions(
 	if count != len(ids) {
 		return fmt.Errorf("reordering issue %d questions (%d ids for %d questions): %w",
 			issueID, len(ids), count, ErrOrderMismatch)
+	}
+
+	if err := checkUniqueIDs(ids); err != nil {
+		return fmt.Errorf("reordering issue %d questions: %w", issueID, err)
 	}
 
 	for i, id := range ids {

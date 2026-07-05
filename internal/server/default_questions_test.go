@@ -197,6 +197,13 @@ func TestManageDefaultQuestions(t *testing.T) {
 		`{"text": "What made you laugh out loud?"}`)))
 	require.Equal(t, http.StatusOK, editRR.Code, "reword: %s", editRR.Body.String())
 
+	// Rewording to another default's text is a validation error, not a 500.
+	dupEditRR := env.do(t, authed(newJSONRequest(http.MethodPatch,
+		fmt.Sprintf("/api/default-questions/%d", custom.ID),
+		fmt.Sprintf(`{"text": %q}`, defaults[0].Text))))
+	assert.Equal(t, http.StatusBadRequest, dupEditRR.Code,
+		"duplicate reword: %s", dupEditRR.Body.String())
+
 	// Reorder: move the custom default to the front.
 	ids := []string{fmt.Sprintf("%d", custom.ID)}
 	for _, dq := range defaults[:3] {
@@ -212,11 +219,18 @@ func TestManageDefaultQuestions(t *testing.T) {
 	assert.Equal(t, custom.ID, defaults[0].ID, "custom default now leads")
 	assert.Equal(t, "What made you laugh out loud?", defaults[0].Text, "reword persisted")
 
-	// A stale reorder list (missing an ID) is rejected whole.
+	// A stale reorder list (missing an ID) is rejected whole, and so is a
+	// list padding the count with a duplicate ID.
 	staleRR := env.do(t, authed(newJSONRequest(http.MethodPost,
 		"/api/default-questions/reorder",
 		fmt.Sprintf(`{"ids": [%d]}`, custom.ID))))
 	assert.Equal(t, http.StatusConflict, staleRR.Code, "partial order rejected")
+
+	dupRR2 := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/default-questions/reorder",
+		fmt.Sprintf(`{"ids": [%d, %d, %d, %d]}`,
+			custom.ID, custom.ID, defaults[0].ID, defaults[1].ID))))
+	assert.Equal(t, http.StatusConflict, dupRR2.Code, "duplicate IDs rejected")
 
 	// A fresh issue stitches the custom default in first.
 	createRR := env.do(t, authed(newJSONRequest(http.MethodPost,

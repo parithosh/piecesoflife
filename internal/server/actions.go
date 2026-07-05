@@ -32,14 +32,19 @@ const minReminderLead = 12 * time.Hour
 // scheduleIssueEvents queues a round's automated events: a reminder 3 days
 // before the deadline, a final "last chance" reminder 1 day before it (both
 // pinned to a mid-morning local hour and sent only to members who haven't
-// answered yet), and auto_close at the deadline. Reminder slots that are
-// already past — or less than minReminderLead away — are skipped. Failures
-// are logged, never returned: a round must not fail to open because a
-// reminder couldn't be queued.
+// answered yet), an admin_summary the day before publish (who's answered,
+// who hasn't), and auto_close at the deadline.
+//
+// Email slots that are already past — or less than minReminderLead away —
+// are skipped; the returned count says how many member reminders were
+// actually queued, so callers can compensate (the extend handler queues an
+// immediate nudge when none fit). Reminder/summary insert failures are
+// logged and skipped; a failed auto_close insert is returned, because a
+// round without one never closes or publishes.
 func (s *Server) scheduleIssueEvents(
 	ctx context.Context, settings *store.Settings, issueID int64,
 	deadline time.Time,
-) {
+) (remindersQueued int, err error) {
 	loc := s.settingsLocation(ctx, settings)
 	now := time.Now()
 
@@ -49,10 +54,11 @@ func (s *Server) scheduleIssueEvents(
 	}{
 		{"reminder_1", atLocalHour(deadline.AddDate(0, 0, -3), reminderLocalHour, loc)},
 		{"reminder_2", atLocalHour(deadline.AddDate(0, 0, -1), reminderLocalHour, loc)},
+		{"admin_summary", atLocalHour(deadline.AddDate(0, 0, -1), reminderLocalHour, loc)},
 		{"auto_close", deadline},
 	} {
 		if ev.eventType != "auto_close" && ev.scheduledAt.Before(now.Add(minReminderLead)) {
-			s.logger.InfoContext(ctx, "Skipping reminder with too little lead time",
+			s.logger.InfoContext(ctx, "Skipping scheduled email with too little lead time",
 				slog.Int64("issue_id", issueID),
 				slog.String("event_type", ev.eventType),
 				slog.Time("scheduled_at", ev.scheduledAt))
@@ -60,13 +66,26 @@ func (s *Server) scheduleIssueEvents(
 			continue
 		}
 
-		if err := s.store.CreateSchedulerEvent(ctx, &issueID, ev.eventType, ev.scheduledAt); err != nil {
+		if createErr := s.store.CreateSchedulerEvent(ctx, &issueID, ev.eventType, ev.scheduledAt); createErr != nil {
+			if ev.eventType == "auto_close" {
+				return remindersQueued, fmt.Errorf(
+					"queueing auto_close for issue %d: %w", issueID, createErr)
+			}
+
 			s.logger.ErrorContext(ctx, "Failed to create scheduler event",
 				slog.Int64("issue_id", issueID),
 				slog.String("event_type", ev.eventType),
-				slog.String("error", err.Error()))
+				slog.String("error", createErr.Error()))
+
+			continue
+		}
+
+		if strings.HasPrefix(ev.eventType, "reminder") {
+			remindersQueued++
 		}
 	}
+
+	return remindersQueued, nil
 }
 
 // mintEmailCTAToken creates an "email_cta" auth token for userID and returns
@@ -272,6 +291,141 @@ func (s *Server) SendReminderForIssue(
 	return nil
 }
 
+// SendAdminSummaryForIssue emails every admin a pre-publish roster — who
+// has answered and who hasn't — the day before the round closes, so they
+// can nudge stragglers or extend the deadline while it still matters.
+// Fired by the scheduler's admin_summary event; skips silently when the
+// round is no longer collecting (published early, or the deadline moved).
+func (s *Server) SendAdminSummaryForIssue(
+	ctx context.Context, issueID int64, schedulerEventID *int64,
+) error {
+	issue, err := s.store.GetIssueByID(ctx, issueID)
+	if err != nil {
+		return fmt.Errorf("loading issue %d: %w", issueID, err)
+	}
+
+	if issue.Status != "collecting" {
+		s.logger.InfoContext(ctx, "Admin summary skipped — issue is not collecting",
+			slog.Int64("issue_id", issueID),
+			slog.String("status", issue.Status))
+		return nil
+	}
+
+	settings, err := s.store.GetSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("loading settings: %w", err)
+	}
+
+	progress, err := s.store.GetSubmissionProgress(ctx, issueID)
+	if err != nil {
+		return fmt.Errorf("loading progress for issue %d: %w", issueID, err)
+	}
+
+	responded := make([]string, 0, len(progress.Members))
+	waiting := make([]string, 0, len(progress.Members))
+
+	for _, mp := range progress.Members {
+		if mp.Responded {
+			responded = append(responded, mp.User.Name)
+		} else {
+			waiting = append(waiting, mp.User.Name)
+		}
+	}
+
+	loc := s.settingsLocation(ctx, settings)
+	monthStr := formatDate(issue.OpensAt)
+	subject := fmt.Sprintf("%s — %s publishes tomorrow (%d/%d in)",
+		settings.LoopName, monthStr, progress.Responded, progress.TotalMembers)
+
+	users, err := s.store.ListActiveUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("listing users: %w", err)
+	}
+
+	for i := range users {
+		admin := &users[i]
+		if admin.Role != "admin" {
+			continue
+		}
+
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		var logID int64
+		if schedulerEventID != nil {
+			var shouldSend bool
+			logID, shouldSend, err = s.store.BeginSchedulerEmailAttempt(
+				ctx, *schedulerEventID, admin.ID, &issueID, "admin_summary",
+			)
+			if err != nil {
+				s.logger.ErrorContext(ctx, "Failed to reserve admin summary email log",
+					slog.Int64("user_id", admin.ID),
+					slog.String("error", err.Error()))
+				continue
+			}
+			if !shouldSend {
+				continue
+			}
+		} else {
+			logID, _ = s.store.LogEmail(ctx, &admin.ID, &issueID, "admin_summary", "pending", nil)
+		}
+
+		raw, err := s.mintEmailCTAToken(ctx, admin.ID)
+		if err != nil {
+			errStr := err.Error()
+			if logID > 0 {
+				_ = s.store.UpdateEmailLog(ctx, logID, "failed", nil, &errStr)
+			}
+			s.logger.ErrorContext(ctx, "Failed to mint admin summary token",
+				slog.Int64("user_id", admin.ID),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		body := s.renderEmail("admin_summary.html", map[string]any{
+			"LoopName":      settings.LoopName,
+			"RecipientName": admin.Name,
+			"Month":         monthStr,
+			"DeadlineDay":   formatDay(issue.Deadline.In(loc)),
+			"Responded":     responded,
+			"Waiting":       waiting,
+			"CTA": map[string]any{
+				"URL":   s.config.BaseURL + "/admin?auth=" + raw,
+				"Label": "Open the Loom",
+			},
+		})
+
+		sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		sendErr := s.emailer.Send(sendCtx, admin.Email, subject, body)
+		cancel()
+
+		if sendErr != nil {
+			errStr := sendErr.Error()
+			if logID > 0 {
+				_ = s.store.UpdateEmailLog(ctx, logID, "failed", nil, &errStr)
+			}
+			s.logger.ErrorContext(ctx, "Failed to send admin summary email",
+				slog.Int64("user_id", admin.ID),
+				slog.String("error", errStr))
+			continue
+		}
+
+		now := time.Now()
+		if logID > 0 {
+			_ = s.store.UpdateEmailLog(ctx, logID, "sent", &now, nil)
+		}
+	}
+
+	s.logger.InfoContext(ctx, "Admin summary sent",
+		slog.Int64("issue_id", issueID),
+		slog.Int("responded", progress.Responded),
+		slog.Int("total", progress.TotalMembers),
+	)
+
+	return nil
+}
+
 // AutoPublishIssue publishes an issue and sends the "published" notification
 // to all members who have the published preference enabled. Used by the
 // scheduler when an issue's auto_close event fires.
@@ -452,7 +606,11 @@ func (s *Server) openIssueForCollecting(
 	}
 
 	// Queue reminders and auto-close anchored to the deadline.
-	s.scheduleIssueEvents(ctx, settings, issue.ID, issue.Deadline)
+	if _, evErr := s.scheduleIssueEvents(ctx, settings, issue.ID, issue.Deadline); evErr != nil {
+		s.logger.ErrorContext(ctx, "Failed to schedule issue events — round will not auto-close; extend the deadline to requeue",
+			slog.Int64("issue_id", issue.ID),
+			slog.String("error", evErr.Error()))
+	}
 
 	// Send issue-open emails to every active member.
 	questions, _ := s.store.ListQuestionsByIssue(ctx, issue.ID)

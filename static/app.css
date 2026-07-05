@@ -676,6 +676,11 @@ dialog footer {
     color: var(--foreground);
 }
 
+.question-pick .q-tools button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
 /* ----------------------------------------------------------------- *
  * Dashboard hero (admin)
  * ----------------------------------------------------------------- */

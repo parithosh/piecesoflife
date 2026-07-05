@@ -93,8 +93,8 @@
                   <span data-dq-text>{{$dq.Text}}</span>
                 </label>
                 <div class="pl-qadmin-actions">
-                  <button type="button" class="pl-btn pl-btn--outline" data-dq-move="up" aria-label="Move up" {{if eq $idx 0}}disabled{{end}}>↑</button>
-                  <button type="button" class="pl-btn pl-btn--outline" data-dq-move="down" aria-label="Move down" {{if eq (add $idx 1) $count}}disabled{{end}}>↓</button>
+                  <button type="button" class="pl-btn pl-btn--outline" data-move="up" aria-label="Move up" {{if eq $idx 0}}disabled{{end}}>↑</button>
+                  <button type="button" class="pl-btn pl-btn--outline" data-move="down" aria-label="Move down" {{if eq (add $idx 1) $count}}disabled{{end}}>↓</button>
                   <button type="button" class="pl-btn pl-btn--outline" data-dq-edit>Edit</button>
                   <button type="button" class="pl-btn pl-btn--outline" data-dq-remove>Remove</button>
                 </div>
@@ -171,6 +171,7 @@
 {{end}}
 
 {{define "scripts"}}
+<script src="/static/reorder.js?v={{assetVersion}}"></script>
 <script>
 
 function setStatus(msg, ok) {
@@ -223,20 +224,14 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
         status.style.color = isError ? 'var(--sindoor)' : 'var(--peacock)';
     };
 
+    // Field-level messages first: validation responses always carry the
+    // generic "Invalid input" as message, so fields hold the useful text.
     const errorMessage = async (res, fallback) => {
         const data = await res.json().catch(() => ({}));
-        return data?.error?.message
-            || (data?.error?.fields && Object.values(data.error.fields)[0])
+        return (data?.error?.fields && Object.values(data.error.fields)[0])
+            || data?.error?.message
             || fallback;
     };
-
-    function refreshMoveChrome() {
-        const rows = [...list.querySelectorAll('.pl-dq-row')];
-        rows.forEach((r, i) => {
-            r.querySelector('[data-dq-move="up"]').disabled = i === 0;
-            r.querySelector('[data-dq-move="down"]').disabled = i === rows.length - 1;
-        });
-    }
 
     async function persistOrder() {
         const ids = [...list.querySelectorAll('.pl-dq-row')]
@@ -254,6 +249,11 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
             setTimeout(() => window.location.reload(), 1200);
         }
     }
+
+    const reorder = wireReorder(list, {
+        rowSelector: '.pl-dq-row',
+        persist: persistOrder,
+    });
 
     list.addEventListener('change', async ev => {
         const toggle = ev.target.closest('[data-dq-toggle]');
@@ -280,19 +280,6 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
     list.addEventListener('click', async ev => {
         const row = ev.target.closest('.pl-dq-row');
         if (!row) return;
-
-        const move = ev.target.closest('[data-dq-move]');
-        if (move) {
-            const sibling = move.dataset.dqMove === 'up'
-                ? row.previousElementSibling
-                : row.nextElementSibling;
-            if (!sibling) return;
-            if (move.dataset.dqMove === 'up') sibling.before(row);
-            else sibling.after(row);
-            refreshMoveChrome();
-            await persistOrder();
-            return;
-        }
 
         if (ev.target.closest('[data-dq-edit]')) {
             const textEl = row.querySelector('[data-dq-text]');
@@ -328,7 +315,7 @@ document.getElementById('test-email-btn').addEventListener('click', async functi
                 });
                 if (!res.ok) throw new Error(await errorMessage(res, 'Remove failed'));
                 row.remove();
-                refreshMoveChrome();
+                reorder.refresh();
                 setDqStatus('Question removed');
             } catch (err) {
                 setDqStatus(err.message, true);

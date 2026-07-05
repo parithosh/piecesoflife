@@ -1,0 +1,34 @@
+{{define "email_title"}}{{.LoopName}} — {{.Month}} publishes tomorrow{{end}}
+
+{{define "email_content"}}
+<p style="margin:0 0 8px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#0e6b6b;">The loom report</p>
+<h2 style="margin:0 0 16px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;color:#7a0f38;font-size:24px;">{{.Month}} publishes tomorrow</h2>
+<p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
+<p style="margin:0 0 16px;">
+  This round closes and publishes on <strong>{{.DeadlineDay}}</strong>.
+  Here's where everyone stands:
+</p>
+
+{{if .Responded}}
+<p style="margin:0 0 6px;color:#4f7042;"><strong>&#10003; Woven in ({{len .Responded}})</strong></p>
+<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#2a0e15;">
+  {{range .Responded}}<li style="margin:4px 0;">{{.}}</li>{{end}}
+</ul>
+{{end}}
+
+{{if .Waiting}}
+<p style="margin:0 0 6px;color:#c3362b;"><strong>&#9679; Still waiting ({{len .Waiting}})</strong></p>
+<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#2a0e15;">
+  {{range .Waiting}}<li style="margin:4px 0;">{{.}}</li>{{end}}
+</ul>
+<p style="margin:0 0 16px;">
+  You can nudge them, extend the deadline, or let the round publish as it is.
+</p>
+{{else}}
+<p style="margin:0 0 16px;color:#4f7042;">
+  Everyone has answered — this one is ready to go out.
+</p>
+{{end}}
+
+{{template "cta_button" .CTA}}
+{{end}}
