@@ -272,7 +272,9 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 		"What good thing happened this month?",
 		defaults[0].Text, "migration seeds the reworded prompts")
 
-	// The wizard keeps the first two defaults and switches the rest off.
+	// The wizard keeps the first two defaults (swapped into a new order),
+	// switches the third off, and promotes one hand-picked prompt to a
+	// global default.
 	body := fmt.Sprintf(`{
 		"admin_name": "Pari",
 		"loop_name": "Chaos Crew",
@@ -285,9 +287,12 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 			{"id": %d, "enabled": true}, {"id": %d, "enabled": true},
 			{"id": %d, "enabled": false}
 		],
-		"questions": [{"text": "A hand-picked prompt?", "category": null, "bank_id": null}],
+		"questions": [
+			{"text": "A hand-picked prompt?", "category": null, "bank_id": null},
+			{"text": "A keeper for every round?", "category": null, "bank_id": null, "make_default": true}
+		],
 		"invite_emails": []
-	}`, defaults[0].ID, defaults[1].ID, defaults[2].ID)
+	}`, defaults[1].ID, defaults[0].ID, defaults[2].ID)
 
 	req := newJSONRequest(http.MethodPost, "/api/onboarding/complete", body)
 	req.AddCookie(session)
@@ -302,9 +307,11 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 
 	enabled, err := env.store.ListEnabledDefaultQuestions(ctx)
 	require.NoError(t, err)
-	require.Len(t, enabled, 2, "wizard switches persist globally")
-	assert.Equal(t, defaults[0].Text, enabled[0].Text)
-	assert.Equal(t, defaults[1].Text, enabled[1].Text)
+	require.Len(t, enabled, 3, "wizard switches + promoted pick persist globally")
+	assert.Equal(t, defaults[1].Text, enabled[0].Text, "wizard order persisted")
+	assert.Equal(t, defaults[0].Text, enabled[1].Text, "wizard order persisted")
+	assert.Equal(t, "A keeper for every round?", enabled[2].Text,
+		"promoted pick joins the defaults")
 
 	issue, err := env.store.GetActiveIssue(ctx)
 	require.NoError(t, err)
@@ -313,6 +320,8 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 	require.NoError(t, err)
 	counts := countBySource(questions)
 	assert.Equal(t, 2, counts["default"], "only the kept defaults lead the first issue")
-	assert.Equal(t, "A hand-picked prompt?", questions[len(questions)-1].Text,
-		"admin's pick follows the defaults")
+	assert.Equal(t, defaults[1].Text, questions[0].Text,
+		"first issue follows the wizard's default order")
+	assert.Equal(t, "A keeper for every round?", questions[len(questions)-1].Text,
+		"promoted pick keeps its wizard position in the first issue")
 }

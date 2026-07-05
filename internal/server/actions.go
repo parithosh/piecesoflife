@@ -24,6 +24,51 @@ const (
 // emails stay valid.
 const emailCTATokenTTL = 30 * 24 * time.Hour
 
+// minReminderLead is the minimum head start a reminder needs to be worth
+// queueing. It keeps short windows from firing a reminder right after the
+// issue-open email, and late extensions from queueing already-past slots.
+const minReminderLead = 12 * time.Hour
+
+// scheduleIssueEvents queues a round's automated events: a reminder 3 days
+// before the deadline, a final "last chance" reminder 1 day before it (both
+// pinned to a mid-morning local hour and sent only to members who haven't
+// answered yet), and auto_close at the deadline. Reminder slots that are
+// already past — or less than minReminderLead away — are skipped. Failures
+// are logged, never returned: a round must not fail to open because a
+// reminder couldn't be queued.
+func (s *Server) scheduleIssueEvents(
+	ctx context.Context, settings *store.Settings, issueID int64,
+	deadline time.Time,
+) {
+	loc := s.settingsLocation(ctx, settings)
+	now := time.Now()
+
+	for _, ev := range []struct {
+		eventType   string
+		scheduledAt time.Time
+	}{
+		{"reminder_1", atLocalHour(deadline.AddDate(0, 0, -3), reminderLocalHour, loc)},
+		{"reminder_2", atLocalHour(deadline.AddDate(0, 0, -1), reminderLocalHour, loc)},
+		{"auto_close", deadline},
+	} {
+		if ev.eventType != "auto_close" && ev.scheduledAt.Before(now.Add(minReminderLead)) {
+			s.logger.InfoContext(ctx, "Skipping reminder with too little lead time",
+				slog.Int64("issue_id", issueID),
+				slog.String("event_type", ev.eventType),
+				slog.Time("scheduled_at", ev.scheduledAt))
+
+			continue
+		}
+
+		if err := s.store.CreateSchedulerEvent(ctx, &issueID, ev.eventType, ev.scheduledAt); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to create scheduler event",
+				slog.Int64("issue_id", issueID),
+				slog.String("event_type", ev.eventType),
+				slog.String("error", err.Error()))
+		}
+	}
+}
+
 // mintEmailCTAToken creates an "email_cta" auth token for userID and returns
 // the raw token to embed in an email link.
 func (s *Server) mintEmailCTAToken(ctx context.Context, userID int64) (string, error) {
@@ -355,9 +400,6 @@ func (s *Server) openIssueForCollecting(
 	ctx context.Context, settings *store.Settings, issue *store.Issue,
 	questionCount int,
 ) error {
-	loc := s.settingsLocation(ctx, settings)
-	now := time.Now().UTC()
-
 	existing, err := s.store.ListQuestionsByIssue(ctx, issue.ID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "Failed to list questions before opening issue",
@@ -409,25 +451,8 @@ func (s *Server) openIssueForCollecting(
 		return fmt.Errorf("opening issue %d for collecting: %w", issue.ID, err)
 	}
 
-	// Schedule reminder/auto-close events. Reminders are pinned to a
-	// mid-morning local hour on their respective days.
-	windowDuration := issue.Deadline.Sub(now)
-	events := []struct {
-		eventType   string
-		scheduledAt time.Time
-	}{
-		{"reminder_1", atLocalHour(now.Add(windowDuration/2), reminderLocalHour, loc)},
-		{"reminder_2", atLocalHour(issue.Deadline.AddDate(0, 0, -2), reminderLocalHour, loc)},
-		{"auto_close", issue.Deadline},
-	}
-	for _, ev := range events {
-		if err := s.store.CreateSchedulerEvent(ctx, &issue.ID, ev.eventType, ev.scheduledAt); err != nil {
-			s.logger.WarnContext(ctx, "Failed to schedule event for opened issue",
-				slog.Int64("issue_id", issue.ID),
-				slog.String("event_type", ev.eventType),
-				slog.String("error", err.Error()))
-		}
-	}
+	// Queue reminders and auto-close anchored to the deadline.
+	s.scheduleIssueEvents(ctx, settings, issue.ID, issue.Deadline)
 
 	// Send issue-open emails to every active member.
 	questions, _ := s.store.ListQuestionsByIssue(ctx, issue.ID)
@@ -449,7 +474,7 @@ func (s *Server) openIssueForCollecting(
 }
 
 // nextIssueOpensLabel returns a human-readable local timestamp for the queued
-// create_next_issue event ("Monday, Jul 6 at 9:00 AM"), or "" when nothing is
+// create_next_issue event ("Monday, 6 Jul at 9:00 AM"), or "" when nothing is
 // queued or auto-create is off. Lookup failures are logged and read as "not
 // scheduled" — this only feeds informational UI copy.
 func (s *Server) nextIssueOpensLabel(
@@ -471,7 +496,7 @@ func (s *Server) nextIssueOpensLabel(
 
 	loc := s.settingsLocation(ctx, settings)
 
-	return ev.ScheduledAt.In(loc).Format("Monday, Jan 2 at 3:04 PM")
+	return ev.ScheduledAt.In(loc).Format("Monday, 2 Jan at 3:04 PM")
 }
 
 // CreateNextIssue opens the next round when its scheduled time arrives.

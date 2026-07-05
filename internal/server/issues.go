@@ -307,29 +307,8 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Create scheduler events based on the deadline window. Reminders are
-	// pinned to a mid-morning hour in the loop's timezone.
-	evLoc := s.settingsLocation(r.Context(), settings)
-	windowDuration := deadline.Sub(opensAt)
-	reminder1At := atLocalHour(opensAt.Add(windowDuration/2), reminderLocalHour, evLoc)
-	reminder2At := atLocalHour(deadline.AddDate(0, 0, -2), reminderLocalHour, evLoc)
-
-	for _, ev := range []struct {
-		eventType   string
-		scheduledAt time.Time
-	}{
-		{"reminder_1", reminder1At},
-		{"reminder_2", reminder2At},
-		{"auto_close", deadline},
-	} {
-		if evErr := s.store.CreateSchedulerEvent(
-			r.Context(), &issueID, ev.eventType, ev.scheduledAt,
-		); evErr != nil {
-			s.logger.ErrorContext(r.Context(), "Failed to create scheduler event",
-				slog.String("event_type", ev.eventType),
-				slog.String("error", evErr.Error()))
-		}
-	}
+	// Queue reminders and auto-close anchored to the deadline.
+	s.scheduleIssueEvents(r.Context(), settings, issueID, deadline)
 
 	s.logger.InfoContext(r.Context(), "Issue created",
 		slog.Int64("issue_id", issueID),
@@ -574,27 +553,8 @@ func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", sErr.Error()))
 	}
 
-	evLoc := s.settingsLocation(r.Context(), extSettings)
-	windowDuration := newDeadline.Sub(issue.OpensAt)
-	reminder1At := atLocalHour(issue.OpensAt.Add(windowDuration/2), reminderLocalHour, evLoc)
-	reminder2At := atLocalHour(newDeadline.AddDate(0, 0, -2), reminderLocalHour, evLoc)
-
-	for _, ev := range []struct {
-		eventType   string
-		scheduledAt time.Time
-	}{
-		{"reminder_1", reminder1At},
-		{"reminder_2", reminder2At},
-		{"auto_close", newDeadline},
-	} {
-		if evErr := s.store.CreateSchedulerEvent(
-			r.Context(), &issueID, ev.eventType, ev.scheduledAt,
-		); evErr != nil {
-			s.logger.ErrorContext(r.Context(), "Failed to create scheduler event after extend",
-				slog.String("event_type", ev.eventType),
-				slog.String("error", evErr.Error()))
-		}
-	}
+	// Re-queue reminders and auto-close anchored to the new deadline.
+	s.scheduleIssueEvents(r.Context(), extSettings, issueID, newDeadline)
 
 	s.logger.InfoContext(r.Context(), "Issue deadline extended",
 		slog.Int64("issue_id", issueID),
@@ -1311,6 +1271,7 @@ func (s *Server) sendPublishNotifications(
 
 	monthStr := formatDate(issue.OpensAt)
 	subject := fmt.Sprintf("%s — %s is published!", settings.LoopName, monthStr)
+	issueURL := fmt.Sprintf("%s/issues/%d/%02d", s.config.BaseURL, issue.Year, issue.Month)
 
 	recipients := make([]email.BatchRecipient, 0, len(users))
 
@@ -1330,11 +1291,24 @@ func (s *Server) sendPublishNotifications(
 			continue
 		}
 
+		// Per-recipient magic link straight to the reading view — no
+		// login dance. If minting fails, fall back to the plain URL; the
+		// login page still gets them there.
+		readURL := issueURL
+
+		if raw, tokenErr := s.mintEmailCTAToken(ctx, u.ID); tokenErr == nil {
+			readURL = issueURL + "?auth=" + raw
+		} else {
+			s.logger.ErrorContext(ctx, "Failed to mint publish notification token",
+				slog.Int64("user_id", u.ID),
+				slog.String("error", tokenErr.Error()))
+		}
+
 		recipients = append(recipients, email.BatchRecipient{
 			UserID:    u.ID,
 			Email:     u.Email,
 			Subject:   subject,
-			HTMLBody:  s.renderPublishEmail(settings.LoopName, u.Name, monthStr),
+			HTMLBody:  s.renderPublishEmail(settings.LoopName, u.Name, monthStr, readURL),
 			IssueID:   &issue.ID,
 			EmailType: "published",
 		})
@@ -1410,13 +1384,15 @@ func questionTarget(settings *store.Settings, requested int) int {
 
 // renderPublishEmail builds the "issue published" notification via the
 // published.html template. html/template auto-escapes every field.
-func (s *Server) renderPublishEmail(loopName, recipientName, month string) string {
+func (s *Server) renderPublishEmail(
+	loopName, recipientName, month, readURL string,
+) string {
 	return s.renderEmail("published.html", map[string]any{
 		"LoopName":      loopName,
 		"RecipientName": recipientName,
 		"Month":         month,
 		"CTA": map[string]any{
-			"URL":   s.config.BaseURL + "/issues",
+			"URL":   readURL,
 			"Label": "Read the Issue",
 		},
 	})

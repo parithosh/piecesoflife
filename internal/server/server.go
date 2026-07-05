@@ -283,6 +283,7 @@ func (s *Server) registerRoutes() {
 func (s *Server) loadTemplates() {
 	funcMap := template.FuncMap{
 		"formatDate":     formatDate,
+		"formatDay":      formatDay,
 		"formatDateTime": formatDateTime,
 		"formatRelative": formatRelative,
 		"truncate":       truncate,
@@ -495,9 +496,11 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticated user: redirect based on role.
+	// Authenticated user: redirect based on role. Admins land on the
+	// issues page like everyone else — the Loom is a deliberate visit via
+	// the nav, not the default destination of every login link.
 	if user.Role == "admin" {
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		http.Redirect(w, r, "/issues", http.StatusSeeOther)
 	} else {
 		if activeIssue, activeErr := s.store.GetActiveIssue(r.Context()); activeErr == nil &&
 			activeIssue.Status == "collecting" {
@@ -607,8 +610,13 @@ func formatDate(t time.Time) string {
 	return t.Format("January 2006")
 }
 
+// formatDay renders a calendar date in international day-first order.
+func formatDay(t time.Time) string {
+	return t.Format("02/01/2006")
+}
+
 func formatDateTime(t time.Time) string {
-	return t.Format("Jan 2, 2006 at 3:04 PM")
+	return t.Format("02/01/2006 at 15:04")
 }
 
 func formatRelative(t time.Time) string {

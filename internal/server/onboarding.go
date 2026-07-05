@@ -99,6 +99,9 @@ type onboardingQuestion struct {
 	Text     string  `json:"text"`
 	Category *string `json:"category"`
 	BankID   *int64  `json:"bank_id"`
+	// MakeDefault also saves this pick as a global default question, so it
+	// is stitched into every future issue rather than just the first one.
+	MakeDefault bool `json:"make_default"`
 }
 
 // onboardingDefaultQuestion carries the wizard's global on/off choice for
@@ -267,6 +270,22 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// The wizard's list order is the admin's chosen order — persist it
+	// globally so future issues stitch the defaults in the same sequence.
+	// Best-effort: a stale list (e.g. a retry after a pick was promoted to
+	// a default) must not block the launch.
+	if len(req.DefaultQuestions) > 0 {
+		ids := make([]int64, 0, len(req.DefaultQuestions))
+		for _, dq := range req.DefaultQuestions {
+			ids = append(ids, dq.ID)
+		}
+
+		if err := s.store.ReorderDefaultQuestions(ctx, ids); err != nil {
+			s.logger.WarnContext(ctx, "Failed to apply default question order from wizard",
+				slog.String("error", err.Error()))
+		}
+	}
+
 	// Step 3: Mark chosen bank questions as used. Idempotent (UPDATE WHERE id=).
 	for _, q := range req.Questions {
 		if q.BankID != nil {
@@ -311,20 +330,59 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	// Enabled default questions lead the first round; the admin's picks follow.
 	numDefaults := s.insertDefaultQuestions(ctx, issueID, 0)
 
-	for i, q := range req.Questions {
+	// A retried wizard may have already promoted picks to global defaults
+	// (Step 6b) — insertDefaultQuestions just stitched those in, so skip
+	// re-inserting them as picks.
+	alreadyInserted := make(map[string]bool, numDefaults)
+	if inserted, listErr := s.store.ListQuestionsByIssue(ctx, issueID); listErr == nil {
+		for _, q := range inserted {
+			alreadyInserted[strings.TrimSpace(q.Text)] = true
+		}
+	}
+
+	sortOrder := numDefaults
+
+	for _, q := range req.Questions {
+		if alreadyInserted[strings.TrimSpace(q.Text)] {
+			continue
+		}
+
 		source := "bank"
 		if q.BankID == nil {
 			source = "friend"
 		}
 
 		if _, err := s.store.CreateQuestion(
-			ctx, issueID, q.Text, q.Category, source, nil, numDefaults+i,
+			ctx, issueID, q.Text, q.Category, source, nil, sortOrder,
 		); err != nil {
 			s.logger.ErrorContext(ctx, "Failed to create question",
 				slog.String("text", q.Text),
 				slog.String("error", err.Error()))
 			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create question")
 			return
+		}
+
+		sortOrder++
+	}
+
+	// Step 6b: Promote flagged picks to global default questions so every
+	// future issue carries them. Duplicate text means an existing default
+	// (or a previous attempt) already covers it — not an error.
+	for _, q := range req.Questions {
+		if !q.MakeDefault {
+			continue
+		}
+
+		text := strings.TrimSpace(q.Text)
+		if text == "" {
+			continue
+		}
+
+		if _, err := s.store.CreateDefaultQuestion(ctx, text); err != nil &&
+			!strings.Contains(err.Error(), "UNIQUE") {
+			s.logger.WarnContext(ctx, "Failed to save wizard pick as default question",
+				slog.String("text", text),
+				slog.String("error", err.Error()))
 		}
 	}
 
@@ -340,28 +398,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	windowDays := time.Duration(req.SubmissionWindowDays) * 24 * time.Hour
-	reminder1At := utcStart.Add(windowDays / 2)
-	reminder2At := deadline.Add(-2 * 24 * time.Hour)
-
-	for _, ev := range []struct {
-		eventType   string
-		scheduledAt time.Time
-	}{
-		{"reminder_1", reminder1At},
-		{"reminder_2", reminder2At},
-		{"auto_close", deadline},
-	} {
-		if err := s.store.CreateSchedulerEvent(
-			ctx, &issueID, ev.eventType, ev.scheduledAt,
-		); err != nil {
-			s.logger.ErrorContext(ctx, "Failed to create scheduler event",
-				slog.String("event_type", ev.eventType),
-				slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create scheduler event")
-			return
-		}
-	}
+	s.scheduleIssueEvents(ctx, settings, issueID, deadline)
 
 	// Step 8: Invite friends. Each invite self-guards against existing
 	// active users, so retries don't create duplicates at the user level.

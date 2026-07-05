@@ -791,3 +791,87 @@ func TestLiveQuestionEditing(t *testing.T) {
 	assert.Contains(t, dash.Body.String(), "1 member already answered")
 	assert.Contains(t, dash.Body.String(), "Integration question 1, reworded?")
 }
+
+// TestReminderScheduleAnchorsToDeadline locks in the reminder cadence: a
+// reminder 3 days before the deadline, a final one 1 day before, both at a
+// mid-morning local hour, and auto_close at the deadline. Short windows
+// drop reminder slots that would fire with less than half a day's notice.
+func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
+	require.NoError(t, err, "create admin")
+	session := env.sessionCookie(t, adminID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	authed := func(req *http.Request) *http.Request {
+		req.AddCookie(session)
+		req.AddCookie(csrfCookie)
+		req.Header.Set("X-CSRF-Token", csrfHeader)
+		return req
+	}
+
+	// pendingFor collects the unfired events of one issue, keyed by type.
+	pendingFor := func(issueID int64) map[string]time.Time {
+		events, err := env.store.GetPendingEvents(ctx)
+		require.NoError(t, err)
+
+		byType := make(map[string]time.Time)
+		for _, ev := range events {
+			if ev.IssueID != nil && *ev.IssueID == issueID {
+				byType[ev.EventType] = ev.ScheduledAt
+			}
+		}
+
+		return byType
+	}
+
+	// Default 7-day window: both reminders fit.
+	createRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/issues", `{"title": "Round one"}`)))
+	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
+
+	issue, err := env.store.GetActiveIssue(ctx)
+	require.NoError(t, err)
+
+	events := pendingFor(issue.ID)
+	require.Contains(t, events, "reminder_1", "7-day window keeps the 3-days-out reminder")
+	require.Contains(t, events, "reminder_2", "7-day window keeps the last-chance reminder")
+	require.Contains(t, events, "auto_close")
+
+	// The seeded loop timezone is UTC.
+	deadline := issue.Deadline.In(time.UTC)
+	r1 := events["reminder_1"].In(time.UTC)
+	r2 := events["reminder_2"].In(time.UTC)
+
+	assert.Equal(t, deadline.AddDate(0, 0, -3).Format("2006-01-02"), r1.Format("2006-01-02"),
+		"reminder_1 lands 3 days before the deadline")
+	assert.Equal(t, deadline.AddDate(0, 0, -1).Format("2006-01-02"), r2.Format("2006-01-02"),
+		"reminder_2 lands 1 day before the deadline")
+	assert.Equal(t, 10, r1.Hour(), "reminders fire mid-morning local time")
+	assert.Equal(t, 10, r2.Hour(), "reminders fire mid-morning local time")
+	assert.True(t, events["auto_close"].Equal(issue.Deadline), "auto_close at the deadline")
+
+	// A 3-day window puts the 3-days-out slot at (or before) the open —
+	// it is dropped; the last-chance reminder survives.
+	setRR := env.do(t, authed(newJSONRequest(http.MethodPatch,
+		"/api/admin/settings", `{"submission_window_days": 3}`)))
+	require.Equal(t, http.StatusOK, setRR.Code, "settings: %s", setRR.Body.String())
+
+	pubRR := env.do(t, authed(httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/publish", issue.ID), nil)))
+	require.Equal(t, http.StatusOK, pubRR.Code, "publish: %s", pubRR.Body.String())
+
+	shortRR := env.do(t, authed(newJSONRequest(http.MethodPost,
+		"/api/issues", `{"title": "Short round"}`)))
+	require.Equal(t, http.StatusCreated, shortRR.Code, "create short: %s", shortRR.Body.String())
+
+	short, err := env.store.GetActiveIssue(ctx)
+	require.NoError(t, err)
+
+	events = pendingFor(short.ID)
+	assert.NotContains(t, events, "reminder_1", "3-day window drops the 3-days-out reminder")
+	require.Contains(t, events, "reminder_2", "last-chance reminder survives a short window")
+	require.Contains(t, events, "auto_close")
+}

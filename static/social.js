@@ -296,7 +296,7 @@
             if (diffHr < 24) return `${diffHr}h ago`;
             const diffDay = Math.floor(diffHr / 24);
             if (diffDay < 7) return `${diffDay}d ago`;
-            return d.toLocaleDateString();
+            return d.toLocaleDateString('en-GB'); // DD/MM/YYYY
         } catch {
             return iso;
         }

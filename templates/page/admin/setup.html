@@ -88,6 +88,7 @@
             <div class="field">
                 <label for="start-datetime">First issue opens at</label>
                 <input type="datetime-local" id="start-datetime" required>
+                <span class="helper" id="start-datetime-echo"></span>
                 <span class="error" data-error="start_datetime"></span>
             </div>
         </div>
@@ -100,7 +101,8 @@
         <p class="step-help">
             Every issue starts with the default questions below — untick any
             you don't want. Then pick a few more prompts for the first issue,
-            edit them, or write your own.
+            edit them, or write your own. Use ↑↓ to set the order, and hit
+            ☆ on a pick to make it a default in every future issue too.
         </p>
 
         <div class="field">
@@ -123,6 +125,10 @@
                         <input type="checkbox" class="dq-check" data-dq-id="{{.ID}}"
                                {{if .Enabled}}checked{{end}}>
                         <span class="q-cat">default</span>
+                        <span class="q-tools">
+                            <button type="button" class="q-move" data-move="up" aria-label="Move up">↑</button>
+                            <button type="button" class="q-move" data-move="down" aria-label="Move down">↓</button>
+                        </span>
                     </div>
                     <span style="padding:var(--space-2) 0;">{{.Text}}</span>
                 </label>
@@ -177,6 +183,18 @@
     let currentStep = 1;
     const totalSteps = 4;
 
+    // The native datetime-local widget renders in the OS locale (often
+    // MM/DD) — restate the choice in unambiguous DD/MM/YYYY below it.
+    function echoStartDate() {
+        const el = document.getElementById('start-datetime-echo');
+        const v = document.getElementById('start-datetime').value;
+        const d = v ? new Date(v) : null;
+        if (!d || isNaN(d)) { el.textContent = ''; return; }
+        const pad = n => String(n).padStart(2, '0');
+        el.textContent = `Opens ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} at ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    document.getElementById('start-datetime').addEventListener('input', echoStartDate);
+
     // Prefill start datetime to tomorrow 09:00 local so the field is never
     // empty on submit. datetime-local needs "YYYY-MM-DDTHH:MM" with no tz.
     (function prefillStart() {
@@ -186,6 +204,7 @@
         const pad = n => String(n).padStart(2, '0');
         const v = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
         document.getElementById('start-datetime').value = v;
+        echoStartDate();
     })();
 
     // Best-effort default timezone from the browser.
@@ -233,11 +252,47 @@
             <div style="display:flex;align-items:center;gap:var(--space-2);">
                 <input type="checkbox" class="q-check" checked>
                 <span class="q-cat">${q.category || 'custom'}</span>
+                <span class="q-tools">
+                    <button type="button" class="q-default" title="Also make this a default question in every future issue">☆ default</button>
+                    <button type="button" class="q-move" data-move="up" aria-label="Move up">↑</button>
+                    <button type="button" class="q-move" data-move="down" aria-label="Move down">↓</button>
+                </span>
             </div>
             <input type="text" class="q-text" value="${(q.text || '').replace(/"/g, '&quot;')}" placeholder="Type your question...">
         `;
         return div;
     }
+
+    // Row tools, delegated per list: ↑↓ move the row (order is submitted
+    // as-is), ☆ flags a pick to also become a global default question.
+    // preventDefault keeps the buttons from toggling the row's checkbox
+    // through the wrapping <label>.
+    function wireRowTools(list) {
+        list.addEventListener('click', ev => {
+            const btn = ev.target.closest('.q-move, .q-default');
+            if (!btn) return;
+            ev.preventDefault();
+
+            const row = btn.closest('.question-pick');
+
+            if (btn.classList.contains('q-default')) {
+                const on = row.dataset.makeDefault === '1';
+                row.dataset.makeDefault = on ? '' : '1';
+                btn.classList.toggle('is-on', !on);
+                btn.textContent = on ? '☆ default' : '★ default';
+                return;
+            }
+
+            const sibling = btn.dataset.move === 'up'
+                ? row.previousElementSibling
+                : row.nextElementSibling;
+            if (!sibling || !sibling.classList.contains('question-pick')) return;
+            if (btn.dataset.move === 'up') sibling.before(row);
+            else sibling.after(row);
+        });
+    }
+    wireRowTools(document.getElementById('default-question-list'));
+    wireRowTools(document.getElementById('question-list'));
 
     function wireQuestionRows() {
         document.querySelectorAll('.question-pick .q-check').forEach(cb => {
@@ -328,6 +383,7 @@
                     text,
                     category: null,
                     bank_id: row.dataset.bankId ? parseInt(row.dataset.bankId) : null,
+                    make_default: row.dataset.makeDefault === '1',
                 });
             }
         });

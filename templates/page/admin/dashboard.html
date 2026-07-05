@@ -94,7 +94,7 @@
           <div class="pl-stat">
             <p class="pl-eyebrow">Started</p>
             <div class="pl-stat-val">{{formatDate .CurrentIssue.OpensAt}}</div>
-            {{if .CurrentIssue.Deadline}}<p class="pl-stat-sub">Deadline {{formatDate .CurrentIssue.Deadline}}</p>{{end}}
+            {{if .CurrentIssue.Deadline}}<p class="pl-stat-sub">Deadline {{formatDay .CurrentIssue.Deadline}}</p>{{end}}
           </div>
         </div>
 
@@ -609,7 +609,7 @@ document.querySelector('[data-extend-trigger]')?.addEventListener('click', async
 
     const newDeadline = new Date(current.getTime() + days * 86400000);
     const scary = `⚠ This delays the issue for EVERYONE.\n\n` +
-        `New deadline: ${newDeadline.toLocaleString()}\n` +
+        `New deadline: ${newDeadline.toLocaleString('en-GB')}\n` +
         `Reminder emails will be rescheduled around the new date.\n\nExtend by ${days} day${days === 1 ? '' : 's'}?`;
     if (!confirm(scary)) return;
 

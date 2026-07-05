@@ -363,7 +363,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	} else if draft != nil {
 		nextIssue = draft
 		loc := s.settingsLocation(ctx, settings)
-		nextIssueOpens = draft.OpensAt.In(loc).Format("Monday, Jan 2")
+		nextIssueOpens = draft.OpensAt.In(loc).Format("Monday, 2 Jan")
 	}
 
 	// Honor ?q=N deep links server-side so the correct question renders
