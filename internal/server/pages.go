@@ -121,7 +121,7 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	publishedStatus := "published"
-	issues, err := s.store.ListIssues(ctx, &publishedStatus)
+	issues, err := s.store.ListIssues(ctx, currentGroupID(ctx), &publishedStatus)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list issues",
 			slog.String("error", err.Error()))
@@ -145,7 +145,7 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var currentCard *CurrentIssueCard
-	if currentIssue, activeErr := s.store.GetActiveIssue(ctx); activeErr == nil &&
+	if currentIssue, activeErr := s.store.GetActiveIssue(ctx, currentGroupID(ctx)); activeErr == nil &&
 		currentIssue.Status == "collecting" {
 		questions, qErr := s.store.ListQuestionsByIssue(ctx, currentIssue.ID)
 		if qErr != nil {
@@ -188,10 +188,7 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := IssueArchiveData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData:       s.newPageData(r),
 		CurrentIssue:   currentCard,
 		Issues:         cards,
 		NextIssueOpens: nextIssueOpens,
@@ -223,7 +220,6 @@ func publishedBlockRank(blockType string) int {
 // GET /issues/{year}/{month}
 func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	user := UserFromContext(ctx)
 
 	yearStr := r.PathValue("year")
 	monthStr := r.PathValue("month")
@@ -240,8 +236,8 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the issue matching year/month among all published issues.
-	allIssues, err := s.store.ListIssues(ctx, nil)
+	// Find the issue matching year/month among this Loop's published issues.
+	allIssues, err := s.store.ListIssues(ctx, currentGroupID(ctx), nil)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list issues",
 			slog.String("error", err.Error()))
@@ -357,7 +353,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	// suggestions while the current issue is fresh in their minds.
 	var nextIssue *store.Issue
 	var nextIssueOpens string
-	if draft, dErr := s.store.GetUpcomingDraftIssue(ctx); dErr != nil {
+	if draft, dErr := s.store.GetUpcomingDraftIssue(ctx, currentGroupID(ctx)); dErr != nil {
 		s.logger.WarnContext(ctx, "Failed to look up upcoming draft for issue page",
 			slog.String("error", dErr.Error()))
 	} else if draft != nil {
@@ -383,10 +379,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := IssuePageData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData:       s.newPageData(r),
 		Issue:          *targetIssue,
 		Questions:      questions,
 		Responses:      responses,
@@ -430,11 +423,6 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 	// Only allow responding to issues that are actively collecting.
 	if issue.Status != "collecting" {
 		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
 		return
 	}
 
@@ -514,10 +502,7 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := RespondPageData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData:  s.newPageData(r),
 		Issue:     *issue,
 		Questions: questions,
 		Responses: responseMap,
@@ -534,38 +519,15 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 // handleAlbumsPage renders the photo albums page.
 // GET /albums
 func (s *Server) handleAlbumsPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := UserFromContext(ctx)
-
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
-		return
-	}
-
-	data := PageData{
-		User:     user,
-		Settings: settings,
-	}
-
-	s.renderPage(w, "albums.html", data)
+	s.renderPage(w, "albums.html", s.newPageData(r))
 }
 
 // handleProfilePage renders the current user's profile page.
 // GET /profile
 func (s *Server) handleProfilePage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := UserFromContext(ctx)
-
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
-		return
-	}
 
 	data := ProfilePageData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData: s.newPageData(r),
 	}
 
 	s.renderPage(w, "profile.html", data)
@@ -597,7 +559,7 @@ func (s *Server) handleUploadServe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	users, err := s.store.ListActiveUsers(ctx)
+	users, err := s.store.ListActiveGroupMembers(ctx, currentGroupID(ctx))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list users",
 			slog.String("error", err.Error()))
@@ -605,7 +567,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ListResponse[store.User]{
+	writeJSON(w, http.StatusOK, ListResponse[store.GroupMember]{
 		Items:   users,
 		Total:   len(users),
 		Page:    1,
@@ -624,8 +586,9 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Members may only update their own profile; admins may update any.
-	if caller.Role != "admin" && caller.ID != userID {
+	// Members may only update their own profile; Loop admins may update any
+	// member of their Loop.
+	if caller.ID != userID && !s.isGroupAdminOver(ctx, userID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot update another user's profile")
 		return
 	}
@@ -694,7 +657,7 @@ func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Members may only view their own preferences.
-	if caller.Role != "admin" && caller.ID != userID {
+	if caller.ID != userID && !s.isGroupAdminOver(ctx, userID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot view another user's preferences")
 		return
 	}
@@ -723,7 +686,7 @@ func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Members may only update their own preferences.
-	if caller.Role != "admin" && caller.ID != userID {
+	if caller.ID != userID && !s.isGroupAdminOver(ctx, userID) {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot update another user's preferences")
 		return
 	}
@@ -794,11 +757,6 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
-		return
-	}
-
 	resp, err := s.store.GetResponseByID(ctx, responseID)
 	if err != nil {
 		http.NotFound(w, r)
@@ -822,17 +780,44 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Access control: public memento only if the admin has enabled it AND
-	// the viewer is anonymous. Logged-in members always see their group's
-	// content via the usual auth middleware (but we bypass that to support
-	// the anonymous path, so enforce it here).
-	viewer := s.lookupSessionUser(r)
-	isPublic := viewer == nil
+	// This route is public (no auth middleware), so settings come from the
+	// owning issue's Loop, not a session's current one.
+	settings, err := s.store.GetSettings(ctx, issue.GroupID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to load settings for memento",
+			slog.Int64("group_id", issue.GroupID),
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 
-	if isPublic && !settings.AllowPublicMementos {
-		// Admin has disabled public mementos — require login.
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
+	}
+
+	// Access control: a signed-in member of the owning Loop (or an instance
+	// admin) always may view. Anyone else counts as a public visitor, which
+	// requires the Loop's public-memento switch AND the instance policy.
+	viewer := s.lookupSessionUser(r)
+
+	isMember := false
+	if viewer != nil {
+		if viewer.IsInstanceAdmin {
+			isMember = true
+		} else if m, mErr := s.store.GetMembership(ctx, issue.GroupID, viewer.ID); mErr == nil &&
+			m.IsActive {
+			isMember = true
+		}
+	}
+
+	if !isMember {
+		publicAllowed := settings.AllowPublicMementos
+
+		if inst, iErr := s.store.GetInstanceSettings(ctx); iErr == nil {
+			publicAllowed = publicAllowed && inst.AllowPublicMementos
+		}
+
+		if !publicAllowed {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
 	}
 
 	blocks, err := s.store.ListBlocksByResponse(ctx, responseID)
@@ -880,7 +865,7 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		OGTitle:       ogTitle,
 		OGDescription: ogDesc,
 		OGImage:       ogImage,
-		Public:        isPublic,
+		Public:        !isMember,
 	}
 
 	s.renderPage(w, "memento.html", data)
@@ -907,11 +892,6 @@ func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
-		return
-	}
-
 	resp, err := s.store.GetResponseByID(ctx, responseID)
 	if err != nil || resp.IsDraft {
 		http.NotFound(w, r)
@@ -930,10 +910,37 @@ func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	viewer := s.lookupSessionUser(r)
-	if viewer == nil && !settings.AllowPublicMementos {
-		http.NotFound(w, r)
+	settings, err := s.store.GetSettings(ctx, issue.GroupID)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
+	}
+
+	// Mirror handleMemento: Loop members and instance admins pass; anyone
+	// else needs public mementos allowed by both the Loop and the instance.
+	viewer := s.lookupSessionUser(r)
+
+	isMember := false
+	if viewer != nil {
+		if viewer.IsInstanceAdmin {
+			isMember = true
+		} else if m, mErr := s.store.GetMembership(ctx, issue.GroupID, viewer.ID); mErr == nil &&
+			m.IsActive {
+			isMember = true
+		}
+	}
+
+	if !isMember {
+		publicAllowed := settings.AllowPublicMementos
+
+		if inst, iErr := s.store.GetInstanceSettings(ctx); iErr == nil {
+			publicAllowed = publicAllowed && inst.AllowPublicMementos
+		}
+
+		if !publicAllowed {
+			http.NotFound(w, r)
+			return
+		}
 	}
 
 	blocks, err := s.store.ListBlocksByResponse(ctx, responseID)
@@ -1047,7 +1054,7 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	publishedStatus := "published"
-	issues, err := s.store.ListIssues(ctx, &publishedStatus)
+	issues, err := s.store.ListIssues(ctx, currentGroupID(ctx), &publishedStatus)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list published issues for albums",
 			slog.String("error", err.Error()))

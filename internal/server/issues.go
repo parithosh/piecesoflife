@@ -28,7 +28,7 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		statusFilter = &v
 	}
 
-	issues, err := s.store.ListIssues(r.Context(), statusFilter)
+	issues, err := s.store.ListIssues(r.Context(), currentGroupID(r.Context()), statusFilter)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to list issues",
 			slog.String("error", err.Error()))
@@ -97,7 +97,9 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	settings, err := s.store.GetSettings(r.Context())
+	groupID := currentGroupID(r.Context())
+
+	settings, err := s.store.GetSettings(r.Context(), groupID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to load settings",
 			slog.String("error", err.Error()))
@@ -185,7 +187,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hasActive, err := s.store.HasActiveIssue(r.Context())
+	hasActive, err := s.store.HasActiveIssue(r.Context(), groupID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to check for active issue",
 			slog.String("error", err.Error()))
@@ -203,7 +205,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	// If the next round already exists as a pre-created draft, "create"
 	// means "start it now": pull its schedule forward and open it, keeping
 	// any question suggestions members already sent it.
-	if draft, dErr := s.store.GetUpcomingDraftIssue(r.Context()); dErr != nil {
+	if draft, dErr := s.store.GetUpcomingDraftIssue(r.Context(), groupID); dErr != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to check for upcoming draft",
 			slog.String("error", dErr.Error()))
 	} else if draft != nil {
@@ -255,7 +257,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issueID, err := s.store.CreateIssue(
-		r.Context(), req.Title, req.Month, req.Year, opensAt, deadline,
+		r.Context(), groupID, req.Title, req.Month, req.Year, opensAt, deadline,
 	)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to create issue",
@@ -273,13 +275,13 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Default questions lead the round and count toward the total target;
 	// the bank only pads the shortfall.
-	numDefaults := s.insertDefaultQuestions(r.Context(), issueID, 0)
+	numDefaults := s.insertDefaultQuestions(r.Context(), groupID, issueID, 0)
 
 	questionCount := questionTarget(settings, req.QuestionCount) - numDefaults
 
 	var bankQuestions []store.QuestionBank
 	if questionCount > 0 {
-		bankQuestions, err = s.store.SelectRandomUnusedQuestions(r.Context(), questionCount)
+		bankQuestions, err = s.store.SelectRandomUnusedQuestions(r.Context(), groupID, questionCount)
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "Failed to select bank questions",
 				slog.Int64("issue_id", issueID),
@@ -431,15 +433,15 @@ func (s *Server) handlePublishIssue(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 	}
 
-	// Gather active users for notification.
-	users, err := s.store.ListActiveUsers(r.Context())
+	// Gather active members for notification.
+	members, err := s.store.ListActiveGroupMembers(r.Context(), issue.GroupID)
 	if err != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to list active users for publish notification",
+		s.logger.ErrorContext(r.Context(), "Failed to list active members for publish notification",
 			slog.Int64("issue_id", issueID),
 			slog.String("error", err.Error()))
 	}
 
-	settings, err := s.store.GetSettings(r.Context())
+	settings, err := s.store.GetSettings(r.Context(), issue.GroupID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to get settings for publish notification",
 			slog.String("error", err.Error()))
@@ -463,7 +465,7 @@ func (s *Server) handlePublishIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detach the context so the publish batch survives the HTTP request.
-	go s.sendPublishNotifications(context.WithoutCancel(r.Context()), updatedIssue, users, settings)
+	go s.sendPublishNotifications(context.WithoutCancel(r.Context()), updatedIssue, members, settings)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issue":                    updatedIssue,
@@ -551,7 +553,7 @@ func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 	}
 
-	extSettings, sErr := s.store.GetSettings(r.Context())
+	extSettings, sErr := s.store.GetSettings(r.Context(), issue.GroupID)
 	if sErr != nil {
 		s.logger.WarnContext(r.Context(), "Failed to load settings for extend — using UTC",
 			slog.String("error", sErr.Error()))
@@ -874,7 +876,8 @@ func (s *Server) handleEditQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.store.GetQuestionByID(r.Context(), questionID); err != nil {
+	question, err := s.store.GetQuestionByID(r.Context(), questionID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "not_found", "Question not found")
 			return
@@ -888,6 +891,10 @@ func (s *Server) handleEditQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, ok := s.requireIssue(w, r, question.IssueID); !ok {
+		return
+	}
+
 	if err := s.store.UpdateQuestion(r.Context(), questionID, req.Text); err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to update question",
 			slog.Int64("question_id", questionID),
@@ -897,7 +904,7 @@ func (s *Server) handleEditQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	question, err := s.store.GetQuestionByID(r.Context(), questionID)
+	question, err = s.store.GetQuestionByID(r.Context(), questionID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to fetch updated question",
 			slog.Int64("question_id", questionID),
@@ -976,7 +983,8 @@ func (s *Server) handleDeleteQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.store.GetQuestionByID(r.Context(), questionID); err != nil {
+	question, err := s.store.GetQuestionByID(r.Context(), questionID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "not_found", "Question not found")
 			return
@@ -987,6 +995,10 @@ func (s *Server) handleDeleteQuestion(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
 
+		return
+	}
+
+	if _, ok := s.requireIssue(w, r, question.IssueID); !ok {
 		return
 	}
 
@@ -1109,7 +1121,7 @@ func (s *Server) handleListQuestionBank(w http.ResponseWriter, r *http.Request) 
 	}
 
 	questions, total, err := s.store.ListQuestionBank(
-		r.Context(), category, used, pg.Page, pg.PerPage,
+		r.Context(), currentGroupID(r.Context()), category, used, pg.Page, pg.PerPage,
 	)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to list question bank",
@@ -1157,7 +1169,8 @@ func (s *Server) handleCreateBankQuestion(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	questionID, err := s.store.CreateBankQuestion(r.Context(), req.Text, req.Category)
+	questionID, err := s.store.CreateBankQuestion(
+		r.Context(), currentGroupID(r.Context()), req.Text, req.Category)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to create bank question",
 			slog.String("error", err.Error()))
@@ -1208,7 +1221,8 @@ func (s *Server) handleEditBankQuestion(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := s.store.UpdateBankQuestion(r.Context(), questionID, req.Text, req.Category); err != nil {
+	if err := s.store.UpdateBankQuestion(r.Context(),
+		currentGroupID(r.Context()), questionID, req.Text, req.Category); err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to update bank question",
 			slog.Int64("question_id", questionID),
 			slog.String("error", err.Error()))
@@ -1232,7 +1246,8 @@ func (s *Server) handleDeleteBankQuestion(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := s.store.DeleteBankQuestion(r.Context(), questionID); err != nil {
+	if err := s.store.DeleteBankQuestion(r.Context(),
+		currentGroupID(r.Context()), questionID); err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to delete bank question",
 			slog.Int64("question_id", questionID),
 			slog.String("error", err.Error()))
@@ -1282,7 +1297,7 @@ func (s *Server) enrichResponsesWithBlocks(
 func (s *Server) sendPublishNotifications(
 	ctx context.Context,
 	issue *store.Issue,
-	users []store.User,
+	members []store.GroupMember,
 	settings *store.Settings,
 ) {
 	if settings == nil {
@@ -1293,12 +1308,16 @@ func (s *Server) sendPublishNotifications(
 
 	monthStr := formatDate(issue.OpensAt)
 	subject := fmt.Sprintf("%s — %s is published!", settings.LoopName, monthStr)
-	issueURL := fmt.Sprintf("%s/issues/%d/%02d", s.config.BaseURL, issue.Year, issue.Month)
 
-	recipients := make([]email.BatchRecipient, 0, len(users))
+	// The year/month reading URL is ambiguous across Loops, so it always
+	// carries ?g= — with the per-user auth token when minting succeeds.
+	issueURL := fmt.Sprintf("%s/issues/%d/%02d?g=%d",
+		s.config.BaseURL, issue.Year, issue.Month, issue.GroupID)
 
-	for i := range users {
-		u := &users[i]
+	recipients := make([]email.BatchRecipient, 0, len(members))
+
+	for i := range members {
+		u := &members[i]
 
 		prefs, err := s.store.GetNotificationPreferences(ctx, u.ID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -1319,7 +1338,7 @@ func (s *Server) sendPublishNotifications(
 		readURL := issueURL
 
 		if raw, tokenErr := s.mintEmailCTAToken(ctx, u.ID); tokenErr == nil {
-			readURL = issueURL + "?auth=" + raw
+			readURL = issueURL + "&auth=" + raw
 		} else {
 			s.logger.ErrorContext(ctx, "Failed to mint publish notification token",
 				slog.Int64("user_id", u.ID),
@@ -1339,7 +1358,8 @@ func (s *Server) sendPublishNotifications(
 	s.emailer.SendBatch(ctx, recipients, func(batchCtx context.Context, rec email.BatchRecipient, sendErr error) {
 		if sendErr != nil {
 			errStr := sendErr.Error()
-			_, _ = s.store.LogEmail(batchCtx, &rec.UserID, rec.IssueID, rec.EmailType, "failed", &errStr)
+			_, _ = s.store.LogEmail(batchCtx, &issue.GroupID, &rec.UserID, rec.IssueID,
+				rec.EmailType, "failed", &errStr)
 			s.logger.ErrorContext(batchCtx, "Failed to send publish notification",
 				slog.Int64("user_id", rec.UserID),
 				slog.String("error", errStr))
@@ -1347,7 +1367,8 @@ func (s *Server) sendPublishNotifications(
 			return
 		}
 
-		_, _ = s.store.LogEmail(batchCtx, &rec.UserID, rec.IssueID, rec.EmailType, "sent", nil)
+		_, _ = s.store.LogEmail(batchCtx, &issue.GroupID, &rec.UserID, rec.IssueID,
+			rec.EmailType, "sent", nil)
 	})
 }
 
@@ -1356,9 +1377,9 @@ func (s *Server) sendPublishNotifications(
 // added. Failures are logged per question — a missing default prompt must
 // not block a round from opening.
 func (s *Server) insertDefaultQuestions(
-	ctx context.Context, issueID int64, sortOrder int,
+	ctx context.Context, groupID, issueID int64, sortOrder int,
 ) int {
-	defaults, err := s.store.ListEnabledDefaultQuestions(ctx)
+	defaults, err := s.store.ListEnabledDefaultQuestions(ctx, groupID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list default questions",
 			slog.Int64("issue_id", issueID),

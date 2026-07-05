@@ -26,19 +26,22 @@ func newTestStore(t *testing.T) *Store {
 	require.NoError(t, err, "open test store")
 
 	require.NoError(t, s.RunMigrations(ctx), "run migrations")
+	require.NoError(t, s.SeedDefaultGroup(ctx), "seed default group")
 
 	t.Cleanup(func() { _ = s.Close() })
 
 	return s
 }
 
-// seedUser inserts an active member and returns the new user's ID.
+// seedUser inserts an active member of group 1 and returns the new user's ID.
 func seedUser(t *testing.T, s *Store, name, email string) int64 {
 	t.Helper()
 	ctx := context.Background()
 
-	id, err := s.CreateUser(ctx, name, email, "member")
+	id, err := s.CreateUser(ctx, name, email)
 	require.NoError(t, err, "create user")
+
+	require.NoError(t, s.CreateMembership(ctx, 1, id, "member"), "create membership")
 
 	return id
 }

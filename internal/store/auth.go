@@ -22,10 +22,12 @@ type AuthToken struct {
 	CreatedAt  time.Time  `json:"-"`
 }
 
-// Session represents a server-side user session.
+// Session represents a server-side user session. GroupID is the session's
+// current Loop; nil until first resolved (or when the user has no Loops).
 type Session struct {
 	ID        int64     `json:"-"`
 	UserID    int64     `json:"-"`
+	GroupID   *int64    `json:"-"`
 	TokenHash string    `json:"-"`
 	ExpiresAt time.Time `json:"-"`
 	CreatedAt time.Time `json:"-"`
@@ -120,12 +122,12 @@ func (s *Store) CleanupExpiredTokens(ctx context.Context) (int64, error) {
 // CreateSession stores a new session token hash.
 func (s *Store) CreateSession(
 	ctx context.Context,
-	userID int64, tokenHash string, expiresAt time.Time,
+	userID int64, tokenHash string, expiresAt time.Time, groupID *int64,
 ) error {
 	_, err := s.write.ExecContext(ctx,
-		`INSERT INTO sessions (user_id, token_hash, expires_at)
-		 VALUES (?, ?, ?)`,
-		userID, tokenHash, expiresAt,
+		`INSERT INTO sessions (user_id, token_hash, expires_at, group_id)
+		 VALUES (?, ?, ?, ?)`,
+		userID, tokenHash, expiresAt, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("creating session: %w", err)
@@ -141,15 +143,27 @@ func (s *Store) GetSessionByHash(
 	var sess Session
 
 	err := s.read.QueryRowContext(ctx,
-		`SELECT id, user_id, token_hash, expires_at, created_at
+		`SELECT id, user_id, group_id, token_hash, expires_at, created_at
 		 FROM sessions WHERE token_hash = ?`, tokenHash,
-	).Scan(&sess.ID, &sess.UserID, &sess.TokenHash,
+	).Scan(&sess.ID, &sess.UserID, &sess.GroupID, &sess.TokenHash,
 		&sess.ExpiresAt, &sess.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting session by hash: %w", err)
 	}
 
 	return &sess, nil
+}
+
+// SetSessionGroup moves a session to a different current Loop.
+func (s *Store) SetSessionGroup(ctx context.Context, id, groupID int64) error {
+	_, err := s.write.ExecContext(ctx,
+		"UPDATE sessions SET group_id = ? WHERE id = ?", groupID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("setting group for session %d: %w", id, err)
+	}
+
+	return nil
 }
 
 // DeleteSession removes a session by ID.

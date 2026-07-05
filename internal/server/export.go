@@ -23,7 +23,7 @@ type exportRoot struct {
 	ExportedAt  time.Time               `json:"exported_at"`
 	LoopName    string                  `json:"loop_name"`
 	Settings    *store.Settings         `json:"settings"`
-	Users       []store.User            `json:"users"`
+	Users       []store.GroupMember     `json:"users"`
 	Preferences []exportPrefs           `json:"notification_preferences"`
 	Issues      []exportIssue           `json:"issues"`
 	Questions   []store.Question        `json:"questions"`
@@ -64,7 +64,7 @@ type exportBlock struct {
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	payload, err := s.buildExportPayload(ctx)
+	payload, err := s.buildExportPayload(ctx, currentGroupID(ctx))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Export: build payload failed",
 			slog.String("error", err.Error()))
@@ -98,7 +98,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExportZip(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	payload, err := s.buildExportPayload(ctx)
+	payload, err := s.buildExportPayload(ctx, currentGroupID(ctx))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Zip export: build payload failed",
 			slog.String("error", err.Error()))
@@ -153,15 +153,17 @@ func (s *Server) handleExportZip(w http.ResponseWriter, r *http.Request) {
 // buildExportPayload assembles the full export snapshot shared by the JSON
 // and zip export handlers. Per-issue failures are logged and skipped so one
 // bad row can't sink the whole export; only top-level queries are fatal.
-func (s *Server) buildExportPayload(ctx context.Context) (*exportRoot, error) {
-	settings, err := s.store.GetSettings(ctx)
+func (s *Server) buildExportPayload(
+	ctx context.Context, groupID int64,
+) (*exportRoot, error) {
+	settings, err := s.store.GetSettings(ctx, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("loading settings: %w", err)
 	}
 
-	users, err := s.store.ListAllUsers(ctx)
+	users, err := s.store.ListGroupMembers(ctx, groupID)
 	if err != nil {
-		return nil, fmt.Errorf("listing users: %w", err)
+		return nil, fmt.Errorf("listing members: %w", err)
 	}
 
 	prefs := make([]exportPrefs, 0, len(users))
@@ -175,7 +177,7 @@ func (s *Server) buildExportPayload(ctx context.Context) (*exportRoot, error) {
 		prefs = append(prefs, exportPrefs{NotificationPreferences: p})
 	}
 
-	issues, err := s.store.ListIssues(ctx, nil)
+	issues, err := s.store.ListIssues(ctx, groupID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("listing issues: %w", err)
 	}

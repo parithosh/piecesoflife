@@ -23,6 +23,7 @@ type Question struct {
 // QuestionBank represents a pre-generated question in the bank.
 type QuestionBank struct {
 	ID        int64     `json:"id"`
+	GroupID   int64     `json:"group_id"`
 	Text      string    `json:"text"`
 	Category  string    `json:"category"`
 	Used      bool      `json:"used"`
@@ -229,7 +230,7 @@ func (s *Store) DeleteQuestionsByIssue(
 
 // SelectRandomUnusedQuestions picks questions from the bank with category variety.
 func (s *Store) SelectRandomUnusedQuestions(
-	ctx context.Context, count int,
+	ctx context.Context, groupID int64, count int,
 ) ([]QuestionBank, error) {
 	categories := []string{
 		"life_updates", "deep_thoughts", "fun_silly",
@@ -248,10 +249,11 @@ func (s *Store) SelectRandomUnusedQuestions(
 		var q QuestionBank
 
 		err := s.read.QueryRowContext(ctx,
-			`SELECT id, text, category, used, created_at
-			 FROM question_bank WHERE used = 0 AND category = ?
-			 ORDER BY RANDOM() LIMIT 1`, cat,
-		).Scan(&q.ID, &q.Text, &q.Category, &q.Used, &q.CreatedAt)
+			`SELECT id, group_id, text, category, used, created_at
+			 FROM question_bank
+			 WHERE group_id = ? AND used = 0 AND category = ?
+			 ORDER BY RANDOM() LIMIT 1`, groupID, cat,
+		).Scan(&q.ID, &q.GroupID, &q.Text, &q.Category, &q.Used, &q.CreatedAt)
 		if err == sql.ErrNoRows {
 			continue
 		}
@@ -269,9 +271,9 @@ func (s *Store) SelectRandomUnusedQuestions(
 		remaining := count - len(results)
 
 		rows, err := s.read.QueryContext(ctx,
-			`SELECT id, text, category, used, created_at
-			 FROM question_bank WHERE used = 0
-			 ORDER BY RANDOM() LIMIT ?`, remaining+len(usedIDs),
+			`SELECT id, group_id, text, category, used, created_at
+			 FROM question_bank WHERE group_id = ? AND used = 0
+			 ORDER BY RANDOM() LIMIT ?`, groupID, remaining+len(usedIDs),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("selecting remaining questions: %w", err)
@@ -303,9 +305,10 @@ func (s *Store) SelectRandomUnusedQuestions(
 		remaining := count - len(results)
 
 		rows, err := s.read.QueryContext(ctx,
-			`SELECT id, text, category, used, created_at
-			 FROM question_bank ORDER BY RANDOM() LIMIT ?`,
-			remaining+len(usedIDs),
+			`SELECT id, group_id, text, category, used, created_at
+			 FROM question_bank WHERE group_id = ?
+			 ORDER BY RANDOM() LIMIT ?`,
+			groupID, remaining+len(usedIDs),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("selecting fallback questions: %w", err)
@@ -348,12 +351,13 @@ func (s *Store) MarkBankQuestionUsed(ctx context.Context, id int64) error {
 
 // ListQuestionBank returns paginated question bank entries.
 func (s *Store) ListQuestionBank(
-	ctx context.Context,
+	ctx context.Context, groupID int64,
 	category *string, used *bool,
 	page, perPage int,
 ) ([]QuestionBank, int, error) {
-	where := "WHERE 1=1"
-	args := make([]any, 0, 4)
+	where := "WHERE group_id = ?"
+	args := make([]any, 0, 5)
+	args = append(args, groupID)
 
 	if category != nil {
 		where += " AND category = ?"
@@ -381,7 +385,7 @@ func (s *Store) ListQuestionBank(
 	args = append(args, perPage, offset)
 
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT id, text, category, used, created_at
+		`SELECT id, group_id, text, category, used, created_at
 		 FROM question_bank `+where+
 			` ORDER BY category, id LIMIT ? OFFSET ?`, args...,
 	)
@@ -396,7 +400,7 @@ func (s *Store) ListQuestionBank(
 		var q QuestionBank
 
 		if err := rows.Scan(
-			&q.ID, &q.Text, &q.Category, &q.Used, &q.CreatedAt,
+			&q.ID, &q.GroupID, &q.Text, &q.Category, &q.Used, &q.CreatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scanning bank question: %w", err)
 		}
@@ -417,11 +421,11 @@ func (s *Store) ListQuestionBank(
 
 // CreateBankQuestion adds a new question to the bank.
 func (s *Store) CreateBankQuestion(
-	ctx context.Context, text, category string,
+	ctx context.Context, groupID int64, text, category string,
 ) (int64, error) {
 	result, err := s.write.ExecContext(ctx,
-		`INSERT INTO question_bank (text, category) VALUES (?, ?)`,
-		text, category,
+		`INSERT INTO question_bank (group_id, text, category) VALUES (?, ?, ?)`,
+		groupID, text, category,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("creating bank question: %w", err)
@@ -437,11 +441,11 @@ func (s *Store) CreateBankQuestion(
 
 // UpdateBankQuestion modifies a question bank entry.
 func (s *Store) UpdateBankQuestion(
-	ctx context.Context, id int64, text, category string,
+	ctx context.Context, groupID, id int64, text, category string,
 ) error {
 	_, err := s.write.ExecContext(ctx,
-		"UPDATE question_bank SET text = ?, category = ? WHERE id = ?",
-		text, category, id,
+		"UPDATE question_bank SET text = ?, category = ? WHERE id = ? AND group_id = ?",
+		text, category, id, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating bank question %d: %w", id, err)
@@ -451,9 +455,9 @@ func (s *Store) UpdateBankQuestion(
 }
 
 // DeleteBankQuestion removes a question from the bank.
-func (s *Store) DeleteBankQuestion(ctx context.Context, id int64) error {
+func (s *Store) DeleteBankQuestion(ctx context.Context, groupID, id int64) error {
 	_, err := s.write.ExecContext(ctx,
-		"DELETE FROM question_bank WHERE id = ?", id,
+		"DELETE FROM question_bank WHERE id = ? AND group_id = ?", id, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("deleting bank question %d: %w", id, err)

@@ -14,6 +14,7 @@ import (
 // source 'default' and are edited or removed there like any other question.
 type DefaultQuestion struct {
 	ID        int64     `json:"id"`
+	GroupID   int64     `json:"group_id"`
 	Text      string    `json:"text"`
 	Enabled   bool      `json:"enabled"`
 	SortOrder int       `json:"sort_order"`
@@ -21,10 +22,13 @@ type DefaultQuestion struct {
 }
 
 // ListDefaultQuestions returns every default question, enabled or not.
-func (s *Store) ListDefaultQuestions(ctx context.Context) ([]DefaultQuestion, error) {
+func (s *Store) ListDefaultQuestions(
+	ctx context.Context, groupID int64,
+) ([]DefaultQuestion, error) {
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT id, text, enabled, sort_order, created_at
-		 FROM default_questions ORDER BY sort_order, id`,
+		`SELECT id, group_id, text, enabled, sort_order, created_at
+		 FROM default_questions WHERE group_id = ?
+		 ORDER BY sort_order, id`, groupID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing default questions: %w", err)
@@ -37,7 +41,7 @@ func (s *Store) ListDefaultQuestions(ctx context.Context) ([]DefaultQuestion, er
 		var q DefaultQuestion
 
 		if err := rows.Scan(
-			&q.ID, &q.Text, &q.Enabled, &q.SortOrder, &q.CreatedAt,
+			&q.ID, &q.GroupID, &q.Text, &q.Enabled, &q.SortOrder, &q.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning default question: %w", err)
 		}
@@ -54,8 +58,10 @@ func (s *Store) ListDefaultQuestions(ctx context.Context) ([]DefaultQuestion, er
 
 // ListEnabledDefaultQuestions returns the default questions that should be
 // added to new issues.
-func (s *Store) ListEnabledDefaultQuestions(ctx context.Context) ([]DefaultQuestion, error) {
-	all, err := s.ListDefaultQuestions(ctx)
+func (s *Store) ListEnabledDefaultQuestions(
+	ctx context.Context, groupID int64,
+) ([]DefaultQuestion, error) {
+	all, err := s.ListDefaultQuestions(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -86,12 +92,13 @@ func isUniqueViolation(err error) bool {
 // list, enabled, and returns its ID. A text collision with an existing
 // default returns ErrDuplicateText.
 func (s *Store) CreateDefaultQuestion(
-	ctx context.Context, text string,
+	ctx context.Context, groupID int64, text string,
 ) (int64, error) {
 	result, err := s.write.ExecContext(ctx,
-		`INSERT INTO default_questions (text, enabled, sort_order)
-		 VALUES (?, 1, (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM default_questions))`,
-		text,
+		`INSERT INTO default_questions (group_id, text, enabled, sort_order)
+		 VALUES (?, ?, 1, (SELECT COALESCE(MAX(sort_order) + 1, 0)
+		                   FROM default_questions WHERE group_id = ?))`,
+		groupID, text, groupID,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -114,7 +121,7 @@ func (s *Store) CreateDefaultQuestion(
 // A text collision with another default returns ErrDuplicateText; copies
 // already landed on issues keep the text they were sent with.
 func (s *Store) UpdateDefaultQuestion(
-	ctx context.Context, id int64, text *string, enabled *bool,
+	ctx context.Context, groupID, id int64, text *string, enabled *bool,
 ) error {
 	if text == nil && enabled == nil {
 		return nil
@@ -128,7 +135,8 @@ func (s *Store) UpdateDefaultQuestion(
 
 	if text != nil {
 		res, err := tx.ExecContext(ctx,
-			"UPDATE default_questions SET text = ? WHERE id = ?", *text, id,
+			"UPDATE default_questions SET text = ? WHERE id = ? AND group_id = ?",
+			*text, id, groupID,
 		)
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -145,7 +153,8 @@ func (s *Store) UpdateDefaultQuestion(
 
 	if enabled != nil {
 		res, err := tx.ExecContext(ctx,
-			"UPDATE default_questions SET enabled = ? WHERE id = ?", *enabled, id,
+			"UPDATE default_questions SET enabled = ? WHERE id = ? AND group_id = ?",
+			*enabled, id, groupID,
 		)
 		if err != nil {
 			return fmt.Errorf("updating default question %d enabled: %w", id, err)
@@ -165,9 +174,9 @@ func (s *Store) UpdateDefaultQuestion(
 
 // DeleteDefaultQuestion removes a default prompt from all future issues.
 // Copies already landed on issues are ordinary questions rows and survive.
-func (s *Store) DeleteDefaultQuestion(ctx context.Context, id int64) error {
+func (s *Store) DeleteDefaultQuestion(ctx context.Context, groupID, id int64) error {
 	res, err := s.write.ExecContext(ctx,
-		"DELETE FROM default_questions WHERE id = ?", id,
+		"DELETE FROM default_questions WHERE id = ? AND group_id = ?", id, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("deleting default question %d: %w", id, err)
@@ -184,7 +193,9 @@ func (s *Store) DeleteDefaultQuestion(ctx context.Context, id int64) error {
 // ReorderDefaultQuestions rewrites sort_order to match the given ID order.
 // The IDs must cover the current set exactly — a stale list (another admin
 // added or removed a question meanwhile) is rejected whole.
-func (s *Store) ReorderDefaultQuestions(ctx context.Context, ids []int64) error {
+func (s *Store) ReorderDefaultQuestions(
+	ctx context.Context, groupID int64, ids []int64,
+) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning default question reorder: %w", err)
@@ -193,7 +204,7 @@ func (s *Store) ReorderDefaultQuestions(ctx context.Context, ids []int64) error 
 
 	var count int
 	if err := tx.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM default_questions",
+		"SELECT COUNT(*) FROM default_questions WHERE group_id = ?", groupID,
 	).Scan(&count); err != nil {
 		return fmt.Errorf("counting default questions: %w", err)
 	}
@@ -209,7 +220,8 @@ func (s *Store) ReorderDefaultQuestions(ctx context.Context, ids []int64) error 
 
 	for i, id := range ids {
 		res, err := tx.ExecContext(ctx,
-			"UPDATE default_questions SET sort_order = ? WHERE id = ?", i, id,
+			"UPDATE default_questions SET sort_order = ? WHERE id = ? AND group_id = ?",
+			i, id, groupID,
 		)
 		if err != nil {
 			return fmt.Errorf("reordering default question %d: %w", id, err)
@@ -229,10 +241,11 @@ func (s *Store) ReorderDefaultQuestions(ctx context.Context, ids []int64) error 
 
 // SetDefaultQuestionEnabled flips the global switch for one default question.
 func (s *Store) SetDefaultQuestionEnabled(
-	ctx context.Context, id int64, enabled bool,
+	ctx context.Context, groupID, id int64, enabled bool,
 ) error {
 	res, err := s.write.ExecContext(ctx,
-		"UPDATE default_questions SET enabled = ? WHERE id = ?", enabled, id,
+		"UPDATE default_questions SET enabled = ? WHERE id = ? AND group_id = ?",
+		enabled, id, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating default question %d: %w", id, err)
@@ -249,10 +262,11 @@ func (s *Store) SetDefaultQuestionEnabled(
 // SetAllDefaultQuestionsEnabled flips the global switch for every default
 // question at once.
 func (s *Store) SetAllDefaultQuestionsEnabled(
-	ctx context.Context, enabled bool,
+	ctx context.Context, groupID int64, enabled bool,
 ) error {
 	_, err := s.write.ExecContext(ctx,
-		"UPDATE default_questions SET enabled = ?", enabled,
+		"UPDATE default_questions SET enabled = ? WHERE group_id = ?",
+		enabled, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating all default questions: %w", err)

@@ -18,7 +18,7 @@ func TestSubmissionProgressCountsAdminsByDefault(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC()
-	issueID, err := st.CreateIssue(ctx, nil, int(now.Month()), now.Year(),
+	issueID, err := st.CreateIssue(ctx, 1, nil, int(now.Month()), now.Year(),
 		now, now.Add(7*24*time.Hour))
 	require.NoError(t, err)
 	require.NoError(t, st.SetIssueStatus(ctx, issueID, "collecting"))
@@ -29,7 +29,9 @@ func TestSubmissionProgressCountsAdminsByDefault(t *testing.T) {
 
 	memberID := seedUser(t, st, "friend", "friend@example.com")
 
-	adminID, err := st.CreateUser(ctx, "Pari", "admin@example.com", "admin")
+	adminID, err := st.CreateUser(ctx, "Pari", "admin@example.com")
+	require.NoError(t, err)
+	err = st.CreateMembership(ctx, 1, adminID, "admin")
 	require.NoError(t, err)
 
 	// Only the admin submits an answer; the member hasn't responded.

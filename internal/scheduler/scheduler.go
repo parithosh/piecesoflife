@@ -24,7 +24,7 @@ type Actions interface {
 		ctx context.Context, issueID int64, schedulerEventID *int64,
 	) error
 	AutoPublishIssue(ctx context.Context, issueID int64) error
-	CreateNextIssue(ctx context.Context) error
+	CreateNextIssue(ctx context.Context, groupID int64) error
 }
 
 // Scheduler dispatches timed scheduler_events.
@@ -167,10 +167,27 @@ func (s *Scheduler) fireEvent(
 		err = s.actions.AutoPublishIssue(ctx, *ev.IssueID)
 
 	case "create_next_issue":
-		// Not bound to a specific issue — the handler decides what to
-		// create based on current settings and the most recent published
-		// issue. This runs at a cadence the auto-publish handler queued.
-		err = s.actions.CreateNextIssue(ctx)
+		// The event references the pre-created draft it should open, which
+		// is also how it knows its Loop. Events queued before multi-group
+		// (issue_id NULL) fall back to the instance's oldest Loop.
+		var groupID int64
+
+		if ev.IssueID != nil {
+			issue, issueErr := s.store.GetIssueByID(ctx, *ev.IssueID)
+			if issueErr != nil {
+				err = issueErr
+				break
+			}
+
+			groupID = issue.GroupID
+		} else {
+			groupID, err = s.store.GetOldestActiveGroupID(ctx)
+			if err != nil {
+				break
+			}
+		}
+
+		err = s.actions.CreateNextIssue(ctx, groupID)
 
 	case "token_cleanup":
 		var n int64

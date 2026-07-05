@@ -33,8 +33,7 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	session := env.sessionCookie(t, adminID)
 	csrfCookie, csrfHeader := csrfPair()
 
@@ -46,13 +45,13 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	}
 
 	for i := 0; i < 12; i++ {
-		_, err := env.store.CreateBankQuestion(ctx,
+		_, err := env.store.CreateBankQuestion(ctx, 1,
 			fmt.Sprintf("Bank question %d?", i+1), "fun_silly")
 		require.NoError(t, err, "seed bank question")
 	}
 
 	// The migration ships the three defaults, all enabled.
-	defaults, err := env.store.ListDefaultQuestions(ctx)
+	defaults, err := env.store.ListDefaultQuestions(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, defaults, 3, "migration seeds three default questions")
 	for _, dq := range defaults {
@@ -65,7 +64,7 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 		"/api/issues", `{"title": "Round one"}`)))
 	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
 
-	first, err := env.store.GetActiveIssue(ctx)
+	first, err := env.store.GetActiveIssue(ctx, 1)
 	require.NoError(t, err)
 
 	questions, err := env.store.ListQuestionsByIssue(ctx, first.ID)
@@ -81,7 +80,7 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 		fmt.Sprintf("/api/issues/%d/publish", first.ID), nil)))
 	require.Equal(t, http.StatusOK, pubRR.Code, "publish: %s", pubRR.Body.String())
 
-	draft, err := env.store.GetUpcomingDraftIssue(ctx)
+	draft, err := env.store.GetUpcomingDraftIssue(ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, draft, "publish pre-creates the next draft")
 
@@ -99,7 +98,7 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	}
 	suggest(draft.ID, 1)
 
-	require.NoError(t, env.srv.CreateNextIssue(ctx), "open the draft")
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1), "open the draft")
 
 	questions, err = env.store.ListQuestionsByIssue(ctx, draft.ID)
 	require.NoError(t, err)
@@ -129,12 +128,12 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 		fmt.Sprintf("/api/issues/%d/publish", draft.ID), nil)))
 	require.Equal(t, http.StatusOK, pubRR.Code, "publish round two: %s", pubRR.Body.String())
 
-	nextDraft, err := env.store.GetUpcomingDraftIssue(ctx)
+	nextDraft, err := env.store.GetUpcomingDraftIssue(ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, nextDraft)
 	suggest(nextDraft.ID, 3)
 
-	require.NoError(t, env.srv.CreateNextIssue(ctx), "open round three")
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1), "open round three")
 
 	questions, err = env.store.ListQuestionsByIssue(ctx, nextDraft.ID)
 	require.NoError(t, err)
@@ -162,8 +161,7 @@ func TestManageDefaultQuestions(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	session := env.sessionCookie(t, adminID)
 	csrfCookie, csrfHeader := csrfPair()
 
@@ -179,7 +177,7 @@ func TestManageDefaultQuestions(t *testing.T) {
 		"/api/default-questions", `{"text": "What made you laugh this month?"}`)))
 	require.Equal(t, http.StatusCreated, addRR.Code, "add: %s", addRR.Body.String())
 
-	defaults, err := env.store.ListDefaultQuestions(ctx)
+	defaults, err := env.store.ListDefaultQuestions(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, defaults, 4, "custom default joins the seeded three")
 	custom := defaults[3]
@@ -214,7 +212,7 @@ func TestManageDefaultQuestions(t *testing.T) {
 		fmt.Sprintf(`{"ids": [%s]}`, strings.Join(ids, ",")))))
 	require.Equal(t, http.StatusOK, reorderRR.Code, "reorder: %s", reorderRR.Body.String())
 
-	defaults, err = env.store.ListDefaultQuestions(ctx)
+	defaults, err = env.store.ListDefaultQuestions(ctx, 1)
 	require.NoError(t, err)
 	assert.Equal(t, custom.ID, defaults[0].ID, "custom default now leads")
 	assert.Equal(t, "What made you laugh out loud?", defaults[0].Text, "reword persisted")
@@ -237,7 +235,7 @@ func TestManageDefaultQuestions(t *testing.T) {
 		"/api/issues", `{"title": "Round one"}`)))
 	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
 
-	issue, err := env.store.GetActiveIssue(ctx)
+	issue, err := env.store.GetActiveIssue(ctx, 1)
 	require.NoError(t, err)
 
 	questions, err := env.store.ListQuestionsByIssue(ctx, issue.ID)
@@ -256,7 +254,7 @@ func TestManageDefaultQuestions(t *testing.T) {
 		fmt.Sprintf("/api/default-questions/%d", custom.ID), nil)))
 	assert.Equal(t, http.StatusNotFound, againRR.Code)
 
-	defaults, err = env.store.ListDefaultQuestions(ctx)
+	defaults, err = env.store.ListDefaultQuestions(ctx, 1)
 	require.NoError(t, err)
 	assert.Len(t, defaults, 3, "back to the seeded three")
 
@@ -274,12 +272,19 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
-	session := env.sessionCookie(t, adminID)
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
+
+	// The wizard runs against a freshly woven second Loop — group 1 is
+	// already set up by the test env, and this doubles as multi-group
+	// coverage of onboarding.
+	groupID, err := env.store.CreateGroup(ctx, "Chaos Crew")
+	require.NoError(t, err)
+	require.NoError(t, env.store.CreateMembership(ctx, groupID, adminID, "admin"))
+
+	session := env.sessionCookieForGroup(t, adminID, groupID)
 	csrfCookie, csrfHeader := csrfPair()
 
-	defaults, err := env.store.ListDefaultQuestions(ctx)
+	defaults, err := env.store.ListDefaultQuestions(ctx, groupID)
 	require.NoError(t, err)
 	require.Len(t, defaults, 3)
 	assert.Equal(t,
@@ -315,11 +320,11 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 	rr := env.do(t, req)
 	require.Equal(t, http.StatusOK, rr.Code, "onboarding: %s", rr.Body.String())
 
-	settings, err := env.store.GetSettings(ctx)
+	settings, err := env.store.GetSettings(ctx, groupID)
 	require.NoError(t, err)
 	assert.Equal(t, 8, settings.QuestionsPerIssue, "wizard choice saved to settings")
 
-	enabled, err := env.store.ListEnabledDefaultQuestions(ctx)
+	enabled, err := env.store.ListEnabledDefaultQuestions(ctx, groupID)
 	require.NoError(t, err)
 	require.Len(t, enabled, 3, "wizard switches + promoted pick persist globally")
 	assert.Equal(t, defaults[1].Text, enabled[0].Text, "wizard order persisted")
@@ -327,7 +332,7 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 	assert.Equal(t, "A keeper for every round?", enabled[2].Text,
 		"promoted pick joins the defaults")
 
-	issue, err := env.store.GetActiveIssue(ctx)
+	issue, err := env.store.GetActiveIssue(ctx, groupID)
 	require.NoError(t, err)
 
 	questions, err := env.store.ListQuestionsByIssue(ctx, issue.ID)

@@ -59,7 +59,9 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	st, err := store.New(ctx, dbPath, logger)
 	require.NoError(t, err, "open store")
 	require.NoError(t, st.RunMigrations(ctx), "run migrations")
-	require.NoError(t, st.SeedSettings(ctx), "seed settings")
+	require.NoError(t, st.SeedInstanceSettings(ctx), "seed instance settings")
+	require.NoError(t, st.SeedDefaultGroup(ctx), "seed default group")
+	require.NoError(t, st.CompleteSetup(ctx, 1), "complete group 1 setup")
 
 	t.Cleanup(func() { _ = st.Close() })
 
@@ -90,13 +92,24 @@ func (e *integrationEnv) do(t *testing.T, req *http.Request) *httptest.ResponseR
 	return rr
 }
 
-// createUser inserts an active member directly through the store.
+// createUser inserts an active member of group 1 directly through the store.
 func (e *integrationEnv) createUser(t *testing.T, name, emailAddr string) *store.User {
+	t.Helper()
+
+	return e.createUserWithRole(t, name, emailAddr, "member")
+}
+
+// createUserWithRole inserts an active user with the given role in group 1.
+func (e *integrationEnv) createUserWithRole(
+	t *testing.T, name, emailAddr, role string,
+) *store.User {
 	t.Helper()
 	ctx := context.Background()
 
-	id, err := e.store.CreateUser(ctx, name, emailAddr, "member")
+	id, err := e.store.CreateUser(ctx, name, emailAddr)
 	require.NoError(t, err, "create user")
+
+	require.NoError(t, e.store.CreateMembership(ctx, 1, id, role), "create membership")
 
 	user, err := e.store.GetUserByID(ctx, id)
 	require.NoError(t, err, "load created user")
@@ -110,11 +123,20 @@ func (e *integrationEnv) createUser(t *testing.T, name, emailAddr string) *store
 func (e *integrationEnv) sessionCookie(t *testing.T, userID int64) *http.Cookie {
 	t.Helper()
 
+	return e.sessionCookieForGroup(t, userID, 1)
+}
+
+// sessionCookieForGroup mints a session whose current Loop is groupID.
+func (e *integrationEnv) sessionCookieForGroup(
+	t *testing.T, userID, groupID int64,
+) *http.Cookie {
+	t.Helper()
+
 	raw, hash, err := auth.GenerateRandomToken(32)
 	require.NoError(t, err, "generate session token")
 
 	require.NoError(t, e.store.CreateSession(
-		context.Background(), userID, hash, time.Now().Add(24*time.Hour),
+		context.Background(), userID, hash, time.Now().Add(24*time.Hour), &groupID,
 	), "create session")
 
 	return &http.Cookie{Name: "session", Value: raw}
@@ -129,7 +151,7 @@ func (e *integrationEnv) seedIssue(
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	issueID, err := e.store.CreateIssue(ctx, nil, month, year,
+	issueID, err := e.store.CreateIssue(ctx, 1, nil, month, year,
 		now, now.Add(7*24*time.Hour))
 	require.NoError(t, err, "create issue")
 
@@ -157,7 +179,7 @@ func (e *integrationEnv) setPublicMementos(t *testing.T, allowed bool) {
 	t.Helper()
 	ctx := context.Background()
 
-	settings, err := e.store.GetSettings(ctx)
+	settings, err := e.store.GetSettings(ctx, 1)
 	require.NoError(t, err, "load settings")
 
 	settings.AllowPublicMementos = allowed

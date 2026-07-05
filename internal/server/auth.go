@@ -86,11 +86,13 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		data.Error = "expired"
 	}
 
-	// Load settings for the base template.
-	settings, err := s.store.GetSettings(r.Context())
-	if err == nil {
-		data.Settings = settings
+	// The login page is Loop-agnostic: brand it with the instance name.
+	name := "PiecesOfLife"
+	if inst, err := s.store.GetInstanceSettings(r.Context()); err == nil {
+		name = inst.InstanceName
 	}
+
+	data.Settings = &store.Settings{LoopName: name}
 
 	s.renderPage(w, "login.html", data)
 }
@@ -407,12 +409,13 @@ func (s *Server) renderLoginEmail(name, link string) string {
 	})
 }
 
-// loopNameForEmail returns the configured loop name, falling back to a
-// default if settings can't be loaded. Used by every email render path.
+// loopNameForEmail returns the instance name for Loop-agnostic emails
+// (login links), falling back to a default if it can't be loaded.
 func (s *Server) loopNameForEmail() string {
-	settings, err := s.store.GetSettings(context.Background())
-	if err != nil || settings == nil || settings.LoopName == "" {
+	inst, err := s.store.GetInstanceSettings(context.Background())
+	if err != nil || inst == nil || inst.InstanceName == "" {
 		return "PiecesOfLife"
 	}
-	return settings.LoopName
+
+	return inst.InstanceName
 }

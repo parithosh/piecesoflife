@@ -17,7 +17,7 @@ func TestDumpItemLifecycle(t *testing.T) {
 	userB := seedUser(t, s, "Anil", "anil@example.com")
 
 	now := time.Now().UTC()
-	issueID, err := s.CreateIssue(ctx, nil, 7, 2026, now, now.Add(7*24*time.Hour))
+	issueID, err := s.CreateIssue(ctx, 1, nil, 7, 2026, now, now.Add(7*24*time.Hour))
 	require.NoError(t, err)
 
 	caption := "beach day"

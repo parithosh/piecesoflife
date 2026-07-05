@@ -50,8 +50,28 @@
         <div class="pl-nav-links">
             <a href="/issues" data-nav="/issues">Issues</a>
             <a href="/albums" data-nav="/albums">Media</a>
-            {{if eq .User.Role "admin"}}
+            {{if .IsGroupAdmin}}
                 <a href="/admin" data-nav="/admin">Admin</a>
+            {{end}}
+            {{if .IsInstanceAdmin}}
+                <a href="/instance" data-nav="/instance">Console</a>
+            {{end}}
+            {{if .MultiLoop}}
+            <details class="pl-nav-loops" id="loop-switcher">
+                <summary aria-label="Switch Loop">Loops ▾</summary>
+                <div class="pl-nav-loops-menu">
+                    {{$current := .Group}}
+                    {{range .Loops}}
+                    <button type="button" class="pl-nav-loop {{if and $current (eq $current.ID .GroupID)}}is-current{{end}}"
+                            data-group-id="{{.GroupID}}"
+                            {{if and $current (eq $current.ID .GroupID)}}aria-current="true"{{end}}>
+                        <span class="pl-nav-loop-dot" aria-hidden="true"></span>
+                        {{.LoopName}}
+                    </button>
+                    {{end}}
+                    <a href="/loops" class="pl-nav-loop pl-nav-loop--all">All your Loops →</a>
+                </div>
+            </details>
             {{end}}
             <a href="/profile" data-nav="/profile" class="pl-nav-user" aria-label="Profile: {{.User.Name}}">
                 <span class="pl-nav-ava">{{letterAvatar .User.Name}}</span>
@@ -67,6 +87,25 @@
     </main>
 
     <script>
+    /* Loop switcher: pick a Loop, then reload from the top of the new one. */
+    (function () {
+        var switcher = document.getElementById('loop-switcher');
+        if (!switcher) return;
+        switcher.querySelectorAll('button[data-group-id]').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+                var res = await fetch('/api/me/group', {
+                    method: 'POST',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({ group_id: Number(btn.dataset.groupId) }),
+                });
+                if (res.ok) { window.location.href = '/'; }
+            });
+        });
+        document.addEventListener('click', function (e) {
+            if (switcher.open && !switcher.contains(e.target)) switcher.open = false;
+        });
+    })();
+
     /* Mark the current section in the Pallu nav (marigold + underline). */
     (function () {
         var path = window.location.pathname;

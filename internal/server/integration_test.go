@@ -427,13 +427,12 @@ func TestManualPublishSchedulesNextIssue(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	settings, err := env.store.GetSettings(ctx)
+	settings, err := env.store.GetSettings(ctx, 1)
 	require.NoError(t, err, "load settings")
 	settings.AutoCreateEnabled = true
 	require.NoError(t, env.store.UpdateSettings(ctx, settings), "enable auto-create")
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	session := env.sessionCookie(t, adminID)
 	csrfCookie, csrfHeader := csrfPair()
 
@@ -475,13 +474,12 @@ func TestManualPublishRespectsAutoCreateOff(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	settings, err := env.store.GetSettings(ctx)
+	settings, err := env.store.GetSettings(ctx, 1)
 	require.NoError(t, err, "load settings")
 	settings.AutoCreateEnabled = false
 	require.NoError(t, env.store.UpdateSettings(ctx, settings), "disable auto-create")
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	session := env.sessionCookie(t, adminID)
 	csrfCookie, csrfHeader := csrfPair()
 
@@ -611,8 +609,7 @@ func TestUpcomingDraftLifecycle(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	session := env.sessionCookie(t, adminID)
 	csrfCookie, csrfHeader := csrfPair()
 
@@ -626,7 +623,7 @@ func TestUpcomingDraftLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusOK, env.do(t, pubReq).Code)
 
 	// Publish pre-created the next round as an upcoming draft.
-	draft, err := env.store.GetUpcomingDraftIssue(ctx)
+	draft, err := env.store.GetUpcomingDraftIssue(ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, draft, "publish must pre-create the next draft")
 	assert.Equal(t, "draft", draft.Status)
@@ -634,7 +631,7 @@ func TestUpcomingDraftLifecycle(t *testing.T) {
 
 	// The upcoming draft is not the active issue — the dashboard keeps its
 	// "no active issue / next opens" framing.
-	active, err := env.store.HasActiveIssue(ctx)
+	active, err := env.store.HasActiveIssue(ctx, 1)
 	require.NoError(t, err)
 	assert.False(t, active, "future draft must not count as active")
 
@@ -666,7 +663,7 @@ func TestUpcomingDraftLifecycle(t *testing.T) {
 		"draft must not accept answers before it opens")
 
 	// The scheduler fires: the draft opens with the suggestion leading.
-	require.NoError(t, env.srv.CreateNextIssue(ctx))
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1))
 
 	opened, err := env.store.GetIssueByID(ctx, draft.ID)
 	require.NoError(t, err)
@@ -694,8 +691,7 @@ func TestLiveQuestionEditing(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	member := env.createUser(t, "Zara", "zara@example.com")
 	session := env.sessionCookie(t, adminID)
 	csrfCookie, csrfHeader := csrfPair()
@@ -809,8 +805,7 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	session := env.sessionCookie(t, adminID)
 	csrfCookie, csrfHeader := csrfPair()
 
@@ -841,7 +836,7 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 		"/api/issues", `{"title": "Round one"}`)))
 	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
 
-	issue, err := env.store.GetActiveIssue(ctx)
+	issue, err := env.store.GetActiveIssue(ctx, 1)
 	require.NoError(t, err)
 
 	events := pendingFor(issue.ID)
@@ -879,7 +874,7 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 		"/api/issues", `{"title": "Short round"}`)))
 	require.Equal(t, http.StatusCreated, shortRR.Code, "create short: %s", shortRR.Body.String())
 
-	short, err := env.store.GetActiveIssue(ctx)
+	short, err := env.store.GetActiveIssue(ctx, 1)
 	require.NoError(t, err)
 
 	events = pendingFor(short.ID)
@@ -963,8 +958,7 @@ func TestAdminSummaryEmail(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	adminID, err := env.store.CreateUser(ctx, "Admin", "admin@example.com", "admin")
-	require.NoError(t, err, "create admin")
+	adminID := env.createUserWithRole(t, "Admin", "admin@example.com", "admin").ID
 	member := env.createUser(t, "Zara", "zara@example.com")
 
 	issueID, questionIDs := env.seedIssue(t, "collecting", 6, 2026, 2)
@@ -976,7 +970,7 @@ func TestAdminSummaryEmail(t *testing.T) {
 	require.NoError(t, env.srv.SendAdminSummaryForIssue(ctx, issueID, nil))
 
 	countSummaries := func() int {
-		logs, _, err := env.store.ListEmailLogs(ctx, 1, 100)
+		logs, _, err := env.store.ListEmailLogs(ctx, 1, 1, 100)
 		require.NoError(t, err)
 
 		n := 0

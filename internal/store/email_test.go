@@ -17,7 +17,7 @@ func TestBeginSchedulerEmailAttempt_SkipsSentRetry(t *testing.T) {
 	eventID := seedSchedulerEvent(t, s, "reminder_1")
 
 	logID, shouldSend, err := s.BeginSchedulerEmailAttempt(
-		ctx, eventID, userID, nil, "reminder",
+		ctx, eventID, userID, nil, nil, "reminder",
 	)
 	require.NoError(t, err)
 	require.True(t, shouldSend)
@@ -27,7 +27,7 @@ func TestBeginSchedulerEmailAttempt_SkipsSentRetry(t *testing.T) {
 	require.NoError(t, s.UpdateEmailLog(ctx, logID, "sent", &now, nil))
 
 	retryLogID, shouldSend, err := s.BeginSchedulerEmailAttempt(
-		ctx, eventID, userID, nil, "reminder",
+		ctx, eventID, userID, nil, nil, "reminder",
 	)
 	require.NoError(t, err)
 
@@ -43,7 +43,7 @@ func TestBeginSchedulerEmailAttempt_RetriesFailedAttempt(t *testing.T) {
 	eventID := seedSchedulerEvent(t, s, "reminder_1")
 
 	logID, shouldSend, err := s.BeginSchedulerEmailAttempt(
-		ctx, eventID, userID, nil, "reminder",
+		ctx, eventID, userID, nil, nil, "reminder",
 	)
 	require.NoError(t, err)
 	require.True(t, shouldSend)
@@ -52,7 +52,7 @@ func TestBeginSchedulerEmailAttempt_RetriesFailedAttempt(t *testing.T) {
 	require.NoError(t, s.UpdateEmailLog(ctx, logID, "failed", nil, &errText))
 
 	retryLogID, shouldSend, err := s.BeginSchedulerEmailAttempt(
-		ctx, eventID, userID, nil, "reminder",
+		ctx, eventID, userID, nil, nil, "reminder",
 	)
 	require.NoError(t, err)
 	require.True(t, shouldSend, "failed scheduler email should be retried")

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -9,23 +10,23 @@ import (
 	"github.com/parithosh/piecesoflife/internal/store"
 )
 
-// loadSettingsOr500 fetches settings for a page handler, writing a plain-text
-// 500 on failure. Returns ok=false when the response has already been
-// written. API handlers render JSON errors and should keep calling
-// GetSettings with writeError instead.
+// loadSettingsOr500 returns the current Loop's settings, resolved by
+// authMiddleware into the request context. Writes a plain-text 500 (and
+// returns ok=false) if no Loop is resolved — group-scoped page handlers sit
+// behind requireGroupMiddleware, so that indicates a wiring bug.
 func (s *Server) loadSettingsOr500(
 	w http.ResponseWriter, r *http.Request,
 ) (*store.Settings, bool) {
-	settings, err := s.store.GetSettings(r.Context())
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to load settings",
-			slog.String("error", err.Error()))
+	gc := GroupFromContext(r.Context())
+	if gc == nil {
+		s.logger.ErrorContext(r.Context(),
+			"No group context on a group-scoped page")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 
 		return nil, false
 	}
 
-	return settings, true
+	return gc.Settings, true
 }
 
 // parseIDParam reads a path parameter as int64 and writes a 400 on failure.
@@ -49,6 +50,12 @@ func (s *Server) parseIDParam(
 // requireIssue fetches an issue by ID, writing a 404 when it doesn't exist
 // and a logged 500 on any other store error. Returns ok=false when the
 // response has already been written.
+//
+// Issues outside the current Loop 404 — except on GET when the user can
+// enter the owning Loop, in which case the request transparently switches
+// their current Loop and redirects to the same URL. That keeps old links,
+// bookmarks, and cross-Loop email links working without group-prefixed
+// routes.
 func (s *Server) requireIssue(
 	w http.ResponseWriter, r *http.Request, issueID int64,
 ) (*store.Issue, bool) {
@@ -67,7 +74,43 @@ func (s *Server) requireIssue(
 		return nil, false
 	}
 
+	if issue.GroupID != currentGroupID(r.Context()) {
+		user := UserFromContext(r.Context())
+
+		if r.Method == http.MethodGet && user != nil &&
+			s.tryGroup(r.Context(), user, issue.GroupID) != nil {
+			s.switchGroup(w, r, user, issue.GroupID)
+			return nil, false
+		}
+
+		writeError(w, http.StatusNotFound, "not_found", "Issue not found")
+
+		return nil, false
+	}
+
 	return issue, true
+}
+
+// switchGroup makes groupID the user's current Loop (session + last used)
+// and replays the request URL so it re-runs under the new Loop. Callers
+// must have validated access via tryGroup first.
+func (s *Server) switchGroup(
+	w http.ResponseWriter, r *http.Request, user *store.User, groupID int64,
+) {
+	gc := GroupFromContext(r.Context())
+	if gc != nil && gc.SessionID != 0 {
+		if err := s.store.SetSessionGroup(r.Context(), gc.SessionID, groupID); err != nil {
+			s.logger.ErrorContext(r.Context(), "Failed to switch session group",
+				slog.String("error", err.Error()))
+		}
+	}
+
+	if err := s.store.SetLastGroup(r.Context(), user.ID, groupID); err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to persist last group",
+			slog.String("error", err.Error()))
+	}
+
+	http.Redirect(w, r, r.URL.String(), http.StatusSeeOther)
 }
 
 // loadOwnedResponse fetches a response by id and verifies the current user
@@ -129,4 +172,22 @@ func (s *Server) loadOwnedBlock(
 	}
 
 	return block, resp, true
+}
+
+// isGroupAdminOver reports whether the request's user administers the
+// current Loop AND the target user belongs to it — the scope of an admin's
+// authority over someone else's profile or preferences.
+func (s *Server) isGroupAdminOver(ctx context.Context, targetUserID int64) bool {
+	if !isGroupAdmin(ctx) {
+		return false
+	}
+
+	gc := GroupFromContext(ctx)
+	if gc == nil {
+		return false
+	}
+
+	_, err := s.store.GetMembership(ctx, gc.Group.ID, targetUserID)
+
+	return err == nil
 }

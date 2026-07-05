@@ -162,7 +162,7 @@ func (s *Server) SendReminderForIssue(
 		return fmt.Errorf("issue %d is not collecting", issueID)
 	}
 
-	settings, err := s.store.GetSettings(ctx)
+	settings, err := s.store.GetSettings(ctx, issue.GroupID)
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
@@ -177,7 +177,7 @@ func (s *Server) SendReminderForIssue(
 		return fmt.Errorf("loading progress for issue %d: %w", issueID, err)
 	}
 
-	nonResponders := make([]store.User, 0, len(progress.Members))
+	nonResponders := make([]store.GroupMember, 0, len(progress.Members))
 	for _, mp := range progress.Members {
 		if !mp.Responded {
 			nonResponders = append(nonResponders, mp.User)
@@ -221,7 +221,7 @@ func (s *Server) SendReminderForIssue(
 		if schedulerEventID != nil {
 			var shouldSend bool
 			logID, shouldSend, err = s.store.BeginSchedulerEmailAttempt(
-				ctx, *schedulerEventID, user.ID, &issueID, "reminder",
+				ctx, *schedulerEventID, user.ID, &issue.GroupID, &issueID, "reminder",
 			)
 			if err != nil {
 				s.logger.ErrorContext(ctx, "Failed to reserve reminder email log",
@@ -237,7 +237,8 @@ func (s *Server) SendReminderForIssue(
 				continue
 			}
 		} else {
-			logID, _ = s.store.LogEmail(ctx, &user.ID, &issueID, "reminder", "pending", nil)
+			logID, _ = s.store.LogEmail(ctx, &issue.GroupID, &user.ID, &issueID,
+				"reminder", "pending", nil)
 		}
 
 		raw, err := s.mintEmailCTAToken(ctx, user.ID)
@@ -311,7 +312,7 @@ func (s *Server) SendAdminSummaryForIssue(
 		return nil
 	}
 
-	settings, err := s.store.GetSettings(ctx)
+	settings, err := s.store.GetSettings(ctx, issue.GroupID)
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
@@ -337,13 +338,13 @@ func (s *Server) SendAdminSummaryForIssue(
 	subject := fmt.Sprintf("%s — %s publishes tomorrow (%d/%d in)",
 		settings.LoopName, monthStr, progress.Responded, progress.TotalMembers)
 
-	users, err := s.store.ListActiveUsers(ctx)
+	members, err := s.store.ListActiveGroupMembers(ctx, issue.GroupID)
 	if err != nil {
-		return fmt.Errorf("listing users: %w", err)
+		return fmt.Errorf("listing members: %w", err)
 	}
 
-	for i := range users {
-		admin := &users[i]
+	for i := range members {
+		admin := &members[i]
 		if admin.Role != "admin" {
 			continue
 		}
@@ -356,7 +357,7 @@ func (s *Server) SendAdminSummaryForIssue(
 		if schedulerEventID != nil {
 			var shouldSend bool
 			logID, shouldSend, err = s.store.BeginSchedulerEmailAttempt(
-				ctx, *schedulerEventID, admin.ID, &issueID, "admin_summary",
+				ctx, *schedulerEventID, admin.ID, &issue.GroupID, &issueID, "admin_summary",
 			)
 			if err != nil {
 				s.logger.ErrorContext(ctx, "Failed to reserve admin summary email log",
@@ -368,7 +369,8 @@ func (s *Server) SendAdminSummaryForIssue(
 				continue
 			}
 		} else {
-			logID, _ = s.store.LogEmail(ctx, &admin.ID, &issueID, "admin_summary", "pending", nil)
+			logID, _ = s.store.LogEmail(ctx, &issue.GroupID, &admin.ID, &issueID,
+				"admin_summary", "pending", nil)
 		}
 
 		raw, err := s.mintEmailCTAToken(ctx, admin.ID)
@@ -391,7 +393,8 @@ func (s *Server) SendAdminSummaryForIssue(
 			"Responded":     responded,
 			"Waiting":       waiting,
 			"CTA": map[string]any{
-				"URL":   s.config.BaseURL + "/admin?auth=" + raw,
+				"URL": fmt.Sprintf("%s/admin?auth=%s&g=%d",
+					s.config.BaseURL, raw, issue.GroupID),
 				"Label": "Open the Loom",
 			},
 		})
@@ -446,16 +449,16 @@ func (s *Server) AutoPublishIssue(ctx context.Context, issueID int64) error {
 		return fmt.Errorf("publishing issue %d: %w", issueID, err)
 	}
 
-	users, err := s.store.ListActiveUsers(ctx)
+	members, err := s.store.ListActiveGroupMembers(ctx, issue.GroupID)
 	if err != nil {
 		// Publish succeeded; notification failure shouldn't undo it.
-		s.logger.ErrorContext(ctx, "Failed to list users for auto-publish notifications",
+		s.logger.ErrorContext(ctx, "Failed to list members for auto-publish notifications",
 			slog.Int64("issue_id", issueID),
 			slog.String("error", err.Error()))
 		return nil
 	}
 
-	settings, err := s.store.GetSettings(ctx)
+	settings, err := s.store.GetSettings(ctx, issue.GroupID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to load settings for auto-publish",
 			slog.String("error", err.Error()))
@@ -467,7 +470,7 @@ func (s *Server) AutoPublishIssue(ctx context.Context, issueID int64) error {
 		updated = issue
 	}
 
-	s.sendPublishNotifications(ctx, updated, users, settings)
+	s.sendPublishNotifications(ctx, updated, members, settings)
 
 	// If auto-create is on, queue the next-issue event at a cadence derived
 	// from the loop's frequency. The scheduler will fire it and CreateNextIssue
@@ -504,7 +507,40 @@ func (s *Server) queueNextIssueEvent(
 		nextOpen = atLocalHour(nextOpen.AddDate(0, 0, 1), nextOpenLocalHour, loc)
 	}
 
-	if err := s.store.CreateSchedulerEvent(ctx, nil, "create_next_issue", nextOpen); err != nil {
+	// Ensure the next round exists as a draft first: the scheduler event
+	// references it, and that reference is how the event knows which Loop
+	// it belongs to.
+	var draftID *int64
+
+	existing, err := s.store.GetNextDraftIssue(ctx, settings.GroupID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "Failed to check for existing draft issue",
+			slog.String("error", err.Error()))
+	}
+
+	if existing != nil {
+		draftID = &existing.ID
+	} else {
+		windowDays := effectiveWindowDays(settings)
+
+		openLocal := nextOpen.In(loc)
+		deadline := atLocalHour(openLocal.AddDate(0, 0, windowDays), deadlineLocalHour, loc)
+
+		issueID, err := s.store.CreateIssue(ctx, settings.GroupID, nil,
+			int(openLocal.Month()), openLocal.Year(), nextOpen, deadline)
+		if err != nil {
+			s.logger.WarnContext(ctx, "Failed to pre-create next draft issue",
+				slog.String("error", err.Error()))
+		} else {
+			draftID = &issueID
+
+			s.logger.InfoContext(ctx, "Pre-created next issue as draft",
+				slog.Int64("issue_id", issueID),
+				slog.Time("opens_at", nextOpen))
+		}
+	}
+
+	if err := s.store.CreateSchedulerEvent(ctx, draftID, "create_next_issue", nextOpen); err != nil {
 		s.logger.WarnContext(ctx, "Failed to queue create_next_issue event",
 			slog.Time("scheduled_at", nextOpen),
 			slog.String("error", err.Error()))
@@ -513,33 +549,6 @@ func (s *Server) queueNextIssueEvent(
 			slog.Time("scheduled_at", nextOpen),
 		)
 	}
-
-	existing, err := s.store.GetNextDraftIssue(ctx)
-	if err != nil {
-		s.logger.WarnContext(ctx, "Failed to check for existing draft issue",
-			slog.String("error", err.Error()))
-		return
-	}
-	if existing != nil {
-		return
-	}
-
-	windowDays := effectiveWindowDays(settings)
-
-	openLocal := nextOpen.In(loc)
-	deadline := atLocalHour(openLocal.AddDate(0, 0, windowDays), deadlineLocalHour, loc)
-
-	issueID, err := s.store.CreateIssue(ctx, nil,
-		int(openLocal.Month()), openLocal.Year(), nextOpen, deadline)
-	if err != nil {
-		s.logger.WarnContext(ctx, "Failed to pre-create next draft issue",
-			slog.String("error", err.Error()))
-		return
-	}
-
-	s.logger.InfoContext(ctx, "Pre-created next issue as draft",
-		slog.Int64("issue_id", issueID),
-		slog.Time("opens_at", nextOpen))
 }
 
 // openIssueForCollecting flips a draft round to collecting: stitches in the
@@ -573,11 +582,11 @@ func (s *Server) openIssueForCollecting(
 
 	nextOrder := len(existing)
 	if !hasDefaults {
-		nextOrder += s.insertDefaultQuestions(ctx, issue.ID, nextOrder)
+		nextOrder += s.insertDefaultQuestions(ctx, issue.GroupID, issue.ID, nextOrder)
 	}
 
 	if need := questionTarget(settings, questionCount) - nextOrder; need > 0 {
-		bankQuestions, err := s.store.SelectRandomUnusedQuestions(ctx, need)
+		bankQuestions, err := s.store.SelectRandomUnusedQuestions(ctx, issue.GroupID, need)
 		if err != nil {
 			s.logger.WarnContext(ctx, "Failed to select bank questions for issue open",
 				slog.Int64("issue_id", issue.ID),
@@ -615,10 +624,10 @@ func (s *Server) openIssueForCollecting(
 	// Send issue-open emails to every active member.
 	questions, _ := s.store.ListQuestionsByIssue(ctx, issue.ID)
 
-	users, err := s.store.ListActiveUsers(ctx)
+	members, err := s.store.ListActiveGroupMembers(ctx, issue.GroupID)
 	if err == nil {
-		for i := range users {
-			s.sendIssueOpenEmail(ctx, &users[i], issue, settings, questions)
+		for i := range members {
+			s.sendIssueOpenEmail(ctx, &members[i].User, issue, settings, questions)
 		}
 	}
 
@@ -642,7 +651,8 @@ func (s *Server) nextIssueOpensLabel(
 		return ""
 	}
 
-	ev, err := s.store.GetNextPendingEventByType(ctx, "create_next_issue")
+	ev, err := s.store.GetNextPendingEventForGroup(ctx,
+		"create_next_issue", settings.GroupID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "Failed to look up next create_next_issue event",
 			slog.String("error", err.Error()))
@@ -667,8 +677,8 @@ func (s *Server) nextIssueOpensLabel(
 // issue is created on the spot. No-op if:
 //   - auto_create_enabled is off (admin turned it off between queue + fire)
 //   - a round is already collecting answers
-func (s *Server) CreateNextIssue(ctx context.Context) error {
-	settings, err := s.store.GetSettings(ctx)
+func (s *Server) CreateNextIssue(ctx context.Context, groupID int64) error {
+	settings, err := s.store.GetSettings(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
 	}
@@ -678,7 +688,7 @@ func (s *Server) CreateNextIssue(ctx context.Context) error {
 		return nil
 	}
 
-	collecting, err := s.store.HasCollectingIssue(ctx)
+	collecting, err := s.store.HasCollectingIssue(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("checking collecting issue: %w", err)
 	}
@@ -688,7 +698,7 @@ func (s *Server) CreateNextIssue(ctx context.Context) error {
 		return nil
 	}
 
-	if draft, err := s.store.GetNextDraftIssue(ctx); err != nil {
+	if draft, err := s.store.GetNextDraftIssue(ctx, groupID); err != nil {
 		return fmt.Errorf("checking draft issue: %w", err)
 	} else if draft != nil {
 		return s.openIssueForCollecting(ctx, settings, draft, 0)
@@ -705,7 +715,7 @@ func (s *Server) CreateNextIssue(ctx context.Context) error {
 	nowLocal := now.In(loc)
 	deadline := atLocalHour(nowLocal.AddDate(0, 0, windowDays), deadlineLocalHour, loc)
 
-	issueID, err := s.store.CreateIssue(ctx, nil,
+	issueID, err := s.store.CreateIssue(ctx, groupID, nil,
 		int(nowLocal.Month()), nowLocal.Year(), now, deadline,
 	)
 	if err != nil {
@@ -748,7 +758,7 @@ func nextIssueOpenTime(currentOpen time.Time, frequency string, now time.Time) t
 // Skipped if the author commented on their own response or has the
 // comment_notify preference disabled.
 func (s *Server) SendCommentNotification(
-	ctx context.Context,
+	ctx context.Context, groupID int64,
 	responseAuthor *store.User, commenter *store.User,
 	questionText, commentBody string, responseID int64,
 ) {
@@ -765,7 +775,7 @@ func (s *Server) SendCommentNotification(
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
+	settings, err := s.store.GetSettings(ctx, groupID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to load settings for comment notification",
 			slog.String("error", err.Error()))
@@ -779,14 +789,15 @@ func (s *Server) SendCommentNotification(
 		return
 	}
 
-	authURL := fmt.Sprintf("%s/?auth=%s", s.config.BaseURL, raw)
+	authURL := fmt.Sprintf("%s/?auth=%s&g=%d", s.config.BaseURL, raw, groupID)
 	subject := fmt.Sprintf("%s commented on your response", commenter.Name)
 	body := s.renderCommentEmail(
 		settings.LoopName, responseAuthor.Name, commenter.Name,
 		questionText, commentBody, authURL,
 	)
 
-	logID, _ := s.store.LogEmail(ctx, &responseAuthor.ID, nil, "comment_notification", "pending", nil)
+	logID, _ := s.store.LogEmail(ctx, &groupID, &responseAuthor.ID, nil,
+		"comment_notification", "pending", nil)
 
 	bgCtx := context.WithoutCancel(ctx)
 	go func() {

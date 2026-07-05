@@ -1,0 +1,68 @@
+{{define "title"}}Your Loops — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--admin">
+    <div class="pl-admin">
+
+      <div class="pl-admin-head">
+        <div>
+          <p class="pl-eyebrow pl-eyebrow--peacock">Your Loops</p>
+          <h1 class="pl-admin-title">Every circle you belong to</h1>
+        </div>
+      </div>
+
+      <div class="zari pl-admin-rule" aria-hidden="true"></div>
+
+      {{if .Cards}}
+      <div class="pl-loops-grid">
+        {{range .Cards}}
+        <button type="button" class="pl-loop-card {{if .Current}}is-current{{end}}"
+                data-group-id="{{.GroupID}}">
+          <span class="pl-loop-card-name">{{.LoopName}}</span>
+          {{if .Tagline}}<span class="pl-loop-card-tagline">{{.Tagline}}</span>{{end}}
+          <span class="pl-loop-card-meta">
+            {{if eq .Role "admin"}}<span class="pl-pill pl-pill--admin">✦ Keeper</span>{{end}}
+            {{if .Current}}<span class="pl-pill pl-pill--active">● You're here</span>{{end}}
+            {{if not .SetupComplete}}
+            <span class="pl-pill pl-pill--inactive">Still being woven</span>
+            {{else if .Collecting}}
+            <span class="pl-pill pl-pill--active">Collecting until {{formatDay .Deadline}}</span>
+            {{else if .LatestEdition}}
+            <span class="pl-pill pl-pill--draft">Latest edition · {{.LatestEdition}}</span>
+            {{else}}
+            <span class="pl-pill pl-pill--draft">No editions yet</span>
+            {{end}}
+          </span>
+        </button>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="pl-archive-empty">
+        <h3 class="pl-display pl-archive-empty-title">No Loops yet</h3>
+        <p class="pl-archive-empty-sub">Ask a keeper to invite you —
+        the invite email brings you straight in.</p>
+      </div>
+      {{end}}
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+document.querySelectorAll('.pl-loop-card[data-group-id]').forEach((card) => {
+    card.addEventListener('click', async () => {
+        const res = await fetch('/api/me/group', {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify({ group_id: Number(card.dataset.groupId) }),
+        });
+        if (res.ok) { window.location.href = '/'; }
+    });
+});
+</script>
+{{end}}

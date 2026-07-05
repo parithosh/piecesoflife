@@ -58,8 +58,8 @@ type SubmissionProgress struct {
 
 // MemberProgress tracks whether an individual member has responded.
 type MemberProgress struct {
-	User      User `json:"user"`
-	Responded bool `json:"responded"`
+	User      GroupMember `json:"user"`
+	Responded bool        `json:"responded"`
 }
 
 // CreateResponse inserts a new draft response and returns its ID.
@@ -378,17 +378,21 @@ func (s *Store) GetSubmissionProgress(
 
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT u.id, u.name, u.email, u.avatar_url, u.bio,
-		        u.role, u.is_active, u.created_at,
+		        (m.is_active AND u.is_active), u.is_instance_admin,
+		        u.last_group_id, u.created_at,
+		        m.role, m.is_active, m.created_at,
 		        EXISTS(
 		            SELECT 1 FROM responses r
 		            JOIN questions q ON r.question_id = q.id
 		            WHERE q.issue_id = ? AND r.user_id = u.id
 		            AND r.is_draft = 0
 		        ) AS responded
-		 FROM users u
-		 WHERE u.is_active = 1
-		 ORDER BY (u.role = 'admin'), u.name`,
-		issueID,
+		 FROM memberships m
+		 JOIN users u ON u.id = m.user_id
+		 WHERE m.group_id = (SELECT group_id FROM issues WHERE id = ?)
+		   AND m.is_active = 1 AND u.is_active = 1
+		 ORDER BY (m.role = 'admin'), u.name`,
+		issueID, issueID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("getting submission progress: %w", err)
@@ -405,8 +409,10 @@ func (s *Store) GetSubmissionProgress(
 		var mp MemberProgress
 
 		err := rows.Scan(&mp.User.ID, &mp.User.Name, &mp.User.Email,
-			&mp.User.AvatarURL, &mp.User.Bio, &mp.User.Role,
-			&mp.User.IsActive, &mp.User.CreatedAt, &mp.Responded)
+			&mp.User.AvatarURL, &mp.User.Bio, &mp.User.User.IsActive,
+			&mp.User.IsInstanceAdmin, &mp.User.LastGroupID,
+			&mp.User.User.CreatedAt, &mp.User.Role, &mp.User.MemberActive,
+			&mp.User.JoinedAt, &mp.Responded)
 		if err != nil {
 			return nil, fmt.Errorf("scanning member progress: %w", err)
 		}

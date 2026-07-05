@@ -10,6 +10,7 @@ import (
 // EmailLog records a sent or attempted email.
 type EmailLog struct {
 	ID               int64      `json:"id"`
+	GroupID          *int64     `json:"group_id"`
 	UserID           *int64     `json:"user_id"`
 	IssueID          *int64     `json:"issue_id"`
 	SchedulerEventID *int64     `json:"scheduler_event_id,omitempty"`
@@ -23,14 +24,14 @@ type EmailLog struct {
 // LogEmail records an email send attempt and returns the log entry ID.
 func (s *Store) LogEmail(
 	ctx context.Context,
-	userID, issueID *int64,
+	groupID, userID, issueID *int64,
 	emailType, status string,
 	sendErr *string,
 ) (int64, error) {
 	result, err := s.write.ExecContext(ctx,
-		`INSERT INTO email_log (user_id, issue_id, type, status, error)
-		 VALUES (?, ?, ?, ?, ?)`,
-		userID, issueID, emailType, status, sendErr,
+		`INSERT INTO email_log (group_id, user_id, issue_id, type, status, error)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		groupID, userID, issueID, emailType, status, sendErr,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("logging email: %w", err)
@@ -50,7 +51,7 @@ func (s *Store) LogEmail(
 func (s *Store) BeginSchedulerEmailAttempt(
 	ctx context.Context,
 	schedulerEventID, userID int64,
-	issueID *int64,
+	groupID, issueID *int64,
 	emailType string,
 ) (logID int64, shouldSend bool, err error) {
 	tx, err := s.write.BeginTx(ctx, nil)
@@ -78,9 +79,10 @@ func (s *Store) BeginSchedulerEmailAttempt(
 
 		_, err = tx.ExecContext(ctx,
 			`UPDATE email_log
-			 SET issue_id = ?, status = 'pending', sent_at = NULL, error = NULL
+			 SET group_id = ?, issue_id = ?,
+			     status = 'pending', sent_at = NULL, error = NULL
 			 WHERE id = ?`,
-			issueID, logID,
+			groupID, issueID, logID,
 		)
 		if err != nil {
 			return 0, false, fmt.Errorf("resetting scheduler email log: %w", err)
@@ -99,9 +101,9 @@ func (s *Store) BeginSchedulerEmailAttempt(
 
 	result, err := tx.ExecContext(ctx,
 		`INSERT INTO email_log
-		 (user_id, issue_id, scheduler_event_id, type, status)
-		 VALUES (?, ?, ?, ?, 'pending')`,
-		userID, issueID, schedulerEventID, emailType,
+		 (group_id, user_id, issue_id, scheduler_event_id, type, status)
+		 VALUES (?, ?, ?, ?, ?, 'pending')`,
+		groupID, userID, issueID, schedulerEventID, emailType,
 	)
 	if err != nil {
 		return 0, false, fmt.Errorf("creating scheduler email log: %w", err)
@@ -139,12 +141,12 @@ func (s *Store) UpdateEmailLog(
 
 // ListEmailLogs returns paginated email log entries.
 func (s *Store) ListEmailLogs(
-	ctx context.Context, page, perPage int,
+	ctx context.Context, groupID int64, page, perPage int,
 ) ([]EmailLog, int, error) {
 	var total int
 
 	err := s.read.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM email_log",
+		"SELECT COUNT(*) FROM email_log WHERE group_id = ?", groupID,
 	).Scan(&total)
 	if err != nil {
 		return nil, 0, fmt.Errorf("counting email logs: %w", err)
@@ -153,10 +155,11 @@ func (s *Store) ListEmailLogs(
 	offset := (page - 1) * perPage
 
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT id, user_id, issue_id, scheduler_event_id,
+		`SELECT id, group_id, user_id, issue_id, scheduler_event_id,
 		        type, status, sent_at, error, created_at
-		 FROM email_log ORDER BY created_at DESC
-		 LIMIT ? OFFSET ?`, perPage, offset,
+		 FROM email_log WHERE group_id = ?
+		 ORDER BY created_at DESC
+		 LIMIT ? OFFSET ?`, groupID, perPage, offset,
 	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listing email logs: %w", err)
@@ -169,8 +172,9 @@ func (s *Store) ListEmailLogs(
 	for rows.Next() {
 		var l EmailLog
 
-		err := rows.Scan(&l.ID, &l.UserID, &l.IssueID, &l.SchedulerEventID,
-			&l.Type, &l.Status, &l.SentAt, &l.Error, &l.CreatedAt)
+		err := rows.Scan(&l.ID, &l.GroupID, &l.UserID, &l.IssueID,
+			&l.SchedulerEventID, &l.Type, &l.Status, &l.SentAt,
+			&l.Error, &l.CreatedAt)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scanning email log: %w", err)
 		}
@@ -196,10 +200,10 @@ func (s *Store) GetEmailLogByID(
 	var l EmailLog
 
 	err := s.read.QueryRowContext(ctx,
-		`SELECT id, user_id, issue_id, scheduler_event_id,
+		`SELECT id, group_id, user_id, issue_id, scheduler_event_id,
 		        type, status, sent_at, error, created_at
 		 FROM email_log WHERE id = ?`, id,
-	).Scan(&l.ID, &l.UserID, &l.IssueID, &l.SchedulerEventID,
+	).Scan(&l.ID, &l.GroupID, &l.UserID, &l.IssueID, &l.SchedulerEventID,
 		&l.Type, &l.Status, &l.SentAt, &l.Error, &l.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting email log %d: %w", id, err)

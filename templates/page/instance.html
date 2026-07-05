@@ -1,0 +1,197 @@
+{{define "title"}}Console — {{.Instance.InstanceName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--admin">
+    <div class="pl-admin">
+
+      <div class="pl-admin-head">
+        <div>
+          <p class="pl-eyebrow pl-eyebrow--peacock">The Courtyard</p>
+          <h1 class="pl-admin-title">{{.Instance.InstanceName}} console</h1>
+        </div>
+      </div>
+
+      <div class="zari pl-admin-rule" aria-hidden="true"></div>
+
+      <div class="pl-members-head">
+        <p class="pl-eyebrow">Loops on this instance</p>
+        <button type="button" id="new-loop-btn" class="pl-btn pl-btn--gold">＋ Weave a new Loop</button>
+      </div>
+
+      <div class="pl-members-list">
+        {{range .Groups}}
+        <div class="pl-inst-row {{if not .IsActive}}is-archived{{end}}">
+          <div class="pl-inst-main">
+            <div class="pl-inst-name">{{.LoopName}}</div>
+            <div class="pl-inst-meta">
+              {{.MemberCount}} member{{if ne .MemberCount 1}}s{{end}}
+              · {{.AdminCount}} keeper{{if ne .AdminCount 1}}s{{end}}
+              · since {{formatDay .CreatedAt}}
+            </div>
+          </div>
+          {{if not .IsActive}}
+          <span class="pl-pill pl-pill--inactive">Archived</span>
+          {{else if not .SetupComplete}}
+          <span class="pl-pill pl-pill--inactive">Still being woven</span>
+          {{else if .Collecting}}
+          <span class="pl-pill pl-pill--active">Collecting until {{formatDay .Deadline}}</span>
+          {{else}}
+          <span class="pl-pill pl-pill--draft">Between rounds</span>
+          {{end}}
+          <div class="pl-inst-actions">
+            {{if .IsActive}}
+            <button type="button" class="pl-btn pl-btn--outline" data-enter="{{.ID}}">Enter</button>
+            <button type="button" class="pl-btn pl-btn--outline" data-archive="{{.ID}}"
+                    data-name="{{.LoopName}}">Archive</button>
+            {{else}}
+            <button type="button" class="pl-btn pl-btn--outline" data-restore="{{.ID}}">Restore</button>
+            {{end}}
+          </div>
+        </div>
+        {{end}}
+      </div>
+
+      <div class="zari pl-admin-rule" aria-hidden="true"></div>
+
+      <div class="pl-members-head">
+        <p class="pl-eyebrow">Instance settings</p>
+      </div>
+
+      <div class="pl-form-field">
+        <label for="instance-name" class="pl-login-label">Instance name</label>
+        <input type="text" id="instance-name" class="pl-field pl-login-input"
+               value="{{.Instance.InstanceName}}">
+        <p class="pl-inst-meta">Shown on the login page and in login emails —
+        each Loop keeps its own name everywhere else.</p>
+      </div>
+
+      <div class="pl-form-field">
+        <label class="pl-login-label">
+          <input type="checkbox" id="instance-mementos"
+                 {{if .Instance.AllowPublicMementos}}checked{{end}}>
+          Allow public mementos anywhere on this instance
+        </label>
+        <p class="pl-inst-meta">A policy ceiling: when off, no Loop can share
+        public memento links, whatever its own setting says.</p>
+      </div>
+
+      <div class="pl-dialog-actions">
+        <button type="button" id="save-instance-btn" class="pl-btn pl-btn--rani">Save instance settings</button>
+      </div>
+
+      <dialog id="new-loop-dialog" class="pl-dialog" aria-labelledby="new-loop-title">
+        <div class="pl-dialog-body">
+          <h3 id="new-loop-title" class="pl-dialog-title">Weave a new Loop</h3>
+          <div class="pl-form-field">
+            <label for="loop-name" class="pl-login-label">Loop name</label>
+            <input type="text" id="loop-name" class="pl-field pl-login-input"
+                   placeholder="The Sharma Family" required>
+          </div>
+          <div class="pl-form-field">
+            <label for="keeper-email" class="pl-login-label">Keeper's email</label>
+            <input type="email" id="keeper-email" class="pl-field pl-login-input"
+                   placeholder="keeper@example.com" required>
+            <p class="pl-inst-meta">They become the Loop's admin and get an
+            invite to run its setup. It can be you.</p>
+          </div>
+          <div class="pl-form-field">
+            <label for="keeper-name" class="pl-login-label">Keeper's name <span class="pl-inst-meta">(optional)</span></label>
+            <input type="text" id="keeper-name" class="pl-field pl-login-input"
+                   placeholder="Asha">
+          </div>
+          <div class="pl-dialog-actions">
+            <button type="button" class="pl-btn pl-btn--outline"
+                    onclick="document.getElementById('new-loop-dialog').close()">Cancel</button>
+            <button type="button" id="create-loop-btn" class="pl-btn pl-btn--rani">Create Loop</button>
+          </div>
+        </div>
+      </dialog>
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script>
+document.getElementById('new-loop-btn').addEventListener('click', () => {
+    document.getElementById('new-loop-dialog').showModal();
+});
+
+document.getElementById('create-loop-btn').addEventListener('click', async () => {
+    const name = document.getElementById('loop-name').value.trim();
+    const adminEmail = document.getElementById('keeper-email').value.trim();
+    const adminName = document.getElementById('keeper-name').value.trim();
+    if (!name || !adminEmail) { alert('Loop name and keeper email are required.'); return; }
+
+    const res = await fetch('/api/instance/groups', {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ name, admin_email: adminEmail, admin_name: adminName }),
+    });
+
+    if (res.ok) {
+        document.getElementById('new-loop-dialog').close();
+        location.reload();
+    } else {
+        const data = await res.json();
+        alert(data.error?.message || 'Failed to create the Loop.');
+    }
+});
+
+document.querySelectorAll('[data-enter]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+        const res = await fetch('/api/me/group', {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify({ group_id: Number(btn.dataset.enter) }),
+        });
+        if (res.ok) { window.location.href = '/'; }
+    });
+});
+
+async function setLoopActive(groupId, isActive) {
+    const res = await fetch('/api/instance/groups/' + groupId, {
+        method: 'PATCH',
+        headers: apiHeaders(),
+        body: JSON.stringify({ is_active: isActive }),
+    });
+    if (res.ok) { location.reload(); }
+    else {
+        const data = await res.json();
+        alert(data.error?.message || 'Failed to update the Loop.');
+    }
+}
+
+document.querySelectorAll('[data-archive]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+        if (confirm('Archive "' + btn.dataset.name + '"? Its members lose access until it is restored; nothing is deleted.')) {
+            setLoopActive(Number(btn.dataset.archive), false);
+        }
+    });
+});
+
+document.querySelectorAll('[data-restore]').forEach((btn) => {
+    btn.addEventListener('click', () => setLoopActive(Number(btn.dataset.restore), true));
+});
+
+document.getElementById('save-instance-btn').addEventListener('click', async () => {
+    const res = await fetch('/api/instance/settings', {
+        method: 'PATCH',
+        headers: apiHeaders(),
+        body: JSON.stringify({
+            instance_name: document.getElementById('instance-name').value.trim(),
+            allow_public_mementos: document.getElementById('instance-mementos').checked,
+        }),
+    });
+    if (res.ok) { location.reload(); }
+    else {
+        const data = await res.json();
+        alert(data.error?.message || 'Failed to save instance settings.');
+    }
+});
+</script>
+{{end}}

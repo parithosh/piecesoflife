@@ -201,7 +201,7 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if item.UserID != user.ID && user.Role != "admin" {
+	if item.UserID != user.ID && !isGroupAdmin(r.Context()) {
 		writeError(w, http.StatusForbidden, "forbidden", "Not your dump item")
 		return
 	}

@@ -804,7 +804,7 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if comment.UserID != user.ID && user.Role != "admin" {
+	if comment.UserID != user.ID && !isGroupAdmin(r.Context()) {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot delete another user's comment")
 		return
 	}
@@ -826,6 +826,7 @@ func (s *Server) notifyCommentAsync(
 	ctx context.Context,
 	responseID int64, resp *store.Response, commenter *store.User, body string,
 ) {
+	groupID := currentGroupID(ctx)
 	bgCtx := context.WithoutCancel(ctx)
 
 	go func() {
@@ -846,7 +847,7 @@ func (s *Server) notifyCommentAsync(
 			questionText = question.Text
 		}
 
-		s.SendCommentNotification(nCtx, author, commenter, questionText, body, responseID)
+		s.SendCommentNotification(nCtx, groupID, author, commenter, questionText, body, responseID)
 	}()
 }
 
