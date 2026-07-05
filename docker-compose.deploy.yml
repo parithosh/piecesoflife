@@ -1,0 +1,46 @@
+# Deployment using the prebuilt image from Docker Hub (no local build).
+#
+# Copy .env.example to .env and fill it in first — the required secrets have
+# no defaults here on purpose, so a bare `docker compose up` fails loudly
+# instead of shipping with dev credentials.
+#
+#   docker compose -f docker-compose.deploy.yml up -d
+#
+# To update to the newest image:
+#   docker compose -f docker-compose.deploy.yml pull && \
+#   docker compose -f docker-compose.deploy.yml up -d
+services:
+  app:
+    image: parithoshj/piecesoflife:latest
+    pull_policy: always
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    environment:
+      PORT: "${PORT:-8080}"
+      BASE_URL: "${BASE_URL:?set BASE_URL in .env (e.g. https://letters.example.com)}"
+      DEV_MODE: "false"
+      DATABASE_PATH: "/data/db/piecesoflife.db"
+      UPLOAD_PATH: "/data/uploads"
+      # Email delivery: "smtp" (default) or "jmap" (e.g. a Fastmail API
+      # token — see docs/fastmail-jmap.md).
+      EMAIL_PROVIDER: "${EMAIL_PROVIDER:-smtp}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-465}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      JMAP_SESSION_URL: "${JMAP_SESSION_URL:-https://api.fastmail.com/jmap/session}"
+      JMAP_API_TOKEN: "${JMAP_API_TOKEN:-}"
+      FROM_EMAIL: "${FROM_EMAIL:?set FROM_EMAIL in .env}"
+      FROM_NAME: "${FROM_NAME:-}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}"
+      SESSION_SECRET: "${SESSION_SECRET:?set SESSION_SECRET in .env (long random string)}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      LOG_FORMAT: "json"
+    volumes:
+      # Host bind mount: the directory containing this compose file is
+      # mounted as /data, so the database lands in ./db and uploads in
+      # ./uploads. The container runs as a non-root user (uid 100), so the
+      # app must be able to write here:
+      #   mkdir -p db uploads && chown -R 100:101 db uploads
+      - ./:/data
+    restart: unless-stopped
