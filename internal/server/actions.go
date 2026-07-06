@@ -509,38 +509,43 @@ func (s *Server) queueNextIssueEvent(
 
 	// Ensure the next round exists as a draft first: the scheduler event
 	// references it, and that reference is how the event knows which Loop
-	// it belongs to.
-	var draftID *int64
-
+	// it belongs to. Both failure paths abort — creating a draft when the
+	// existence check failed risks a duplicate round, and an event without
+	// an issue reference cannot be attributed to this Loop at fire time.
+	// The admin's "Start it now" button remains the manual recovery path.
 	existing, err := s.store.GetNextDraftIssue(ctx, settings.GroupID)
 	if err != nil {
-		s.logger.WarnContext(ctx, "Failed to check for existing draft issue",
+		s.logger.ErrorContext(ctx, "Failed to check for existing draft issue — next round not scheduled",
+			slog.Int64("group_id", settings.GroupID),
 			slog.String("error", err.Error()))
+		return
 	}
 
+	var draftID int64
+
 	if existing != nil {
-		draftID = &existing.ID
+		draftID = existing.ID
 	} else {
 		windowDays := effectiveWindowDays(settings)
 
 		openLocal := nextOpen.In(loc)
 		deadline := atLocalHour(openLocal.AddDate(0, 0, windowDays), deadlineLocalHour, loc)
 
-		issueID, err := s.store.CreateIssue(ctx, settings.GroupID, nil,
+		draftID, err = s.store.CreateIssue(ctx, settings.GroupID, nil,
 			int(openLocal.Month()), openLocal.Year(), nextOpen, deadline)
 		if err != nil {
-			s.logger.WarnContext(ctx, "Failed to pre-create next draft issue",
+			s.logger.ErrorContext(ctx, "Failed to pre-create next draft issue — next round not scheduled",
+				slog.Int64("group_id", settings.GroupID),
 				slog.String("error", err.Error()))
-		} else {
-			draftID = &issueID
-
-			s.logger.InfoContext(ctx, "Pre-created next issue as draft",
-				slog.Int64("issue_id", issueID),
-				slog.Time("opens_at", nextOpen))
+			return
 		}
+
+		s.logger.InfoContext(ctx, "Pre-created next issue as draft",
+			slog.Int64("issue_id", draftID),
+			slog.Time("opens_at", nextOpen))
 	}
 
-	if err := s.store.CreateSchedulerEvent(ctx, draftID, "create_next_issue", nextOpen); err != nil {
+	if err := s.store.CreateSchedulerEvent(ctx, &draftID, "create_next_issue", nextOpen); err != nil {
 		s.logger.WarnContext(ctx, "Failed to queue create_next_issue event",
 			slog.Time("scheduled_at", nextOpen),
 			slog.String("error", err.Error()))
@@ -658,6 +663,24 @@ func (s *Server) nextIssueOpensLabel(
 			slog.String("error", err.Error()))
 		return ""
 	}
+
+	// Events queued before multi-group carry no issue reference. They can
+	// only belong to the instance's original (oldest) Loop, so surface them
+	// there rather than showing no label until the next publish cycle.
+	if ev == nil {
+		oldest, oErr := s.store.GetOldestActiveGroupID(ctx)
+		if oErr != nil || oldest != settings.GroupID {
+			return ""
+		}
+
+		ev, err = s.store.GetNextPendingLegacyEventByType(ctx, "create_next_issue")
+		if err != nil {
+			s.logger.WarnContext(ctx, "Failed to look up legacy create_next_issue event",
+				slog.String("error", err.Error()))
+			return ""
+		}
+	}
+
 	if ev == nil {
 		return ""
 	}

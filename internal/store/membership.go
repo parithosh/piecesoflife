@@ -58,9 +58,10 @@ func (s *Store) GetMembership(
 	return &m, nil
 }
 
-// CreateMembership adds a user to a group. If a deactivated membership
-// already exists it is reactivated with the given role instead (re-inviting
-// a removed member restores them).
+// CreateMembership adds a user to a group. If a membership already exists
+// (active or deactivated) it is reactivated, and the role only ever moves
+// up: an existing admin is never demoted by a stray re-invite — demotion
+// must go through SetMembershipRole deliberately.
 func (s *Store) CreateMembership(
 	ctx context.Context, groupID, userID int64, role string,
 ) error {
@@ -68,7 +69,12 @@ func (s *Store) CreateMembership(
 		`INSERT INTO memberships (group_id, user_id, role, is_active)
 		 VALUES (?, ?, ?, 1)
 		 ON CONFLICT(group_id, user_id)
-		 DO UPDATE SET role = excluded.role, is_active = 1`,
+		 DO UPDATE SET
+		   role = CASE
+		     WHEN memberships.role = 'admin' OR excluded.role = 'admin'
+		     THEN 'admin' ELSE excluded.role
+		   END,
+		   is_active = 1`,
 		groupID, userID, role,
 	)
 	if err != nil {

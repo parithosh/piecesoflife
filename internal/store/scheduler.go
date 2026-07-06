@@ -102,6 +102,34 @@ func (s *Store) GetNextPendingEventByType(
 	return &e, nil
 }
 
+// GetNextPendingLegacyEventByType returns the earliest unfired event of the
+// given type that carries no issue reference. Only events queued before
+// multi-group (migration 016) look like this — they can only belong to the
+// instance's original Loop.
+func (s *Store) GetNextPendingLegacyEventByType(
+	ctx context.Context, eventType string,
+) (*SchedulerEvent, error) {
+	var e SchedulerEvent
+
+	err := s.read.QueryRowContext(ctx,
+		`SELECT id, issue_id, event_type, scheduled_at,
+		        fired_at, was_late, created_at
+		 FROM scheduler_events
+		 WHERE fired_at IS NULL AND event_type = ? AND issue_id IS NULL
+		 ORDER BY scheduled_at ASC LIMIT 1`,
+		eventType,
+	).Scan(&e.ID, &e.IssueID, &e.EventType, &e.ScheduledAt,
+		&e.FiredAt, &e.WasLate, &e.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting next pending legacy %s event: %w", eventType, err)
+	}
+
+	return &e, nil
+}
+
 // MarkEventFired records that a scheduled event has been executed.
 func (s *Store) MarkEventFired(
 	ctx context.Context, id int64, wasLate bool,

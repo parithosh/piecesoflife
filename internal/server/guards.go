@@ -143,6 +143,13 @@ func (s *Server) switchGroup(
 			slog.String("error", err.Error()))
 	}
 
+	// Drop any explicit ?g= from the replayed URL: it outranks the session
+	// group during resolution, so a stale value would fight the switch we
+	// just made and redirect forever.
+	q := r.URL.Query()
+	q.Del("g")
+	r.URL.RawQuery = q.Encode()
+
 	http.Redirect(w, r, r.URL.String(), http.StatusSeeOther)
 }
 

@@ -811,7 +811,15 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !publicAllowed {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			// Anonymous visitors might just need to log in; a signed-in
+			// non-member gets a plain 404 — a login form can't help them.
+			if viewer == nil {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
+			http.NotFound(w, r)
+
 			return
 		}
 	}

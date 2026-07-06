@@ -66,8 +66,12 @@ SELECT 1, loop_name, allow_public_mementos FROM settings WHERE id = 1;
 
 INSERT OR IGNORE INTO instance_settings (id) VALUES (1);
 
--- users: role moves to memberships; instance admins are flagged on the
--- identity; last_group_id remembers where a fresh login should land.
+-- users: role moves to memberships; last_group_id remembers where a fresh
+-- login should land. Nobody is promoted to instance admin here — existing
+-- admins become admins OF THEIR LOOP via the memberships copy above, and
+-- startup seeding (SeedAdminUser) flags exactly the ADMIN_EMAIL operator.
+-- Blanket-promoting every co-admin would hand them the run of every Loop
+-- later created on the instance.
 CREATE TABLE users_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -83,9 +87,7 @@ CREATE TABLE users_new (
 INSERT INTO users_new
     (id, name, email, avatar_url, bio, is_active, is_instance_admin,
      last_group_id, created_at)
-SELECT id, name, email, avatar_url, bio, is_active,
-       CASE WHEN role = 'admin' THEN 1 ELSE 0 END,
-       1, created_at
+SELECT id, name, email, avatar_url, bio, is_active, 0, 1, created_at
 FROM users;
 
 DROP TABLE users;

@@ -88,9 +88,10 @@ What it does to an existing single-group database:
   question bank, and default questions are re-keyed under it. No content
   changes.
 - **Roles move**: `users.role` disappears; per-Loop roles live on the new
-  `memberships` table. Existing admins become admins *of your Loop*, and
-  the operator additionally becomes the **instance admin** (can create and
-  archive Loops from the new `/instance` console).
+  `memberships` table. Existing admins become admins *of your Loop*. Only
+  the `ADMIN_EMAIL` account becomes the **instance admin** (can create and
+  archive Loops from the new `/instance` console) — co-admins keep exactly
+  their Loop, nothing more.
 - A new `instance_settings` row is created, inheriting your loop name as
   the instance name and your public-memento setting as the instance policy.
   Both are editable at `/instance`.

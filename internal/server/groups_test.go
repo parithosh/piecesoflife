@@ -275,6 +275,102 @@ func TestSwitchGroupEndpoint(t *testing.T) {
 	assert.Equal(t, groupB, *user.LastGroupID, "switch persists as last Loop")
 }
 
+// TestCrossLoopCommentDeleteBlocked verifies a Loop admin cannot delete
+// comments living in another Loop by walking IDs.
+func TestCrossLoopCommentDeleteBlocked(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	groupB := weaveSecondLoop(t, env, "Loop B")
+
+	// A comment on a response in Loop B.
+	author := env.createUser(t, "Author", "author-b@example.com")
+	require.NoError(t, env.store.CreateMembership(ctx, groupB, author.ID, "member"))
+
+	_, questionB := seedIssueInGroup(t, env, groupB, "collecting")
+
+	respID, err := env.store.CreateResponse(ctx, author.ID, questionB)
+	require.NoError(t, err)
+
+	commentID, err := env.store.CreateComment(ctx, author.ID, respID, nil, "loop B secret")
+	require.NoError(t, err)
+
+	// The admin of Loop A tries to delete it.
+	adminA := env.createUserWithRole(t, "AdminA", "admin-a@example.com", "admin")
+	session := env.sessionCookie(t, adminA.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	req := httptest.NewRequest(http.MethodDelete,
+		fmt.Sprintf("/api/comments/%d", commentID), nil)
+	req.AddCookie(session)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfHeader)
+	rr := env.do(t, req)
+
+	assert.Equal(t, http.StatusNotFound, rr.Code,
+		"cross-Loop comment delete must read as not found")
+
+	comments, err := env.store.ListCommentsByResponse(ctx, respID)
+	require.NoError(t, err)
+	assert.Len(t, comments, 1, "the comment survives")
+}
+
+// TestReinviteDoesNotDemoteAdmin verifies CreateMembership's upsert never
+// downgrades an existing admin membership (a keeper listing themselves in
+// their own wizard's invite list must not lose the Loop).
+func TestReinviteDoesNotDemoteAdmin(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	keeper := env.createUserWithRole(t, "Keeper", "keeper-demote@example.com", "admin")
+
+	require.NoError(t, env.store.CreateMembership(ctx, 1, keeper.ID, "member"))
+
+	m, err := env.store.GetMembership(ctx, 1, keeper.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "admin", m.Role, "re-invite as member must not demote an admin")
+
+	// Promotion through the same path still works.
+	member := env.createUser(t, "Riser", "riser@example.com")
+	require.NoError(t, env.store.CreateMembership(ctx, 1, member.ID, "admin"))
+
+	m, err = env.store.GetMembership(ctx, 1, member.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "admin", m.Role)
+}
+
+// TestAutoSwitchStripsGroupOverride verifies a stale ?g= that contradicts
+// the issue's Loop cannot cause a redirect loop: the switch redirect drops
+// the parameter.
+func TestAutoSwitchStripsGroupOverride(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	groupB := weaveSecondLoop(t, env, "Loop B")
+
+	dual := env.createUser(t, "Dual", "dual-g@example.com")
+	require.NoError(t, env.store.CreateMembership(ctx, groupB, dual.ID, "member"))
+
+	issueB, _ := seedIssueInGroup(t, env, groupB, "collecting")
+
+	session := env.sessionCookie(t, dual.ID)
+
+	// ?g=1 contradicts the issue's Loop (B): the switch must strip it.
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/issues/%d?g=1", issueB), nil)
+	req.AddCookie(session)
+	rr := env.do(t, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	assert.NotContains(t, rr.Header().Get("Location"), "g=1",
+		"replayed URL must not carry the stale override")
+
+	// The replayed request terminates with the issue, not another redirect.
+	again := httptest.NewRequest(http.MethodGet, rr.Header().Get("Location"), nil)
+	again.AddCookie(session)
+	assert.Equal(t, http.StatusOK, env.do(t, again).Code)
+}
+
 // TestSetupGateForMembers verifies members of a not-yet-set-up Loop are held
 // at the Loop list, while its admin reaches the wizard.
 func TestSetupGateForMembers(t *testing.T) {

@@ -817,6 +817,12 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The comment must live in the current Loop — isGroupAdmin only vouches
+	// for the caller's authority here, not in other Loops.
+	if _, ok := s.requireResponseInGroup(w, r, comment.ResponseID); !ok {
+		return
+	}
+
 	if comment.UserID != user.ID && !isGroupAdmin(r.Context()) {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot delete another user's comment")
 		return

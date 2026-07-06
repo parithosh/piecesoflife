@@ -144,8 +144,10 @@ works independently per Loop.
 
 ## Backwards compatibility / rollout
 
-- Migration 016 moves existing data to group 1 with no behavior change; the
-  admin becomes instance admin + Loop 1 admin.
+- Migration 016 moves existing data to group 1 with no behavior change;
+  existing admins become admins of Loop 1. Only the `ADMIN_EMAIL` account is
+  flagged instance admin (by startup seeding, not the migration) — co-admins
+  of the original Loop do not gain authority over Loops created later.
 - No URL changes; no email re-linking; sessions survive (group_id backfills
   lazily on next request).
 - The beta instance on `main` is unaffected until this branch merges; the

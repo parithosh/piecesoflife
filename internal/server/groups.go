@@ -225,7 +225,19 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find or create the keeper's account, then grant the admin membership.
+	// A globally deactivated account is restored — naming someone keeper is
+	// explicit intent that they can log in.
 	keeper, err := s.store.GetUserByEmail(ctx, req.AdminEmail)
+	if err == nil && !keeper.IsActive {
+		if err := s.store.ReactivateUser(ctx, keeper.ID); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to reactivate keeper",
+				slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to restore keeper account")
+
+			return
+		}
+	}
+
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.ErrorContext(ctx, "Failed to look up keeper",
