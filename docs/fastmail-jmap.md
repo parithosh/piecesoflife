@@ -8,11 +8,11 @@ and the token can be revoked independently of your account password.
 
 Under the hood the app resolves your JMAP session once, creates each email
 as a draft, submits it, and files it into your Sent folder — so everything
-the loop sends is visible in your own Sent mail. If Fastmail ever
+the circle sends is visible in your own Sent mail. If Fastmail ever
 invalidates the session (say you rotate the token), the app re-bootstraps
 and retries automatically.
 
-## 1. Decide which address the loop sends as
+## 1. Decide which address the circle sends as
 
 `FROM_EMAIL` must be an address your Fastmail account is allowed to send
 as — your main address or any **sending identity/alias** you've configured
@@ -27,7 +27,7 @@ send one test mail from the Fastmail web UI to confirm it works.
 > wrong address. Match it exactly.
 
 Set `FROM_NAME` to whatever should appear next to the address in inboxes —
-usually your loop's name (e.g. `chaos crew`).
+usually your circle's name (e.g. `chaos crew`).
 
 ## 2. Mint the API token
 
@@ -76,6 +76,8 @@ shows the active provider and sender; press **Send test email**. Within a
 few seconds you should have a test message in the `ADMIN_EMAIL` inbox —
 sent via JMAP, and visible in your Fastmail Sent folder too.
 
+![The email delivery section of admin settings showing the active provider and the Send test email button](screenshots/email-settings.png)
+
 If the button reports an error, the message is the raw provider error —
 see troubleshooting below.
 
@@ -87,7 +89,7 @@ Fastmail's usual story:
 - If `FROM_EMAIL` is on your **own domain**, make sure the domain is set up
   in Fastmail (Settings → Domains) — Fastmail gives you the exact MX,
   SPF, and DKIM records. Without DKIM, Gmail and Outlook will happily junk
-  your loop's reminders.
+  your circle's reminders.
 - If it's an `@fastmail.com` address, there's nothing to do.
 
 ## Troubleshooting
@@ -107,4 +109,4 @@ Fastmail's usual story:
   JMAP provider; any server implementing `urn:ietf:params:jmap:mail` +
   `submission` should work.
 - Sends are throttled slightly (100 ms apart) to stay friendly with rate
-  limits; a loop of a dozen members is nowhere near Fastmail's caps.
+  limits; a circle of a dozen members is nowhere near Fastmail's caps.

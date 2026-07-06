@@ -25,6 +25,14 @@ back.
 
 Fresh installs skip the snapshot — there is nothing to protect yet.
 
+> **Where the files live** depends on which compose file you deploy with.
+> `docker-compose.yml` (build from source) keeps everything in the
+> `<project>_app-data` named volume — that's what the `docker run -v …`
+> recipes below poke into. `docker-compose.deploy.yml` (prebuilt image)
+> bind-mounts the compose directory instead, so the database is just
+> `./db/piecesoflife.db` on the host and you can `ls`/`cp` it directly —
+> same steps, no helper container needed.
+
 ## Standard upgrade (docker compose)
 
 ```sh
