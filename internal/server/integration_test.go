@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -993,4 +994,198 @@ func TestAdminSummaryEmail(t *testing.T) {
 	require.NoError(t, env.store.PublishIssue(ctx, issueID))
 	require.NoError(t, env.srv.SendAdminSummaryForIssue(ctx, issueID, nil))
 	assert.Equal(t, 1, countSummaries(), "no summary after publish")
+}
+
+// TestAdminSettingsShowsEmailLog verifies the settings page renders the
+// #email-log section the dashboard's "View log" link points at, with the
+// recipient resolved from the users table.
+func TestAdminSettingsShowsEmailLog(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	admin := env.createUserWithRole(t, "Admin", "admin@example.com", "admin")
+	rita := env.createUser(t, "Rita Recipient", "rita@example.com")
+	session := env.sessionCookie(t, admin.ID)
+
+	groupID := int64(1)
+	logID, err := env.store.LogEmail(ctx, &groupID, &rita.ID, nil,
+		"invite", "pending", nil)
+	require.NoError(t, err, "log email")
+
+	now := time.Now()
+	require.NoError(t, env.store.UpdateEmailLog(ctx, logID, "sent", &now, nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/settings", nil)
+	req.AddCookie(session)
+
+	rr := env.do(t, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	body := rr.Body.String()
+	assert.Contains(t, body, `id="email-log"`, "email-log anchor exists")
+	assert.Contains(t, body, "Rita Recipient", "recipient name is resolved")
+	assert.Contains(t, body, "badge-green", "sent status renders as a green badge")
+}
+
+// TestAnswerPhotoDeleteLifecycle exercises removing an uploaded image from
+// an answer: the upload lands on disk, deletes are owner-scoped, and a
+// successful delete removes both the block row and the file.
+func TestAnswerPhotoDeleteLifecycle(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	member := env.createUser(t, "Zara", "zara@example.com")
+	other := env.createUser(t, "Anil", "anil@example.com")
+	session := env.sessionCookie(t, member.ID)
+	otherSession := env.sessionCookie(t, other.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	issueID, questionIDs := env.seedIssue(t, "collecting", 6, 2026, 1)
+
+	responseID, err := env.store.CreateResponse(ctx, member.ID, questionIDs[0])
+	require.NoError(t, err, "create response")
+
+	// A tiny valid PNG (1×1) so content sniffing accepts the upload.
+	png := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+		0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+		0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+		0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("media", "answer.png")
+	require.NoError(t, err)
+	_, err = part.Write(png)
+	require.NoError(t, err)
+	require.NoError(t, mw.WriteField("kind", "photo"))
+	require.NoError(t, mw.Close())
+
+	upReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/responses/%d/blocks/upload", responseID), &buf)
+	upReq.Header.Set("Content-Type", mw.FormDataContentType())
+	upReq.AddCookie(session)
+	upReq.AddCookie(csrfCookie)
+	upReq.Header.Set("X-CSRF-Token", csrfHeader)
+
+	up := env.do(t, upReq)
+	require.Equal(t, http.StatusCreated, up.Code, "upload: %s", up.Body.String())
+
+	blocks, err := env.store.ListBlocksByResponse(ctx, responseID)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	require.NotNil(t, blocks[0].FilePath, "photo block stores its file path")
+
+	filePath := *blocks[0].FilePath
+	_, err = os.Stat(filePath)
+	require.NoError(t, err, "uploaded file exists on disk")
+
+	// The respond page offers the remove button for the saved photo.
+	respondReq := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/issues/%d/respond", issueID), nil)
+	respondReq.AddCookie(session)
+	respond := env.do(t, respondReq)
+	require.Equal(t, http.StatusOK, respond.Code)
+	assert.Contains(t, respond.Body.String(),
+		fmt.Sprintf(`data-block-remove="%d"`, blocks[0].ID))
+
+	deleteBlock := func(sess *http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodDelete,
+			fmt.Sprintf("/api/blocks/%d", blocks[0].ID), nil)
+		req.AddCookie(sess)
+		req.AddCookie(csrfCookie)
+		req.Header.Set("X-CSRF-Token", csrfHeader)
+
+		return env.do(t, req)
+	}
+
+	// Another member cannot delete someone else's photo, and the file stays.
+	require.Equal(t, http.StatusForbidden, deleteBlock(otherSession).Code)
+	_, err = os.Stat(filePath)
+	require.NoError(t, err, "file survives a forbidden delete")
+
+	// The owner can: the block row and the file both go away.
+	require.Equal(t, http.StatusNoContent, deleteBlock(session).Code)
+
+	blocks, err = env.store.ListBlocksByResponse(ctx, responseID)
+	require.NoError(t, err)
+	assert.Empty(t, blocks, "block row deleted")
+
+	_, err = os.Stat(filePath)
+	assert.True(t, os.IsNotExist(err), "uploaded file removed from disk")
+}
+
+// TestAnswerPhotoUploadLimits verifies multiple photos can be added to one
+// answer and each media type caps at 100 per response.
+func TestAnswerPhotoUploadLimits(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	member := env.createUser(t, "Zara", "zara@example.com")
+	session := env.sessionCookie(t, member.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	_, questionIDs := env.seedIssue(t, "collecting", 6, 2026, 1)
+
+	responseID, err := env.store.CreateResponse(ctx, member.ID, questionIDs[0])
+	require.NoError(t, err, "create response")
+
+	png := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+		0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+		0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+		0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+	}
+
+	upload := func(kind string) *httptest.ResponseRecorder {
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		part, err := mw.CreateFormFile("media", "answer.png")
+		require.NoError(t, err)
+		_, err = part.Write(png)
+		require.NoError(t, err)
+		require.NoError(t, mw.WriteField("kind", kind))
+		require.NoError(t, mw.Close())
+
+		req := httptest.NewRequest(http.MethodPost,
+			fmt.Sprintf("/api/responses/%d/blocks/upload", responseID), &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.AddCookie(session)
+		req.AddCookie(csrfCookie)
+		req.Header.Set("X-CSRF-Token", csrfHeader)
+
+		return env.do(t, req)
+	}
+
+	// Several photos on one answer are fine.
+	for i := 0; i < 3; i++ {
+		rr := upload("photo")
+		require.Equal(t, http.StatusCreated, rr.Code, "photo %d: %s", i+1, rr.Body.String())
+	}
+
+	// Pad to the 100-photo cap directly in the store (the limit check runs
+	// before the file is read, so blocks without files are fine here).
+	for i := 3; i < 100; i++ {
+		_, err := env.store.CreateBlock(ctx, responseID, "photo", nil, nil, nil, nil, i)
+		require.NoError(t, err)
+	}
+
+	over := upload("photo")
+	require.Equal(t, http.StatusUnprocessableEntity, over.Code)
+	assert.Contains(t, over.Body.String(), "Maximum of 100 photo uploads")
+
+	// Recordings cap at 100 per type as well: 100 audio blocks fill it.
+	for i := 0; i < 100; i++ {
+		_, err := env.store.CreateBlock(ctx, responseID, "audio", nil, nil, nil, nil, 100+i)
+		require.NoError(t, err)
+	}
+
+	overAudio := upload("audio")
+	require.Equal(t, http.StatusUnprocessableEntity, overAudio.Code)
+	assert.Contains(t, overAudio.Body.String(), "Maximum of 100 audio uploads")
 }

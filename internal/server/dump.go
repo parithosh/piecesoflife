@@ -11,11 +11,10 @@ import (
 	"github.com/parithosh/piecesoflife/internal/store"
 )
 
-// Per-member caps for the issue photo & video dump. Generous enough for a
-// real month, small enough that the collage stays a closer, not an archive.
+// Per-member, per-kind caps for the issue photo & video dump.
 const (
-	maxDumpPhotos = 12
-	maxDumpVideos = 4
+	maxDumpPhotos = 100
+	maxDumpVideos = 100
 )
 
 // DumpGroup is one member's contribution to the published collage page,
@@ -80,7 +79,7 @@ func (s *Server) handleDumpUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request",
-			"Failed to parse form; ensure content-type is multipart/form-data and file is under 200 MB")
+			"Failed to parse form; ensure content-type is multipart/form-data and file is under 1 GB")
 		return
 	}
 

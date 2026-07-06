@@ -7,15 +7,15 @@
  * this script runs.
  */
 
-// Server-side upload cap (MaxBytesReader). Checked client-side too so a
-// 700 MB pick fails instantly with a clear message instead of uploading
+// Server-side upload cap (MaxBytesReader). Checked client-side too so an
+// oversized pick fails instantly with a clear message instead of uploading
 // for minutes and dying with a generic error.
-const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 
 function uploadTooLarge(file) {
     if (file.size <= MAX_UPLOAD_BYTES) return null;
     const mb = Math.round(file.size / (1024 * 1024));
-    return `${file.name || 'That file'} is ${mb} MB — uploads are capped at 200 MB. Try trimming or compressing it.`;
+    return `${file.name || 'That file'} is ${mb} MB — uploads are capped at 1 GB. Try trimming or compressing it.`;
 }
 
 // CSRF helpers (getCSRFToken/apiHeaders) come from the base layout.
@@ -202,6 +202,45 @@ function attachSortable() {
     });
 }
 
+// --- Removing saved media blocks -----------------------------------------
+//
+// Photos and recordings persist the moment they upload, so removing one is
+// a real delete: the block row and its file go away server-side. Like the
+// add flows, a successful remove reloads the page so the editor re-renders
+// from server state.
+
+function attachBlockRemove() {
+    const editor = document.getElementById('response-editor');
+    if (!editor) return;
+
+    editor.addEventListener('click', async ev => {
+        const btn = ev.target.closest('[data-block-remove]');
+        if (!btn) return;
+
+        const isPhoto = btn.closest('.block')?.dataset.type === 'photo';
+        const what = isPhoto ? 'photo' : 'recording';
+        if (!confirm(`Remove this ${what}? This can't be undone.`)) return;
+
+        btn.disabled = true;
+        try {
+            const res = await fetch(`/api/blocks/${btn.dataset.blockRemove}`, {
+                method: 'DELETE',
+                headers: { 'X-CSRF-Token': getCSRFToken() },
+            });
+            // 404 means it's already gone — reload to resync either way.
+            if (!res.ok && res.status !== 404) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error?.message || 'Remove failed');
+            }
+            showToast(`${isPhoto ? 'Photo' : 'Recording'} removed — reloading`);
+            setTimeout(() => window.location.reload(), 600);
+        } catch (err) {
+            showToast(err.message || 'Remove failed');
+            btn.disabled = false;
+        }
+    });
+}
+
 // --- Photo & video dump ---------------------------------------------------
 //
 // The dump is issue-level media (not tied to a question) collected before
@@ -348,6 +387,7 @@ window.__polEditor = {
 function initEditor() {
     attachPasteDetectors();
     attachSortable();
+    attachBlockRemove();
     attachDump();
 }
 

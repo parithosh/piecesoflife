@@ -23,13 +23,15 @@ import (
 )
 
 const (
-	maxUploadBytes     = 200 << 20 // 200 MB
-	maxMultipartMemory = 32 << 20  // 32 MB
-	maxMediaBlocks     = 10
-	photoBlockType     = "photo"
-	audioBlockType     = "audio"
-	videoBlockType     = "video"
-	maxCommentBytes    = 4000
+	maxUploadBytes     = 1 << 30  // 1 GB
+	maxMultipartMemory = 32 << 20 // 32 MB
+	// maxMediaBlocks caps uploads per response, per media type — 100 each
+	// of photos, audio, and video.
+	maxMediaBlocks  = 100
+	photoBlockType  = "photo"
+	audioBlockType  = "audio"
+	videoBlockType  = "video"
+	maxCommentBytes = 4000
 )
 
 // markdownRenderer renders comment bodies. goldmark's default config strips
@@ -342,7 +344,8 @@ func (s *Server) handleUpdateBlock(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// handleDeleteBlock removes a block from an editable response.
+// handleDeleteBlock removes a block from an editable response. Media blocks
+// also drop their uploaded file from disk.
 // DELETE /api/blocks/{id}
 func (s *Server) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.parseIDParam(w, r, "id", "block ID")
@@ -350,7 +353,8 @@ func (s *Server) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, _, ok := s.loadOwnedBlock(w, r, id, true); !ok {
+	block, _, ok := s.loadOwnedBlock(w, r, id, true)
+	if !ok {
 		return
 	}
 
@@ -361,6 +365,19 @@ func (s *Server) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 		)
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to delete block")
 		return
+	}
+
+	// The block row is gone; its upload must not linger on disk. Best-effort
+	// like the dump delete — a leftover file only costs space, so a removal
+	// failure is logged rather than surfaced.
+	if block.FilePath != nil && *block.FilePath != "" {
+		if err := os.Remove(*block.FilePath); err != nil && !os.IsNotExist(err) {
+			s.logger.WarnContext(r.Context(), "Failed to remove deleted block's upload",
+				slog.Int64("block_id", id),
+				slog.String("path", *block.FilePath),
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -520,7 +537,7 @@ func (s *Server) handleUploadPhoto(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request",
-			"Failed to parse form; ensure content-type is multipart/form-data and file is under 200 MB")
+			"Failed to parse form; ensure content-type is multipart/form-data and file is under 1 GB")
 		return
 	}
 

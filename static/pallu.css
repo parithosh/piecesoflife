@@ -624,6 +624,27 @@ input.pl-field::placeholder,
     border: 1px solid var(--line);
     border-radius: 4px;
 }
+/* ✕ badge on a saved photo/recording in the editor — same look as the
+   dump grid's remove button. Parents get position so it can sit on the
+   top-right corner. */
+.photo-block,
+.media-block { position: relative; }
+.block-remove {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--rani);
+    background: var(--ivory);
+    color: var(--rani);
+    font: 700 11px var(--font-ui);
+    line-height: 1;
+    cursor: pointer;
+    z-index: 1;
+}
+.block-remove:hover { background: var(--rani); color: #fff; }
 .media-block audio,
 .media-block video {
     display: block;
