@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,12 +17,60 @@ import (
 
 type contextKey string
 
-const userContextKey contextKey = "user"
+const (
+	userContextKey  contextKey = "user"
+	groupContextKey contextKey = "group"
+)
+
+// GroupContext is the request's current Loop: the group row, its settings,
+// and the user's membership in it. Membership is nil for instance admins
+// operating on a Loop they don't belong to.
+type GroupContext struct {
+	Group      *store.Group
+	Settings   *store.Settings
+	Membership *store.Membership
+	SessionID  int64
+}
 
 // UserFromContext extracts the authenticated user from a request context.
 func UserFromContext(ctx context.Context) *store.User {
 	u, _ := ctx.Value(userContextKey).(*store.User)
 	return u
+}
+
+// GroupFromContext extracts the current Loop from a request context. Nil
+// when the user has no Loops (possible for instance admins).
+func GroupFromContext(ctx context.Context) *GroupContext {
+	gc, _ := ctx.Value(groupContextKey).(*GroupContext)
+	return gc
+}
+
+// currentGroupID returns the current Loop's ID, or 0 when none is resolved.
+// Handlers behind requireGroupMiddleware can rely on a non-zero value.
+func currentGroupID(ctx context.Context) int64 {
+	if gc := GroupFromContext(ctx); gc != nil {
+		return gc.Group.ID
+	}
+
+	return 0
+}
+
+// isGroupAdmin reports whether the request's user administers the current
+// Loop — either through their membership role or as an instance admin.
+func isGroupAdmin(ctx context.Context) bool {
+	user := UserFromContext(ctx)
+	if user == nil {
+		return false
+	}
+
+	if user.IsInstanceAdmin {
+		return true
+	}
+
+	gc := GroupFromContext(ctx)
+
+	return gc != nil && gc.Membership != nil &&
+		gc.Membership.IsActive && gc.Membership.Role == "admin"
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.
@@ -201,14 +251,57 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), userContextKey, user)
+
+		// Resolve the request's current Loop. An explicit ?g= (from email
+		// links, which are otherwise ambiguous across Loops) wins over the
+		// session's remembered Loop.
+		gc := s.resolveCurrentGroup(ctx, user, session, r.URL.Query().Get("g"))
+		if gc != nil {
+			ctx = context.WithValue(ctx, groupContextKey, gc)
+		}
+
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// requireGroupMiddleware gates Loop-scoped routes: the request must have a
+// current Loop, and members can't use a Loop whose setup wizard hasn't
+// finished (its admins can — they need the wizard and admin APIs).
+func (s *Server) requireGroupMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gc := GroupFromContext(r.Context())
+		if gc == nil {
+			user := UserFromContext(r.Context())
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeError(w, http.StatusConflict,
+					"no_group", "You are not a member of any Loop")
+			} else if user != nil && user.IsInstanceAdmin {
+				http.Redirect(w, r, "/instance", http.StatusSeeOther)
+			} else {
+				http.Redirect(w, r, "/loops", http.StatusSeeOther)
+			}
+
+			return
+		}
+
+		if !gc.Settings.SetupComplete && !isGroupAdmin(r.Context()) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeError(w, http.StatusConflict,
+					"setup_incomplete", "This Loop is still being set up")
+			} else {
+				http.Redirect(w, r, "/loops", http.StatusSeeOther)
+			}
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
 	})
 }
 
 func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := UserFromContext(r.Context())
-		if user == nil || user.Role != "admin" {
+		if !isGroupAdmin(r.Context()) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				writeError(w, http.StatusForbidden,
 					"forbidden", "Admin access required")
@@ -221,6 +314,152 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// instanceAdminMiddleware gates the operator console and instance APIs.
+func (s *Server) instanceAdminMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := UserFromContext(r.Context())
+		if user == nil || !user.IsInstanceAdmin {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeError(w, http.StatusForbidden,
+					"forbidden", "Instance admin access required")
+			} else {
+				http.Redirect(w, r, "/", http.StatusSeeOther)
+			}
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// resolveCurrentGroup picks the request's current Loop. Priority: an
+// explicit ?g= override, the session's remembered Loop, the user's last
+// Loop, their first membership, and (for instance admins only) the oldest
+// active Loop on the instance. The chosen Loop is persisted back to the
+// session and users.last_group_id when it changed. Returns nil when the
+// user has no usable Loop.
+func (s *Server) resolveCurrentGroup(
+	ctx context.Context, user *store.User,
+	session *store.Session, explicit string,
+) *GroupContext {
+	candidates := make([]int64, 0, 4)
+
+	if explicit != "" {
+		if id, err := strconv.ParseInt(explicit, 10, 64); err == nil {
+			candidates = append(candidates, id)
+		}
+	}
+
+	if session.GroupID != nil {
+		candidates = append(candidates, *session.GroupID)
+	}
+
+	if user.LastGroupID != nil {
+		candidates = append(candidates, *user.LastGroupID)
+	}
+
+	var gc *GroupContext
+
+	for _, id := range candidates {
+		if gc = s.tryGroup(ctx, user, id); gc != nil {
+			break
+		}
+	}
+
+	if gc == nil {
+		if groups, err := s.store.ListUserGroups(ctx, user.ID); err == nil &&
+			len(groups) > 0 {
+			gc = s.tryGroup(ctx, user, groups[0].GroupID)
+		}
+	}
+
+	if gc == nil && user.IsInstanceAdmin {
+		if overviews, err := s.store.ListGroupOverviews(ctx); err == nil {
+			for _, ov := range overviews {
+				if !ov.IsActive {
+					continue
+				}
+
+				if gc = s.tryGroup(ctx, user, ov.ID); gc != nil {
+					break
+				}
+			}
+		}
+	}
+
+	if gc == nil {
+		return nil
+	}
+
+	gc.SessionID = session.ID
+
+	if session.GroupID == nil || *session.GroupID != gc.Group.ID {
+		if err := s.store.SetSessionGroup(ctx, session.ID, gc.Group.ID); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to persist session group",
+				slog.String("error", err.Error()))
+		}
+	}
+
+	if user.LastGroupID == nil || *user.LastGroupID != gc.Group.ID {
+		if err := s.store.SetLastGroup(ctx, user.ID, gc.Group.ID); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to persist last group",
+				slog.String("error", err.Error()))
+		}
+	}
+
+	return gc
+}
+
+// tryGroup validates one candidate Loop for a user: the group must be
+// active and the user must hold an active membership (instance admins may
+// enter any active Loop). Returns nil when the candidate isn't usable.
+func (s *Server) tryGroup(
+	ctx context.Context, user *store.User, groupID int64,
+) *GroupContext {
+	group, err := s.store.GetGroup(ctx, groupID)
+	if err != nil || !group.IsActive {
+		return nil
+	}
+
+	membership, err := s.store.GetMembership(ctx, groupID, user.ID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.ErrorContext(ctx, "Failed to load membership",
+				slog.Int64("group_id", groupID),
+				slog.String("error", err.Error()))
+
+			return nil
+		}
+
+		membership = nil
+	}
+
+	hasMembership := membership != nil && membership.IsActive
+	if !hasMembership {
+		if !user.IsInstanceAdmin {
+			return nil
+		}
+
+		membership = nil
+	}
+
+	settings, err := s.store.GetSettings(ctx, groupID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to load group settings",
+			slog.Int64("group_id", groupID),
+			slog.String("error", err.Error()))
+
+		return nil
+	}
+
+	return &GroupContext{
+		Group:      group,
+		Settings:   settings,
+		Membership: membership,
+	}
 }
 
 // handleAuthParam exchanges an ?auth=TOKEN query parameter (the magic links
@@ -344,7 +583,15 @@ func (s *Server) createSessionAndSetCookie(
 
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 
-	if err := s.store.CreateSession(ctx, userID, hash, expiresAt); err != nil {
+	// Seed the session's current Loop from the user's last one so the first
+	// page after login lands where they left off; authMiddleware re-validates
+	// and falls back if that Loop is gone.
+	var groupID *int64
+	if user, err := s.store.GetUserByID(ctx, userID); err == nil {
+		groupID = user.LastGroupID
+	}
+
+	if err := s.store.CreateSession(ctx, userID, hash, expiresAt, groupID); err != nil {
 		return err
 	}
 

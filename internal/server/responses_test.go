@@ -32,8 +32,11 @@ func newResponseTestServer(t *testing.T) (*Server, *store.Store, *store.User) {
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	userID, err := st.CreateUser(ctx, "friend", "friend@example.com", "member")
+	require.NoError(t, st.SeedDefaultGroup(ctx))
+
+	userID, err := st.CreateUser(ctx, "friend", "friend@example.com")
 	require.NoError(t, err)
+	require.NoError(t, st.CreateMembership(ctx, 1, userID, "member"))
 
 	user, err := st.GetUserByID(ctx, userID)
 	require.NoError(t, err)
@@ -55,7 +58,7 @@ func addIssueWithQuestion(
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	issueID, err := st.CreateIssue(ctx, nil, int(now.Month()), now.Year(),
+	issueID, err := st.CreateIssue(ctx, 1, nil, int(now.Month()), now.Year(),
 		now, now.Add(7*24*time.Hour))
 	require.NoError(t, err)
 	require.NoError(t, st.SetIssueStatus(ctx, issueID, status))
@@ -73,7 +76,14 @@ func requestAsUser(
 	t.Helper()
 
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), userContextKey, user))
+
+	ctx := context.WithValue(req.Context(), userContextKey, user)
+	// Handlers called directly (no middleware) still need the current-Loop
+	// context; group 1 is the test fixture's Loop.
+	ctx = context.WithValue(ctx, groupContextKey, &GroupContext{
+		Group: &store.Group{ID: 1, IsActive: true},
+	})
+	req = req.WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 
 	return req

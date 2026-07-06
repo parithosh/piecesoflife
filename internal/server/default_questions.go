@@ -24,7 +24,7 @@ type updateDefaultQuestionRequest struct {
 // enabled switch.
 // GET /api/default-questions
 func (s *Server) handleListDefaultQuestions(w http.ResponseWriter, r *http.Request) {
-	questions, err := s.store.ListDefaultQuestions(r.Context())
+	questions, err := s.store.ListDefaultQuestions(r.Context(), currentGroupID(r.Context()))
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to list default questions",
 			slog.String("error", err.Error()))
@@ -76,7 +76,7 @@ func (s *Server) handleUpdateDefaultQuestion(w http.ResponseWriter, r *http.Requ
 		text = &trimmed
 	}
 
-	if err := s.store.UpdateDefaultQuestion(r.Context(), questionID, text, req.Enabled); err != nil {
+	if err := s.store.UpdateDefaultQuestion(r.Context(), currentGroupID(r.Context()), questionID, text, req.Enabled); err != nil {
 		if errors.Is(err, store.ErrDuplicateText) {
 			writeValidationError(w, map[string]string{
 				"text": "That question is already a default",
@@ -124,7 +124,7 @@ func (s *Server) handleCreateDefaultQuestion(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	id, err := s.store.CreateDefaultQuestion(r.Context(), text)
+	id, err := s.store.CreateDefaultQuestion(r.Context(), currentGroupID(r.Context()), text)
 	if err != nil {
 		// default_questions.text is UNIQUE — surface duplicates as a
 		// validation problem, not a server error.
@@ -162,7 +162,7 @@ func (s *Server) handleDeleteDefaultQuestion(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := s.store.DeleteDefaultQuestion(r.Context(), questionID); err != nil {
+	if err := s.store.DeleteDefaultQuestion(r.Context(), currentGroupID(r.Context()), questionID); err != nil {
 		s.writeDefaultQuestionError(w, r, questionID, err, "delete")
 		return
 	}
@@ -194,7 +194,7 @@ func (s *Server) handleReorderDefaultQuestions(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := s.store.ReorderDefaultQuestions(r.Context(), req.IDs); err != nil {
+	if err := s.store.ReorderDefaultQuestions(r.Context(), currentGroupID(r.Context()), req.IDs); err != nil {
 		if errors.Is(err, store.ErrOrderMismatch) {
 			writeError(w, http.StatusConflict, "stale_order",
 				"The question list changed — reload and try again")
@@ -209,7 +209,7 @@ func (s *Server) handleReorderDefaultQuestions(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	questions, err := s.store.ListDefaultQuestions(r.Context())
+	questions, err := s.store.ListDefaultQuestions(r.Context(), currentGroupID(r.Context()))
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
@@ -224,7 +224,7 @@ func (s *Server) handleReorderDefaultQuestions(w http.ResponseWriter, r *http.Re
 func (s *Server) getDefaultQuestion(
 	ctx context.Context, id int64,
 ) (*store.DefaultQuestion, error) {
-	questions, err := s.store.ListDefaultQuestions(ctx)
+	questions, err := s.store.ListDefaultQuestions(ctx, currentGroupID(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +273,7 @@ func (s *Server) handleUpdateAllDefaultQuestions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := s.store.SetAllDefaultQuestionsEnabled(r.Context(), *req.Enabled); err != nil {
+	if err := s.store.SetAllDefaultQuestionsEnabled(r.Context(), currentGroupID(r.Context()), *req.Enabled); err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to update default questions",
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error",
@@ -282,7 +282,7 @@ func (s *Server) handleUpdateAllDefaultQuestions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	questions, err := s.store.ListDefaultQuestions(r.Context())
+	questions, err := s.store.ListDefaultQuestions(r.Context(), currentGroupID(r.Context()))
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": *req.Enabled})
 		return

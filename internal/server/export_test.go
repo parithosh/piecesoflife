@@ -32,12 +32,14 @@ func newExportTestServer(t *testing.T) (*Server, *store.Store, *store.User) {
 	st, err := store.New(ctx, dbPath, logger)
 	require.NoError(t, err)
 	require.NoError(t, st.RunMigrations(ctx))
-	require.NoError(t, st.SeedSettings(ctx))
+	require.NoError(t, st.SeedInstanceSettings(ctx))
+	require.NoError(t, st.SeedDefaultGroup(ctx))
 
 	t.Cleanup(func() { _ = st.Close() })
 
-	userID, err := st.CreateUser(ctx, "friend", "friend@example.com", "member")
+	userID, err := st.CreateUser(ctx, "friend", "friend@example.com")
 	require.NoError(t, err)
+	require.NoError(t, st.CreateMembership(ctx, 1, userID, "member"))
 	require.NoError(t, st.EnsureNotificationPreferences(ctx, userID))
 
 	user, err := st.GetUserByID(ctx, userID)
@@ -91,7 +93,7 @@ func TestBuildExportPayload(t *testing.T) {
 	srv, st, user := newExportTestServer(t)
 	responseID := seedExportContent(t, st, user)
 
-	payload, err := srv.buildExportPayload(context.Background())
+	payload, err := srv.buildExportPayload(context.Background(), 1)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, payload.Version)
@@ -123,7 +125,7 @@ func TestBuildExportPayloadIncludesDrafts(t *testing.T) {
 	_, err := st.CreateResponse(context.Background(), user.ID, questionID)
 	require.NoError(t, err)
 
-	payload, err := srv.buildExportPayload(context.Background())
+	payload, err := srv.buildExportPayload(context.Background(), 1)
 	require.NoError(t, err)
 
 	require.Len(t, payload.Responses, 1)

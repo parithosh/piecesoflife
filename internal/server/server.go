@@ -94,6 +94,15 @@ type PageData struct {
 	User      *store.User
 	Settings  *store.Settings
 	CSRFToken string
+
+	// Multi-Loop context: the current Loop, the user's role in it, and
+	// their full Loop list for the nav switcher. MultiLoop gates all
+	// multi-group chrome — a person in one Loop never sees it.
+	Group           *store.Group
+	IsGroupAdmin    bool
+	IsInstanceAdmin bool
+	Loops           []store.UserGroup
+	MultiLoop       bool
 }
 
 // LoginPageData is the template data for the login page.
@@ -180,23 +189,44 @@ func (s *Server) registerRoutes() {
 	// Landing page — handles auth check and routing internally.
 	s.mux.HandleFunc("GET /{$}", s.handleLanding)
 
-	// Middleware helpers.
+	// Middleware helpers. authMW authenticates only; groupMW additionally
+	// requires a current Loop (all Loop-scoped content); adminMW requires
+	// Loop-admin rights; instanceMW requires the instance operator.
 	authMW := func(h http.HandlerFunc) http.Handler {
 		return s.authMiddleware(http.HandlerFunc(h))
 	}
+	groupMW := func(h http.HandlerFunc) http.Handler {
+		return s.authMiddleware(s.requireGroupMiddleware(http.HandlerFunc(h)))
+	}
 	adminMW := func(h http.HandlerFunc) http.Handler {
-		return s.authMiddleware(s.adminMiddleware(http.HandlerFunc(h)))
+		return s.authMiddleware(s.requireGroupMiddleware(
+			s.adminMiddleware(http.HandlerFunc(h))))
+	}
+	instanceMW := func(h http.HandlerFunc) http.Handler {
+		return s.authMiddleware(s.instanceAdminMiddleware(http.HandlerFunc(h)))
 	}
 
 	// Auth API routes.
 	s.mux.Handle("POST /api/auth/logout", authMW(s.handleLogout))
 	s.mux.Handle("GET /api/auth/me", authMW(s.handleMe))
 
+	// Loop selection: the "Your Loops" page and the switcher endpoint are
+	// deliberately Loop-agnostic (they must work with zero or many Loops).
+	s.mux.Handle("GET /loops", authMW(s.handleLoopsPage))
+	s.mux.Handle("POST /api/me/group", authMW(s.handleSwitchGroup))
+
+	// Instance console (operators only).
+	s.mux.Handle("GET /instance", instanceMW(s.handleInstancePage))
+	s.mux.Handle("GET /api/instance/groups", instanceMW(s.handleListGroups))
+	s.mux.Handle("POST /api/instance/groups", instanceMW(s.handleCreateGroup))
+	s.mux.Handle("PATCH /api/instance/groups/{id}", instanceMW(s.handleUpdateGroup))
+	s.mux.Handle("PATCH /api/instance/settings", instanceMW(s.handleUpdateInstanceSettings))
+
 	// Authenticated page routes.
-	s.mux.Handle("GET /issues", authMW(s.handleIssueArchive))
-	s.mux.Handle("GET /issues/{year}/{month}", authMW(s.handleIssuePage))
-	s.mux.Handle("GET /issues/{id}/respond", authMW(s.handleRespondPage))
-	s.mux.Handle("GET /albums", authMW(s.handleAlbumsPage))
+	s.mux.Handle("GET /issues", groupMW(s.handleIssueArchive))
+	s.mux.Handle("GET /issues/{year}/{month}", groupMW(s.handleIssuePage))
+	s.mux.Handle("GET /issues/{id}/respond", groupMW(s.handleRespondPage))
+	s.mux.Handle("GET /albums", groupMW(s.handleAlbumsPage))
 	s.mux.Handle("GET /profile", authMW(s.handleProfilePage))
 
 	// Admin page routes.
@@ -212,7 +242,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /uploads/", authMW(s.handleUploadServe))
 
 	// User API routes (auth required).
-	s.mux.Handle("GET /api/users", authMW(s.handleListUsers))
+	s.mux.Handle("GET /api/users", groupMW(s.handleListUsers))
 	s.mux.Handle("PATCH /api/users/{id}", authMW(s.handleUpdateUser))
 	s.mux.Handle("GET /api/users/{id}/preferences", authMW(s.handleGetPreferences))
 	s.mux.Handle("PATCH /api/users/{id}/preferences", authMW(s.handleUpdatePreferences))
@@ -240,44 +270,44 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("DELETE /api/question-bank/{id}", adminMW(s.handleDeleteBankQuestion))
 
 	// Issue API routes.
-	s.mux.Handle("GET /api/issues", authMW(s.handleListIssues))
-	s.mux.Handle("GET /api/issues/{id}", authMW(s.handleGetIssue))
+	s.mux.Handle("GET /api/issues", groupMW(s.handleListIssues))
+	s.mux.Handle("GET /api/issues/{id}", groupMW(s.handleGetIssue))
 	s.mux.Handle("POST /api/issues", adminMW(s.handleCreateIssue))
 	s.mux.Handle("PATCH /api/issues/{id}", adminMW(s.handleUpdateIssue))
 	s.mux.Handle("POST /api/issues/{id}/publish", adminMW(s.handlePublishIssue))
 	s.mux.Handle("POST /api/issues/{id}/extend", adminMW(s.handleExtendDeadline))
-	s.mux.Handle("GET /api/issues/{id}/questions", authMW(s.handleListQuestions))
-	s.mux.Handle("GET /api/issues/{id}/progress", authMW(s.handleGetProgress))
+	s.mux.Handle("GET /api/issues/{id}/questions", groupMW(s.handleListQuestions))
+	s.mux.Handle("GET /api/issues/{id}/progress", groupMW(s.handleGetProgress))
 	s.mux.Handle("POST /api/issues/{id}/count-admin", adminMW(s.handleSetCountAdmin))
-	s.mux.Handle("GET /api/issues/{id}/responses", authMW(s.handleListResponses))
-	s.mux.Handle("GET /api/issues/{id}/responses/mine", authMW(s.handleListMyResponses))
+	s.mux.Handle("GET /api/issues/{id}/responses", groupMW(s.handleListResponses))
+	s.mux.Handle("GET /api/issues/{id}/responses/mine", groupMW(s.handleListMyResponses))
 	s.mux.Handle("POST /api/issues/{id}/questions", adminMW(s.handleAddQuestion))
 	s.mux.Handle("POST /api/issues/{id}/questions/reorder", adminMW(s.handleReorderQuestions))
 	s.mux.Handle("PATCH /api/questions/{id}", adminMW(s.handleEditQuestion))
 	s.mux.Handle("DELETE /api/questions/{id}", adminMW(s.handleDeleteQuestion))
-	s.mux.Handle("POST /api/questions/submit", authMW(s.handleFriendSubmitQuestion))
+	s.mux.Handle("POST /api/questions/submit", groupMW(s.handleFriendSubmitQuestion))
 
 	// Response API routes.
-	s.mux.Handle("POST /api/responses", authMW(s.handleCreateResponse))
-	s.mux.Handle("DELETE /api/responses/{id}", authMW(s.handleDeleteResponse))
-	s.mux.Handle("POST /api/responses/{id}/submit", authMW(s.handleSubmitResponse))
-	s.mux.Handle("GET /api/responses/{id}/blocks", authMW(s.handleListBlocks))
-	s.mux.Handle("POST /api/responses/{id}/blocks", authMW(s.handleAddBlock))
-	s.mux.Handle("PATCH /api/blocks/{id}", authMW(s.handleUpdateBlock))
-	s.mux.Handle("DELETE /api/blocks/{id}", authMW(s.handleDeleteBlock))
-	s.mux.Handle("POST /api/responses/{id}/blocks/reorder", authMW(s.handleReorderBlocks))
-	s.mux.Handle("POST /api/responses/{id}/blocks/upload", authMW(s.handleUploadPhoto))
-	s.mux.Handle("POST /api/issues/{id}/dump", authMW(s.handleDumpUpload))
-	s.mux.Handle("DELETE /api/dump/{id}", authMW(s.handleDumpDelete))
-	s.mux.Handle("PUT /api/responses/{id}/autosave", authMW(s.handleAutosave))
+	s.mux.Handle("POST /api/responses", groupMW(s.handleCreateResponse))
+	s.mux.Handle("DELETE /api/responses/{id}", groupMW(s.handleDeleteResponse))
+	s.mux.Handle("POST /api/responses/{id}/submit", groupMW(s.handleSubmitResponse))
+	s.mux.Handle("GET /api/responses/{id}/blocks", groupMW(s.handleListBlocks))
+	s.mux.Handle("POST /api/responses/{id}/blocks", groupMW(s.handleAddBlock))
+	s.mux.Handle("PATCH /api/blocks/{id}", groupMW(s.handleUpdateBlock))
+	s.mux.Handle("DELETE /api/blocks/{id}", groupMW(s.handleDeleteBlock))
+	s.mux.Handle("POST /api/responses/{id}/blocks/reorder", groupMW(s.handleReorderBlocks))
+	s.mux.Handle("POST /api/responses/{id}/blocks/upload", groupMW(s.handleUploadPhoto))
+	s.mux.Handle("POST /api/issues/{id}/dump", groupMW(s.handleDumpUpload))
+	s.mux.Handle("DELETE /api/dump/{id}", groupMW(s.handleDumpDelete))
+	s.mux.Handle("PUT /api/responses/{id}/autosave", groupMW(s.handleAutosave))
 
 	// Comment routes.
-	s.mux.Handle("GET /api/responses/{id}/comments", authMW(s.handleListComments))
-	s.mux.Handle("POST /api/responses/{id}/comments", authMW(s.handleAddComment))
-	s.mux.Handle("DELETE /api/comments/{id}", authMW(s.handleDeleteComment))
+	s.mux.Handle("GET /api/responses/{id}/comments", groupMW(s.handleListComments))
+	s.mux.Handle("POST /api/responses/{id}/comments", groupMW(s.handleAddComment))
+	s.mux.Handle("DELETE /api/comments/{id}", groupMW(s.handleDeleteComment))
 
 	// Albums API.
-	s.mux.Handle("GET /api/albums", authMW(s.handleListAlbums))
+	s.mux.Handle("GET /api/albums", groupMW(s.handleListAlbums))
 }
 
 func (s *Server) loadTemplates() {
@@ -440,6 +470,48 @@ func (s *Server) renderEmail(name string, data any) string {
 	return buf.String()
 }
 
+// newPageData assembles the base template data for the current request:
+// user, current Loop settings, role flags, and the Loop switcher list.
+// For Loop-less requests (instance admin without memberships) Settings is
+// synthesized from the instance name so base templates always have one.
+func (s *Server) newPageData(r *http.Request) PageData {
+	user := UserFromContext(r.Context())
+	gc := GroupFromContext(r.Context())
+
+	pd := PageData{User: user}
+
+	if gc != nil {
+		pd.Settings = gc.Settings
+		pd.Group = gc.Group
+	}
+
+	pd.IsGroupAdmin = isGroupAdmin(r.Context())
+
+	if user != nil {
+		pd.IsInstanceAdmin = user.IsInstanceAdmin
+
+		loops, err := s.store.ListUserGroups(r.Context(), user.ID)
+		if err != nil {
+			s.logger.ErrorContext(r.Context(), "Failed to list user loops",
+				slog.String("error", err.Error()))
+		} else {
+			pd.Loops = loops
+			pd.MultiLoop = len(loops) > 1
+		}
+	}
+
+	if pd.Settings == nil {
+		name := "PiecesOfLife"
+		if inst, err := s.store.GetInstanceSettings(r.Context()); err == nil {
+			name = inst.InstanceName
+		}
+
+		pd.Settings = &store.Settings{LoopName: name}
+	}
+
+	return pd
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Ping(r.Context()); err != nil {
 		writeError(w, http.StatusServiceUnavailable,
@@ -451,25 +523,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
-	setupComplete, err := s.store.IsSetupComplete(r.Context())
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to check setup status",
-			slog.String("error", err.Error()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-
-		return
-	}
-
-	if !setupComplete {
-		http.Redirect(w, r, "/admin/setup", http.StatusSeeOther)
-		return
-	}
-
 	// Invite / email-CTA links land here as /?auth=TOKEN. The landing
 	// page is registered without authMiddleware so we must consume the
 	// token here ourselves; handleAuthParam exchanges it for a session
 	// cookie and redirects back to / without the query param, at which
-	// point the cookie check below succeeds.
+	// point the session check below succeeds.
 	if authToken := r.URL.Query().Get("auth"); authToken != "" {
 		s.handleAuthParam(w, r, authToken)
 		return
@@ -496,22 +554,52 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticated user: redirect based on role. Admins land on the
-	// issues page like everyone else — the Loom is a deliberate visit via
-	// the nav, not the default destination of every login link.
-	if user.Role == "admin" {
-		http.Redirect(w, r, "/issues", http.StatusSeeOther)
-	} else {
-		if activeIssue, activeErr := s.store.GetActiveIssue(r.Context()); activeErr == nil &&
-			activeIssue.Status == "collecting" {
+	gc := s.resolveCurrentGroup(r.Context(), user, session, r.URL.Query().Get("g"))
+
+	// No usable Loop: operators go to the console, members to their
+	// (empty) Loop list.
+	if gc == nil {
+		if user.IsInstanceAdmin {
+			http.Redirect(w, r, "/instance", http.StatusSeeOther)
+		} else {
+			http.Redirect(w, r, "/loops", http.StatusSeeOther)
+		}
+
+		return
+	}
+
+	// A Loop whose wizard hasn't run yet: its admin gets the wizard,
+	// members get the Loop list (which shows it as still being woven).
+	if !gc.Settings.SetupComplete {
+		admin := user.IsInstanceAdmin ||
+			(gc.Membership != nil && gc.Membership.Role == "admin")
+		if admin {
+			http.Redirect(w, r, "/admin/setup", http.StatusSeeOther)
+		} else {
+			http.Redirect(w, r, "/loops", http.StatusSeeOther)
+		}
+
+		return
+	}
+
+	// Authenticated user with a ready Loop: members with an open round go
+	// straight to the respond page; everyone else lands on the issues
+	// archive. Admins land on /issues too — the Loom is a deliberate visit
+	// via the nav, not the default destination of every login link.
+	admin := user.IsInstanceAdmin ||
+		(gc.Membership != nil && gc.Membership.Role == "admin")
+	if !admin {
+		if activeIssue, activeErr := s.store.GetActiveIssue(
+			r.Context(), gc.Group.ID,
+		); activeErr == nil && activeIssue.Status == "collecting" {
 			http.Redirect(w, r,
 				fmt.Sprintf("/issues/%d/respond", activeIssue.ID),
 				http.StatusSeeOther)
 			return
 		}
-
-		http.Redirect(w, r, "/issues", http.StatusSeeOther)
 	}
+
+	http.Redirect(w, r, "/issues", http.StatusSeeOther)
 }
 
 func (s *Server) renderPage(

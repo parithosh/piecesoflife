@@ -118,6 +118,60 @@ func (s *Store) MarkEventFired(
 	return nil
 }
 
+// GetNextPendingEventForGroup returns the earliest unfired event of the
+// given type belonging to one group (resolved through the event's issue),
+// or (nil, nil) when none is queued.
+func (s *Store) GetNextPendingEventForGroup(
+	ctx context.Context, eventType string, groupID int64,
+) (*SchedulerEvent, error) {
+	var ev SchedulerEvent
+
+	err := s.read.QueryRowContext(ctx,
+		`SELECT e.id, e.issue_id, e.event_type, e.scheduled_at,
+		        e.fired_at, e.was_late, e.created_at
+		 FROM scheduler_events e
+		 JOIN issues i ON i.id = e.issue_id
+		 WHERE e.event_type = ? AND i.group_id = ? AND e.fired_at IS NULL
+		 ORDER BY e.scheduled_at ASC
+		 LIMIT 1`, eventType, groupID,
+	).Scan(&ev.ID, &ev.IssueID, &ev.EventType, &ev.ScheduledAt,
+		&ev.FiredAt, &ev.WasLate, &ev.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("getting next %s event for group %d: %w",
+			eventType, groupID, err)
+	}
+
+	return &ev, nil
+}
+
+// DeletePendingEventsForGroup removes every unfired event belonging to a
+// group's issues — called when a Loop is archived so its rounds stop
+// closing, publishing, and emailing. Fired events stay as history.
+func (s *Store) DeletePendingEventsForGroup(
+	ctx context.Context, groupID int64,
+) (int64, error) {
+	result, err := s.write.ExecContext(ctx,
+		`DELETE FROM scheduler_events
+		 WHERE fired_at IS NULL
+		   AND issue_id IN (SELECT id FROM issues WHERE group_id = ?)`,
+		groupID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deleting pending events for group %d: %w", groupID, err)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting deleted events for group %d: %w", groupID, err)
+	}
+
+	return n, nil
+}
+
 // DeleteEventsForIssue removes all scheduled events for an issue.
 func (s *Store) DeleteEventsForIssue(
 	ctx context.Context, issueID int64,

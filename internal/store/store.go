@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"modernc.org/sqlite"
 )
@@ -49,6 +50,7 @@ func init() {
 type Store struct {
 	write  *sql.DB
 	read   *sql.DB
+	dbPath string
 	logger *slog.Logger
 }
 
@@ -94,6 +96,7 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 	return &Store{
 		write:  writeDB,
 		read:   readDB,
+		dbPath: dbPath,
 		logger: log,
 	}, nil
 }
@@ -147,6 +150,22 @@ func (s *Store) RunMigrations(ctx context.Context) error {
 		return entries[i].Name() < entries[j].Name()
 	})
 
+	// First pass: work out which migrations are pending, so an upgrade of an
+	// existing database can snapshot itself before anything is applied.
+	var appliedCount int
+	if err := s.write.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM schema_migrations",
+	).Scan(&appliedCount); err != nil {
+		return fmt.Errorf("counting applied migrations: %w", err)
+	}
+
+	type pendingMigration struct {
+		name    string
+		version int
+	}
+
+	pending := make([]pendingMigration, 0, len(entries))
+
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
@@ -170,22 +189,75 @@ func (s *Store) RunMigrations(ctx context.Context) error {
 			continue
 		}
 
-		sqlBytes, err := migrationsFS.ReadFile("migrations/" + entry.Name())
+		pending = append(pending, pendingMigration{name: entry.Name(), version: version})
+	}
+
+	if len(pending) == 0 {
+		return nil
+	}
+
+	// An existing database (some migrations already applied) is about to be
+	// upgraded: take a consistent snapshot first so the operator can roll
+	// back to the previous release by restoring one file. Fails closed — a
+	// schema upgrade without a rollback path is how databases get bricked.
+	if appliedCount > 0 {
+		backupPath, err := s.backupBeforeMigration(ctx, pending[0].version)
 		if err != nil {
-			return fmt.Errorf("reading migration %s: %w", entry.Name(), err)
+			return fmt.Errorf(
+				"refusing to migrate without a backup (free disk space or remove old *.backup files): %w",
+				err)
 		}
 
-		if err := s.applyMigration(ctx, entry.Name(), version, string(sqlBytes)); err != nil {
+		s.logger.InfoContext(ctx, "Database backed up before migration",
+			slog.String("backup", backupPath),
+			slog.Int("pending", len(pending)),
+		)
+	}
+
+	for _, mig := range pending {
+		sqlBytes, err := migrationsFS.ReadFile("migrations/" + mig.name)
+		if err != nil {
+			return fmt.Errorf("reading migration %s: %w", mig.name, err)
+		}
+
+		if err := s.applyMigration(ctx, mig.name, mig.version, string(sqlBytes)); err != nil {
 			return err
 		}
 
 		s.logger.InfoContext(ctx, "Applied migration",
-			slog.Int("version", version),
-			slog.String("file", entry.Name()),
+			slog.Int("version", mig.version),
+			slog.String("file", mig.name),
 		)
 	}
 
 	return nil
+}
+
+// backupBeforeMigration writes a consistent snapshot of the database next
+// to the live file, named after the first migration about to be applied
+// (piecesoflife.db.backup-before-016-20260706-093000). VACUUM INTO produces
+// a compact single-file copy that is safe to take under WAL and needs no
+// -wal/-shm siblings to restore.
+func (s *Store) backupBeforeMigration(
+	ctx context.Context, firstPendingVersion int,
+) (string, error) {
+	backupPath := fmt.Sprintf("%s.backup-before-%03d-%s",
+		s.dbPath, firstPendingVersion, time.Now().UTC().Format("20060102-150405"))
+
+	if _, err := s.write.ExecContext(ctx,
+		"VACUUM INTO "+quoteSQLString(backupPath),
+	); err != nil {
+		return "", fmt.Errorf("snapshotting database to %s: %w", backupPath, err)
+	}
+
+	return backupPath, nil
+}
+
+// quoteSQLString returns s as a single-quoted SQL string literal. VACUUM
+// INTO cannot take a bound parameter in all SQLite builds, so the path is
+// inlined; it comes from our own config, never from user input.
+func quoteSQLString(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
 }
 
 // applyMigration runs one migration inside a transaction.
@@ -256,15 +328,17 @@ func (s *Store) applyMigration(
 	return nil
 }
 
-// SeedAdminUser creates the initial admin user if no admin exists.
+// SeedAdminUser ensures the ADMIN_EMAIL operator exists as an instance
+// admin with an admin membership in the default (oldest active) group.
+// No-op once any instance admin exists.
 func (s *Store) SeedAdminUser(ctx context.Context, email string) error {
 	var count int
 
 	err := s.read.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM users WHERE role = 'admin'",
+		"SELECT COUNT(*) FROM users WHERE is_instance_admin = 1",
 	).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("checking for existing admin: %w", err)
+		return fmt.Errorf("checking for existing instance admin: %w", err)
 	}
 
 	if count > 0 {
@@ -278,17 +352,51 @@ func (s *Store) SeedAdminUser(ctx context.Context, email string) error {
 
 	defer tx.Rollback()
 
-	result, err := tx.ExecContext(ctx,
-		"INSERT INTO users (name, email, role, is_active) VALUES ('Admin', ?, 'admin', 1)",
-		email,
-	)
-	if err != nil {
-		return fmt.Errorf("inserting admin user: %w", err)
+	var groupID int64
+	if err := tx.QueryRowContext(ctx,
+		"SELECT id FROM groups WHERE is_active = 1 ORDER BY created_at, id LIMIT 1",
+	).Scan(&groupID); err != nil {
+		return fmt.Errorf("finding default group for admin seed: %w", err)
 	}
 
-	userID, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting admin user id: %w", err)
+	var userID int64
+
+	err = tx.QueryRowContext(ctx,
+		"SELECT id FROM users WHERE email = ?", email,
+	).Scan(&userID)
+
+	switch {
+	case err == sql.ErrNoRows:
+		result, err := tx.ExecContext(ctx,
+			`INSERT INTO users (name, email, is_active, is_instance_admin, last_group_id)
+			 VALUES ('Admin', ?, 1, 1, ?)`,
+			email, groupID,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting admin user: %w", err)
+		}
+
+		userID, err = result.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("getting admin user id: %w", err)
+		}
+	case err != nil:
+		return fmt.Errorf("finding admin user: %w", err)
+	default:
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE users SET is_instance_admin = 1 WHERE id = ?", userID,
+		); err != nil {
+			return fmt.Errorf("promoting admin user: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO memberships (group_id, user_id, role, is_active)
+		 VALUES (?, ?, 'admin', 1)
+		 ON CONFLICT(group_id, user_id) DO UPDATE SET role = 'admin', is_active = 1`,
+		groupID, userID,
+	); err != nil {
+		return fmt.Errorf("inserting admin membership: %w", err)
 	}
 
 	_, err = tx.ExecContext(ctx,
@@ -303,30 +411,87 @@ func (s *Store) SeedAdminUser(ctx context.Context, email string) error {
 		return fmt.Errorf("committing admin seed: %w", err)
 	}
 
-	s.logger.InfoContext(ctx, "Seeded admin user", slog.String("email", email))
+	s.logger.InfoContext(ctx, "Seeded instance admin", slog.String("email", email))
 
 	return nil
 }
 
-// SeedSettings ensures the single settings row exists with defaults.
-// auto_create_enabled is seeded on explicitly: the column default predates
-// the decision to make a self-sustaining loop the out-of-box behavior.
-func (s *Store) SeedSettings(ctx context.Context) error {
-	_, err := s.write.ExecContext(ctx,
-		"INSERT OR IGNORE INTO settings (id, auto_create_enabled) VALUES (1, 1)",
-	)
+// SeedDefaultGroup creates the first Loop (with settings, default
+// questions, and question bank) on a fresh database. No-op once any group
+// exists, so migrated installs keep their group 1 untouched.
+func (s *Store) SeedDefaultGroup(ctx context.Context) error {
+	var count int
+
+	err := s.read.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM groups",
+	).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("seeding settings: %w", err)
+		return fmt.Errorf("checking for existing groups: %w", err)
+	}
+
+	if count > 0 {
+		return nil
+	}
+
+	groupID, err := s.CreateGroup(ctx, "PiecesOfLife", nil)
+	if err != nil {
+		return fmt.Errorf("seeding default group: %w", err)
+	}
+
+	s.logger.InfoContext(ctx, "Seeded default group", slog.Int64("group_id", groupID))
+
+	return nil
+}
+
+// SeedQuestionBank tops up every group's bank from the embedded seed file.
+// Runs on every startup: (group_id, text) is UNIQUE and the insert is OR
+// IGNORE, so existing rows (and their used flags) are untouched while
+// questions added to the seed file in later releases flow into existing
+// Loops.
+func (s *Store) SeedQuestionBank(ctx context.Context) error {
+	rows, err := s.read.QueryContext(ctx, "SELECT id FROM groups")
+	if err != nil {
+		return fmt.Errorf("listing groups for question seed: %w", err)
+	}
+	defer rows.Close()
+
+	groupIDs := make([]int64, 0, 4)
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scanning group id for question seed: %w", err)
+		}
+
+		groupIDs = append(groupIDs, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating groups for question seed: %w", err)
+	}
+
+	for _, groupID := range groupIDs {
+		tx, err := s.write.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("beginning question seed transaction: %w", err)
+		}
+
+		if err := seedQuestionBankTx(ctx, tx, groupID); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("seeding question bank for group %d: %w", groupID, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing question seed for group %d: %w", groupID, err)
+		}
 	}
 
 	return nil
 }
 
-// SeedQuestionBank tops up the bank from the embedded seed file. Runs on
-// every startup: question_bank.text is UNIQUE and the insert is OR IGNORE,
-// so existing rows (and their used flags) are untouched while questions
-// added to the seed file in later releases flow into existing deployments.
-func (s *Store) SeedQuestionBank(ctx context.Context) error {
+// seedQuestionBankTx inserts the embedded seed questions for one group
+// inside an existing transaction, skipping texts the group already has.
+func seedQuestionBankTx(ctx context.Context, tx *sql.Tx, groupID int64) error {
 	var questions []struct {
 		Text     string `json:"text"`
 		Category string `json:"category"`
@@ -336,15 +501,8 @@ func (s *Store) SeedQuestionBank(ctx context.Context) error {
 		return fmt.Errorf("parsing question seed data: %w", err)
 	}
 
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning question seed transaction: %w", err)
-	}
-
-	defer tx.Rollback()
-
 	stmt, err := tx.PrepareContext(ctx,
-		"INSERT OR IGNORE INTO question_bank (text, category) VALUES (?, ?)",
+		"INSERT OR IGNORE INTO question_bank (group_id, text, category) VALUES (?, ?, ?)",
 	)
 	if err != nil {
 		return fmt.Errorf("preparing question insert: %w", err)
@@ -352,29 +510,10 @@ func (s *Store) SeedQuestionBank(ctx context.Context) error {
 
 	defer stmt.Close()
 
-	var added int64
-
 	for _, q := range questions {
-		res, err := stmt.ExecContext(ctx, q.Text, q.Category)
-		if err != nil {
+		if _, err := stmt.ExecContext(ctx, groupID, q.Text, q.Category); err != nil {
 			return fmt.Errorf("inserting question %q: %w", q.Text, err)
 		}
-
-		n, err := res.RowsAffected()
-		if err == nil {
-			added += n
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing question seed: %w", err)
-	}
-
-	if added > 0 {
-		s.logger.InfoContext(ctx, "Seeded question bank",
-			slog.Int64("added", added),
-			slog.Int("seed_total", len(questions)),
-		)
 	}
 
 	return nil

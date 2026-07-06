@@ -16,11 +16,11 @@ func TestDeleteQuestionsByIssue(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	issueA, err := s.CreateIssue(ctx, nil, 4, 2026,
+	issueA, err := s.CreateIssue(ctx, 1, nil, 4, 2026,
 		time.Now(), time.Now().Add(7*24*time.Hour))
 	require.NoError(t, err)
 
-	issueB, err := s.CreateIssue(ctx, nil, 5, 2026,
+	issueB, err := s.CreateIssue(ctx, 1, nil, 5, 2026,
 		time.Now(), time.Now().Add(7*24*time.Hour))
 	require.NoError(t, err)
 
@@ -56,12 +56,12 @@ func TestSelectRandomUnusedQuestions_CategorySpread(t *testing.T) {
 
 	for _, cat := range categories {
 		for i := 0; i < 5; i++ {
-			_, err := s.CreateBankQuestion(ctx, cat+"-"+string(rune('a'+i)), cat)
+			_, err := s.CreateBankQuestion(ctx, 1, cat+"-"+string(rune('a'+i)), cat)
 			require.NoError(t, err)
 		}
 	}
 
-	picked, err := s.SelectRandomUnusedQuestions(ctx, 5)
+	picked, err := s.SelectRandomUnusedQuestions(ctx, 1, 5)
 	require.NoError(t, err)
 	require.Len(t, picked, 5)
 

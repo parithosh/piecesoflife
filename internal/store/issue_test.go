@@ -14,7 +14,7 @@ func TestGetIssueByResponseID(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC()
-	issueID, err := st.CreateIssue(ctx, nil, int(now.Month()), now.Year(),
+	issueID, err := st.CreateIssue(ctx, 1, nil, int(now.Month()), now.Year(),
 		now, now.Add(7*24*time.Hour))
 	require.NoError(t, err)
 	require.NoError(t, st.SetIssueStatus(ctx, issueID, "collecting"))

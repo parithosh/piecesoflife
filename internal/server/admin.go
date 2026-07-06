@@ -34,7 +34,7 @@ type AdminDashboardData struct {
 // AdminMembersData is the template data for the member management page.
 type AdminMembersData struct {
 	PageData
-	Members []store.User
+	Members []store.GroupMember
 }
 
 // AdminSettingsData is the template data for the settings page.
@@ -81,14 +81,14 @@ type MemberAnswer struct {
 // GET /admin
 func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	user := UserFromContext(ctx)
+	groupID := currentGroupID(ctx)
 
 	settings, ok := s.loadSettingsOr500(w, r)
 	if !ok {
 		return
 	}
 
-	currentIssue, err := s.store.GetActiveIssue(ctx)
+	currentIssue, err := s.store.GetActiveIssue(ctx, groupID)
 	if err != nil {
 		// No active issue is not a fatal error.
 		s.logger.InfoContext(ctx, "No active issue found",
@@ -125,14 +125,14 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	publishedStatus := "published"
-	pastIssues, err := s.store.ListIssues(ctx, &publishedStatus)
+	pastIssues, err := s.store.ListIssues(ctx, groupID, &publishedStatus)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list past issues",
 			slog.String("error", err.Error()))
 		pastIssues = make([]store.Issue, 0)
 	}
 
-	recentEmails, _, err := s.store.ListEmailLogs(ctx, 1, 10)
+	recentEmails, _, err := s.store.ListEmailLogs(ctx, groupID, 1, 10)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list recent emails",
 			slog.String("error", err.Error()))
@@ -145,10 +145,7 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := AdminDashboardData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData:        s.newPageData(r),
 		CurrentIssue:    currentIssue,
 		Progress:        progress,
 		PastIssues:      pastIssues,
@@ -165,14 +162,8 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 // GET /admin/members
 func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	user := UserFromContext(ctx)
 
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
-		return
-	}
-
-	members, err := s.store.ListAllUsers(ctx)
+	members, err := s.store.ListGroupMembers(ctx, currentGroupID(ctx))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list members",
 			slog.String("error", err.Error()))
@@ -181,11 +172,8 @@ func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := AdminMembersData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
-		Members: members,
+		PageData: s.newPageData(r),
+		Members:  members,
 	}
 
 	s.renderPage(w, "members.html", data)
@@ -199,16 +187,11 @@ func (s *Server) handleAdminMemberSubmission(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	ctx := r.Context()
-	viewer := UserFromContext(ctx)
+	groupID := currentGroupID(ctx)
 
 	memberID, err := strconv.ParseInt(r.PathValue("userId"), 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
-		return
-	}
-
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
 		return
 	}
 
@@ -218,10 +201,16 @@ func (s *Server) handleAdminMemberSubmission(
 		return
 	}
 
+	// The viewed member must belong to this Loop.
+	if _, err := s.store.GetMembership(ctx, groupID, memberID); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
 	// "Current issue" = the active draft/collecting issue. Published issues
 	// are already viewable on the regular issue page, so we don't redirect
 	// or fall back to them here — the admin can use the archive for those.
-	issue, err := s.store.GetActiveIssue(ctx)
+	issue, err := s.store.GetActiveIssue(ctx, groupID)
 	if err != nil {
 		s.logger.InfoContext(ctx, "No active issue for member submission view",
 			slog.Int64("member_id", memberID),
@@ -229,7 +218,7 @@ func (s *Server) handleAdminMemberSubmission(
 	}
 
 	data := AdminMemberSubmissionData{
-		PageData: PageData{User: viewer, Settings: settings},
+		PageData: s.newPageData(r),
 		Member:   *member,
 		Issue:    issue,
 		Answers:  make(map[int64]MemberAnswer, 0),
@@ -286,16 +275,10 @@ func (s *Server) handleAdminMemberSubmission(
 // GET /admin/questions
 func (s *Server) handleAdminQuestions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	user := UserFromContext(ctx)
-
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
-		return
-	}
-
 	pg := parsePagination(r)
 
-	questions, total, err := s.store.ListQuestionBank(ctx, nil, nil, pg.Page, pg.PerPage)
+	questions, total, err := s.store.ListQuestionBank(ctx, currentGroupID(ctx),
+		nil, nil, pg.Page, pg.PerPage)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list question bank",
 			slog.String("error", err.Error()))
@@ -304,10 +287,7 @@ func (s *Server) handleAdminQuestions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := AdminQuestionsData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData:  s.newPageData(r),
 		Questions: questions,
 		Total:     total,
 	}
@@ -319,14 +299,8 @@ func (s *Server) handleAdminQuestions(w http.ResponseWriter, r *http.Request) {
 // GET /admin/settings
 func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	user := UserFromContext(ctx)
 
-	settings, ok := s.loadSettingsOr500(w, r)
-	if !ok {
-		return
-	}
-
-	defaultQuestions, err := s.store.ListDefaultQuestions(ctx)
+	defaultQuestions, err := s.store.ListDefaultQuestions(ctx, currentGroupID(ctx))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list default questions",
 			slog.String("error", err.Error()))
@@ -334,10 +308,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := AdminSettingsData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData:         s.newPageData(r),
 		EmailProvider:    s.config.EmailProvider,
 		EmailFrom:        s.config.FromEmail,
 		DefaultQuestions: defaultQuestions,
@@ -355,8 +326,8 @@ func (s *Server) handleSendTestEmail(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(ctx)
 
 	loopName := "PiecesOfLife"
-	if settings, err := s.store.GetSettings(ctx); err == nil && settings.LoopName != "" {
-		loopName = settings.LoopName
+	if gc := GroupFromContext(ctx); gc != nil && gc.Settings.LoopName != "" {
+		loopName = gc.Settings.LoopName
 	}
 
 	subject := fmt.Sprintf("Test email from %s", loopName)
@@ -406,32 +377,42 @@ func (s *Server) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings",
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-		return
-	}
-
+	gc := GroupFromContext(ctx)
+	settings := gc.Settings
+	groupID := gc.Group.ID
 	inviter := UserFromContext(ctx)
 
 	existingUser, err := s.store.GetUserByEmail(ctx, req.Email)
 	if err == nil {
-		if existingUser.IsActive {
+		// Known account: joining this Loop is just a membership. An active
+		// existing membership is a conflict; a deactivated one (or none) is
+		// (re)created. A globally deactivated account is restored — the
+		// invite is explicit intent to bring the person back.
+		if membership, mErr := s.store.GetMembership(ctx, groupID, existingUser.ID); mErr == nil &&
+			membership.IsActive && existingUser.IsActive {
 			writeError(w, http.StatusConflict, "already_member", "User is already an active member")
 			return
 		}
 
-		if err := s.store.ReactivateUser(ctx, existingUser.ID); err != nil {
-			s.logger.ErrorContext(ctx, "Failed to reactivate user",
+		if !existingUser.IsActive {
+			if err := s.store.ReactivateUser(ctx, existingUser.ID); err != nil {
+				s.logger.ErrorContext(ctx, "Failed to reactivate user",
+					slog.String("email", req.Email),
+					slog.String("error", err.Error()))
+				writeError(w, http.StatusInternalServerError, "server_error", "Failed to reactivate user")
+				return
+			}
+		}
+
+		if err := s.store.CreateMembership(ctx, groupID, existingUser.ID, "member"); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to add member",
 				slog.String("email", req.Email),
 				slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to reactivate user")
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to add member")
 			return
 		}
 
-		s.sendInviteEmail(ctx, existingUser.ID, req.Email,
+		s.sendInviteEmail(ctx, groupID, existingUser.ID, req.Email,
 			settings.LoopName, inviter.Name, settings.InviteNote, nil)
 
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Invite sent"})
@@ -441,12 +422,20 @@ func (s *Server) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 	// Create new user.
 	name := strings.Split(req.Email, "@")[0]
 
-	newUserID, err := s.store.CreateUser(ctx, name, req.Email, "member")
+	newUserID, err := s.store.CreateUser(ctx, name, req.Email)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to create invited user",
 			slog.String("email", req.Email),
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create user")
+		return
+	}
+
+	if err := s.store.CreateMembership(ctx, groupID, newUserID, "member"); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to create membership",
+			slog.String("email", req.Email),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to add member")
 		return
 	}
 
@@ -456,7 +445,7 @@ func (s *Server) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 	}
 
-	s.sendInviteEmail(ctx, newUserID, req.Email,
+	s.sendInviteEmail(ctx, groupID, newUserID, req.Email,
 		settings.LoopName, inviter.Name, settings.InviteNote, nil)
 
 	s.logger.InfoContext(ctx, "User invited",
@@ -471,7 +460,7 @@ func (s *Server) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	settings, err := s.store.GetSettings(ctx)
+	settings, err := s.store.GetSettings(ctx, currentGroupID(ctx))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to get settings",
 			slog.String("error", err.Error()))
@@ -505,7 +494,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current, err := s.store.GetSettings(ctx)
+	current, err := s.store.GetSettings(ctx, currentGroupID(ctx))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to load settings",
 			slog.String("error", err.Error()))
@@ -610,7 +599,7 @@ func (s *Server) handleEmailLog(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pg := parsePagination(r)
 
-	logs, total, err := s.store.ListEmailLogs(ctx, pg.Page, pg.PerPage)
+	logs, total, err := s.store.ListEmailLogs(ctx, currentGroupID(ctx), pg.Page, pg.PerPage)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list email logs",
 			slog.String("error", err.Error()))
@@ -648,6 +637,12 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	groupID := currentGroupID(ctx)
+	if logEntry.GroupID == nil || *logEntry.GroupID != groupID {
+		writeError(w, http.StatusNotFound, "not_found", "Email log entry not found")
+		return
+	}
+
 	if logEntry.UserID == nil {
 		writeError(w, http.StatusUnprocessableEntity, "no_recipient", "Log entry has no associated user")
 		return
@@ -662,7 +657,7 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx)
+	settings, err := s.store.GetSettings(ctx, groupID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to load settings",
 			slog.String("error", err.Error()))
@@ -680,7 +675,7 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var subject, body string
-	authURL := s.config.BaseURL + "/?auth=" + raw
+	authURL := fmt.Sprintf("%s/?auth=%s&g=%d", s.config.BaseURL, raw, groupID)
 
 	switch logEntry.Type {
 	case "invite":
@@ -730,7 +725,8 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newLogID, _ := s.store.LogEmail(ctx, &user.ID, logEntry.IssueID, logEntry.Type, "pending", nil)
+	newLogID, _ := s.store.LogEmail(ctx, &groupID, &user.ID, logEntry.IssueID,
+		logEntry.Type, "pending", nil)
 
 	bgCtx := context.WithoutCancel(ctx)
 
@@ -778,12 +774,8 @@ func (s *Server) handleSendReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(ctx, issueID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to get issue for reminder",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusNotFound, "not_found", "Issue not found")
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 

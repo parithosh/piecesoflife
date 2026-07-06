@@ -25,7 +25,9 @@ type SetupWizardData struct {
 // handleAdminSetup renders the onboarding wizard page.
 // GET /admin/setup
 func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
-	setupComplete, err := s.store.IsSetupComplete(r.Context())
+	groupID := currentGroupID(r.Context())
+
+	setupComplete, err := s.store.IsSetupComplete(r.Context(), groupID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to check setup status",
 			slog.String("error", err.Error()))
@@ -38,10 +40,9 @@ func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := UserFromContext(r.Context())
-	settings, _ := s.store.GetSettings(r.Context())
+	settings := GroupFromContext(r.Context()).Settings
 
-	defaultQuestions, err := s.store.ListDefaultQuestions(r.Context())
+	defaultQuestions, err := s.store.ListDefaultQuestions(r.Context(), groupID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to list default questions",
 			slog.String("error", err.Error()))
@@ -61,17 +62,14 @@ func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
 		suggestCount = 1
 	}
 
-	questions, err := s.store.SelectRandomUnusedQuestions(r.Context(), suggestCount)
+	questions, err := s.store.SelectRandomUnusedQuestions(r.Context(), groupID, suggestCount)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to select suggested questions",
 			slog.String("error", err.Error()))
 	}
 
 	data := SetupWizardData{
-		PageData: PageData{
-			User:     user,
-			Settings: settings,
-		},
+		PageData:           s.newPageData(r),
 		SuggestedQuestions: questions,
 		DefaultQuestions:   defaultQuestions,
 	}
@@ -114,8 +112,10 @@ type onboardingDefaultQuestion struct {
 // handleCompleteOnboarding processes the setup wizard submission.
 // POST /api/onboarding/complete
 func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request) {
+	groupID := currentGroupID(r.Context())
+
 	// Idempotency check.
-	setupComplete, err := s.store.IsSetupComplete(r.Context())
+	setupComplete, err := s.store.IsSetupComplete(r.Context(), groupID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
 		return
@@ -217,7 +217,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	}
 
 	// Step 2: Update settings. Idempotent (single-row UPSERT-ish).
-	currentSettings, _ := s.store.GetSettings(ctx)
+	currentSettings, _ := s.store.GetSettings(ctx, groupID)
 	accentColor := "#2d5016"
 	autoCreateEnabled := false
 	allowPublicMementos := true
@@ -238,6 +238,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	}
 
 	settings := &store.Settings{
+		GroupID:              groupID,
 		LoopName:             req.LoopName,
 		Tagline:              req.Tagline,
 		Frequency:            req.Frequency,
@@ -262,7 +263,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	// issue (and every later one) honors them. Idempotent (UPDATE WHERE id=);
 	// a bad ID is logged rather than blocking the launch.
 	for _, dq := range req.DefaultQuestions {
-		if err := s.store.SetDefaultQuestionEnabled(ctx, dq.ID, dq.Enabled); err != nil {
+		if err := s.store.SetDefaultQuestionEnabled(ctx, groupID, dq.ID, dq.Enabled); err != nil {
 			s.logger.WarnContext(ctx, "Failed to apply default question switch",
 				slog.Int64("default_question_id", dq.ID),
 				slog.Bool("enabled", dq.Enabled),
@@ -280,7 +281,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 			ids = append(ids, dq.ID)
 		}
 
-		if err := s.store.ReorderDefaultQuestions(ctx, ids); err != nil {
+		if err := s.store.ReorderDefaultQuestions(ctx, groupID, ids); err != nil {
 			s.logger.WarnContext(ctx, "Failed to apply default question order from wizard",
 				slog.String("error", err.Error()))
 		}
@@ -300,7 +301,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	// Step 4: Get-or-create the setup issue. On retry, reuse the issue from
 	// a previous partial attempt instead of creating a second one for the
 	// same (month, year).
-	issueID, err := s.getOrCreateSetupIssue(ctx, month, year, utcStart, deadline)
+	issueID, err := s.getOrCreateSetupIssue(ctx, groupID, month, year, utcStart, deadline)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to get or create setup issue",
 			slog.String("error", err.Error()))
@@ -328,7 +329,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	}
 
 	// Enabled default questions lead the first round; the admin's picks follow.
-	numDefaults := s.insertDefaultQuestions(ctx, issueID, 0)
+	numDefaults := s.insertDefaultQuestions(ctx, groupID, issueID, 0)
 
 	// A retried wizard may have already promoted make_default picks to
 	// global defaults (Step 6b) — insertDefaultQuestions just stitched
@@ -380,7 +381,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 			continue
 		}
 
-		if _, err := s.store.CreateDefaultQuestion(ctx, text); err != nil &&
+		if _, err := s.store.CreateDefaultQuestion(ctx, groupID, text); err != nil &&
 			!errors.Is(err, store.ErrDuplicateText) {
 			s.logger.WarnContext(ctx, "Failed to save wizard pick as default question",
 				slog.String("text", text),
@@ -422,21 +423,23 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 
 		existingUser, err := s.store.GetUserByEmail(ctx, email)
 		if err == nil {
-			if existingUser.IsActive {
-				// Active from a prior attempt — re-send the invite so the
-				// friend still gets a working CTA link.
-				s.sendInviteEmail(ctx, existingUser.ID, email,
-					req.LoopName, req.AdminName, req.InviteNote, &issueID)
+			if !existingUser.IsActive {
+				if err := s.store.ReactivateUser(ctx, existingUser.ID); err != nil {
+					s.logger.ErrorContext(ctx, "Failed to reactivate user",
+						slog.String("email", email),
+						slog.String("error", err.Error()))
+				}
+			}
+
+			if err := s.store.CreateMembership(ctx, groupID, existingUser.ID, "member"); err != nil {
+				s.logger.ErrorContext(ctx, "Failed to add member",
+					slog.String("email", email),
+					slog.String("error", err.Error()))
 				continue
 			}
 
-			if err := s.store.ReactivateUser(ctx, existingUser.ID); err != nil {
-				s.logger.ErrorContext(ctx, "Failed to reactivate user",
-					slog.String("email", email),
-					slog.String("error", err.Error()))
-			}
-
-			s.sendInviteEmail(ctx, existingUser.ID, email,
+			// Re-send the invite so the friend still gets a working CTA link.
+			s.sendInviteEmail(ctx, groupID, existingUser.ID, email,
 				req.LoopName, req.AdminName, req.InviteNote, &issueID)
 
 			continue
@@ -445,12 +448,18 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		// Create new user.
 		name := strings.Split(email, "@")[0]
 
-		newUserID, err := s.store.CreateUser(ctx, name, email, "member")
+		newUserID, err := s.store.CreateUser(ctx, name, email)
 		if err != nil {
 			s.logger.ErrorContext(ctx, "Failed to create invited user",
 				slog.String("email", email),
 				slog.String("error", err.Error()))
 			continue
+		}
+
+		if err := s.store.CreateMembership(ctx, groupID, newUserID, "member"); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to create membership",
+				slog.String("email", email),
+				slog.String("error", err.Error()))
 		}
 
 		if err := s.store.EnsureNotificationPreferences(ctx, newUserID); err != nil {
@@ -459,13 +468,13 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 				slog.String("error", err.Error()))
 		}
 
-		s.sendInviteEmail(ctx, newUserID, email,
+		s.sendInviteEmail(ctx, groupID, newUserID, email,
 			req.LoopName, req.AdminName, req.InviteNote, &issueID)
 	}
 
 	// Step 9: Mark setup complete. This is the commit point — until it
 	// succeeds, the wizard remains open and resubmission re-converges.
-	if err := s.store.CompleteSetup(ctx); err != nil {
+	if err := s.store.CompleteSetup(ctx, groupID); err != nil {
 		s.logger.ErrorContext(ctx, "Failed to complete setup",
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to complete setup")
@@ -485,11 +494,11 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 // exists from a prior onboarding attempt; otherwise it creates a fresh one.
 // On reuse it also refreshes opens_at/deadline so wizard edits take effect.
 func (s *Server) getOrCreateSetupIssue(
-	ctx context.Context,
+	ctx context.Context, groupID int64,
 	month, year int,
 	opensAt, deadline time.Time,
 ) (int64, error) {
-	existing, err := s.store.GetIssueByMonthYear(ctx, month, year)
+	existing, err := s.store.GetIssueByMonthYear(ctx, groupID, month, year)
 	if err == nil {
 		// Refresh schedule in case the admin changed start/window on retry.
 		// UpdateIssue uses COALESCE so passing non-nil deadline updates it;
@@ -506,13 +515,15 @@ func (s *Server) getOrCreateSetupIssue(
 		return 0, fmt.Errorf("looking up existing setup issue: %w", err)
 	}
 
-	return s.store.CreateIssue(ctx, nil, month, year, opensAt, deadline)
+	return s.store.CreateIssue(ctx, groupID, nil, month, year, opensAt, deadline)
 }
 
-// sendInviteEmail generates a CTA token and sends an invite email to a user.
+// sendInviteEmail generates a CTA token and sends an invite email to a
+// user. The link carries the Loop (?g=) so people who belong to several
+// Loops land in the right one.
 func (s *Server) sendInviteEmail(
 	ctx context.Context,
-	userID int64, email, loopName, adminName string,
+	groupID, userID int64, email, loopName, adminName string,
 	inviteNote *string, issueID *int64,
 ) {
 	raw, err := s.mintEmailCTAToken(ctx, userID)
@@ -522,7 +533,7 @@ func (s *Server) sendInviteEmail(
 		return
 	}
 
-	authURL := s.config.BaseURL + "/?auth=" + raw
+	authURL := fmt.Sprintf("%s/?auth=%s&g=%d", s.config.BaseURL, raw, groupID)
 	note := ""
 	if inviteNote != nil {
 		note = *inviteNote
@@ -532,7 +543,7 @@ func (s *Server) sendInviteEmail(
 	body := s.renderInviteEmail(loopName, adminName, note, authURL)
 
 	// Log the email attempt.
-	logID, _ := s.store.LogEmail(ctx, &userID, issueID, "invite", "pending", nil)
+	logID, _ := s.store.LogEmail(ctx, &groupID, &userID, issueID, "invite", "pending", nil)
 
 	// Detach ctx so the SMTP dial + DB log update survive after this request.
 	bgCtx := context.WithoutCancel(ctx)
@@ -605,7 +616,7 @@ func (s *Server) sendIssueOpenEmail(
 	subject := fmt.Sprintf("%s — %s is open!", settings.LoopName, monthStr)
 	body := s.renderIssueOpenEmail(settings.LoopName, user.Name, monthStr, questionTexts, authURL)
 
-	logID, _ := s.store.LogEmail(ctx, &user.ID, &issue.ID, "open", "pending", nil)
+	logID, _ := s.store.LogEmail(ctx, &issue.GroupID, &user.ID, &issue.ID, "open", "pending", nil)
 
 	bgCtx := context.WithoutCancel(ctx)
 

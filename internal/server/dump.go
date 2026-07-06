@@ -66,18 +66,8 @@ func (s *Server) handleDumpUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(ctx, issueID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return
-		}
-
-		s.logger.ErrorContext(ctx, "Failed to load issue for dump upload",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 
@@ -201,13 +191,20 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if item.UserID != user.ID && user.Role != "admin" {
+	// The Loop check fails closed (requireIssue 500s on lookup errors and
+	// 404s cross-Loop) and runs BEFORE the ownership check so probing other
+	// Loops' item IDs yields 404, not 403.
+	issue, ok := s.requireIssue(w, r, item.IssueID)
+	if !ok {
+		return
+	}
+
+	if item.UserID != user.ID && !isGroupAdmin(r.Context()) {
 		writeError(w, http.StatusForbidden, "forbidden", "Not your dump item")
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(ctx, item.IssueID)
-	if err == nil && issue.Status == "published" {
+	if issue.Status == "published" {
 		writeError(w, http.StatusConflict, "issue_published",
 			"This issue is already woven & posted — the dump is closed")
 		return

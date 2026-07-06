@@ -122,6 +122,11 @@ func (s *Server) handleCreateResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if issue.GroupID != currentGroupID(r.Context()) {
+		writeError(w, http.StatusNotFound, "not_found", "Question not found")
+		return
+	}
+
 	if issue.Status != "collecting" {
 		writeError(w, http.StatusConflict, "not_collecting",
 			"This issue is not accepting responses")
@@ -682,6 +687,10 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, ok := s.requireResponseInGroup(w, r, responseID); !ok {
+		return
+	}
+
 	comments, err := s.store.ListCommentsByResponse(r.Context(), responseID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to list comments",
@@ -721,6 +730,10 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	if _, ok := s.requireResponseInGroup(w, r, responseID); !ok {
 		return
 	}
 
@@ -804,7 +817,13 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if comment.UserID != user.ID && user.Role != "admin" {
+	// The comment must live in the current Loop — isGroupAdmin only vouches
+	// for the caller's authority here, not in other Loops.
+	if _, ok := s.requireResponseInGroup(w, r, comment.ResponseID); !ok {
+		return
+	}
+
+	if comment.UserID != user.ID && !isGroupAdmin(r.Context()) {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot delete another user's comment")
 		return
 	}
@@ -826,6 +845,7 @@ func (s *Server) notifyCommentAsync(
 	ctx context.Context,
 	responseID int64, resp *store.Response, commenter *store.User, body string,
 ) {
+	groupID := currentGroupID(ctx)
 	bgCtx := context.WithoutCancel(ctx)
 
 	go func() {
@@ -846,7 +866,7 @@ func (s *Server) notifyCommentAsync(
 			questionText = question.Text
 		}
 
-		s.SendCommentNotification(nCtx, author, commenter, questionText, body, responseID)
+		s.SendCommentNotification(nCtx, groupID, author, commenter, questionText, body, responseID)
 	}()
 }
 

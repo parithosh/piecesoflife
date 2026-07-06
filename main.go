@@ -68,13 +68,18 @@ func run() error {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 
-	// Seed data.
-	if err := db.SeedAdminUser(ctx, cfg.AdminEmail); err != nil {
-		return fmt.Errorf("seeding admin user: %w", err)
+	// Seed data. Order matters: the default group must exist before the
+	// admin user can receive a membership in it.
+	if err := db.SeedInstanceSettings(ctx); err != nil {
+		return fmt.Errorf("seeding instance settings: %w", err)
 	}
 
-	if err := db.SeedSettings(ctx); err != nil {
-		return fmt.Errorf("seeding settings: %w", err)
+	if err := db.SeedDefaultGroup(ctx); err != nil {
+		return fmt.Errorf("seeding default group: %w", err)
+	}
+
+	if err := db.SeedAdminUser(ctx, cfg.AdminEmail); err != nil {
+		return fmt.Errorf("seeding admin user: %w", err)
 	}
 
 	if err := db.SeedQuestionBank(ctx); err != nil {
