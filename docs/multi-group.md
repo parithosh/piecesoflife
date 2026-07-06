@@ -117,8 +117,6 @@ below appears only when it applies.
   memberships. The current Loop's name is the label; the menu lists the other
   Loops plus "All your Loops". Switching reloads the equivalent page in the
   new Loop.
-
-  <img src="screenshots/switcher.png" alt="The circle switcher dropdown open in the navigation" width="560">
 - **/loops — "Your Loops"** page: one card per membership (Loop name, tagline,
   your role, round status: collecting/deadline, latest edition). Landing sends
   multi-Loop users here when there is no obvious current Loop; single-Loop
@@ -129,8 +127,6 @@ below appears only when it applies.
   Loop, and instance
   settings (instance name, public-memento policy). Linked from the nav for
   instance admins only. Styled with the same Pallu system as the admin pages.
-
-  ![The instance console: circles on this instance and instance settings](screenshots/instance.png)
 - **New-Loop bootstrap:** creating a Loop invites its superadmin by email.
   When that superadmin enters the new Loop (login or switcher), they get the existing
   setup wizard (`/admin/setup`) scoped to that Loop; members who arrive before

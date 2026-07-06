@@ -26,19 +26,11 @@ file.
 4. **The next round opens on schedule.** On a monthly cadence the whole
    thing runs itself.
 
-Answering happens in a calm, autosaving editor:
-
-![The respond editor: progress sidebar, a draft with a photo, per-answer media buttons](docs/screenshots/respond.png)
-
-Running a round is one page — progress, one-click nudges, live question
-editing, deadline extension, publish-now:
-
-![The admin dashboard: round status, questions, and the responded/waiting roster](docs/screenshots/dashboard.png)
-
-And nothing gets lost: every photo, video, and audio clip ever shared
-stays browsable, grouped by issue:
-
-![The media page: a grid of captioned photos from one issue](docs/screenshots/media.png)
+Answering happens in a calm, autosaving editor, and running a round is a
+single page for the admin — progress, one-click nudges, live question
+editing, deadline extension, publish-now. Nothing gets lost afterwards:
+every photo, video, and audio clip ever shared stays browsable under
+Media, grouped by issue.
 
 It reads just as well on a phone, login is passwordless (email magic
 links), everything exports as JSON or a full ZIP — and one instance can

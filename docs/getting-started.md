@@ -91,8 +91,6 @@ The first visit as admin lands on a four-step wizard:
 4. **Invite friends** — email addresses plus an optional personal note.
    You can invite more people at any time from Admin → Members.
 
-![Wizard step 3: default questions with reorder controls and suggested picks](screenshots/wizard-questions.png)
-
 Press **Launch** and the first round is live: invites go out, the deadline
 is scheduled, and reminder emails are queued automatically.
 
@@ -104,8 +102,6 @@ reordering and per-question on/off switches.
 
 The admin dashboard (**Admin** in the nav) is the loom for the current
 round:
-
-![The admin dashboard: progress, questions in this round, and the responded/waiting roster](screenshots/dashboard.png)
 
 - **Progress** — who has submitted, who's still writing, one-click
   **Nudge** buttons for the rest. Reminders also go out automatically at
@@ -130,8 +126,6 @@ person to your circle), or deactivate someone who's left.
 
 Before the first deadline, prove the mail path end to end: open Admin →
 Settings → **Email delivery** and press **Send test email**.
-
-![The email delivery section of admin settings, with the Send test email button](screenshots/email-settings.png)
 
 A test message should land in the `ADMIN_EMAIL` inbox within seconds. If
 the button reports an error, it shows the raw provider error — the
@@ -159,8 +153,6 @@ One instance can host several circles — separate members, rounds, and
 settings, one login per person. As instance admin you get a **Console**
 page for starting a new circle (you name it and invite its superadmin, who
 then runs the same wizard you just did), archiving old ones, and
-instance-wide settings:
-
-![The instance console listing circles and instance settings](screenshots/instance.png)
+instance-wide settings.
 
 The design and internals are documented in [multi-group.md](multi-group.md).

@@ -76,8 +76,6 @@ shows the active provider and sender; press **Send test email**. Within a
 few seconds you should have a test message in the `ADMIN_EMAIL` inbox —
 sent via JMAP, and visible in your Fastmail Sent folder too.
 
-![The email delivery section of admin settings showing the active provider and the Send test email button](screenshots/email-settings.png)
-
 If the button reports an error, the message is the raw provider error —
 see troubleshooting below.
 
