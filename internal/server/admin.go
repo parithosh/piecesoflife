@@ -13,6 +13,10 @@ import (
 	"github.com/parithosh/piecesoflife/internal/store"
 )
 
+// emailLogPageSize is how many recent email log entries the settings page
+// shows in its #email-log section.
+const emailLogPageSize = 50
+
 // AdminDashboardData is the template data for the admin dashboard page.
 type AdminDashboardData struct {
 	PageData
@@ -47,6 +51,11 @@ type AdminSettingsData struct {
 	// DefaultQuestions are the prompts stitched into every new issue, with
 	// their global enabled switches.
 	DefaultQuestions []store.DefaultQuestion
+	// EmailLogs is the newest slice of the Loop's outgoing-email history —
+	// the #email-log section the dashboard's "View log" link points at.
+	// EmailLogTotal is the all-time count, shown when it exceeds the slice.
+	EmailLogs     []store.EmailLog
+	EmailLogTotal int
 }
 
 // AdminQuestionsData is the template data for the question bank management page.
@@ -299,12 +308,20 @@ func (s *Server) handleAdminQuestions(w http.ResponseWriter, r *http.Request) {
 // GET /admin/settings
 func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	groupID := currentGroupID(ctx)
 
-	defaultQuestions, err := s.store.ListDefaultQuestions(ctx, currentGroupID(ctx))
+	defaultQuestions, err := s.store.ListDefaultQuestions(ctx, groupID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list default questions",
 			slog.String("error", err.Error()))
 		defaultQuestions = make([]store.DefaultQuestion, 0)
+	}
+
+	emailLogs, emailLogTotal, err := s.store.ListEmailLogs(ctx, groupID, 1, emailLogPageSize)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to list email logs",
+			slog.String("error", err.Error()))
+		emailLogs = make([]store.EmailLog, 0)
 	}
 
 	data := AdminSettingsData{
@@ -312,6 +329,8 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		EmailProvider:    s.config.EmailProvider,
 		EmailFrom:        s.config.FromEmail,
 		DefaultQuestions: defaultQuestions,
+		EmailLogs:        emailLogs,
+		EmailLogTotal:    emailLogTotal,
 	}
 
 	s.renderPage(w, "settings.html", data)

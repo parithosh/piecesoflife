@@ -19,6 +19,10 @@ type EmailLog struct {
 	SentAt           *time.Time `json:"sent_at"`
 	Error            *string    `json:"error"`
 	CreatedAt        time.Time  `json:"created_at"`
+	// RecipientName and RecipientEmail are resolved from users by
+	// ListEmailLogs; nil on other read paths or when the row has no user.
+	RecipientName  *string `json:"recipient_name,omitempty"`
+	RecipientEmail *string `json:"recipient_email,omitempty"`
 }
 
 // LogEmail records an email send attempt and returns the log entry ID.
@@ -155,10 +159,13 @@ func (s *Store) ListEmailLogs(
 	offset := (page - 1) * perPage
 
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT id, group_id, user_id, issue_id, scheduler_event_id,
-		        type, status, sent_at, error, created_at
-		 FROM email_log WHERE group_id = ?
-		 ORDER BY created_at DESC
+		`SELECT l.id, l.group_id, l.user_id, l.issue_id, l.scheduler_event_id,
+		        l.type, l.status, l.sent_at, l.error, l.created_at,
+		        u.name, u.email
+		 FROM email_log l
+		 LEFT JOIN users u ON u.id = l.user_id
+		 WHERE l.group_id = ?
+		 ORDER BY l.created_at DESC
 		 LIMIT ? OFFSET ?`, groupID, perPage, offset,
 	)
 	if err != nil {
@@ -174,7 +181,7 @@ func (s *Store) ListEmailLogs(
 
 		err := rows.Scan(&l.ID, &l.GroupID, &l.UserID, &l.IssueID,
 			&l.SchedulerEventID, &l.Type, &l.Status, &l.SentAt,
-			&l.Error, &l.CreatedAt)
+			&l.Error, &l.CreatedAt, &l.RecipientName, &l.RecipientEmail)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scanning email log: %w", err)
 		}

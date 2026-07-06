@@ -165,6 +165,43 @@
         </div>
       </form>
 
+      <section class="pl-settings-section" id="email-log" style="margin-top:36px;">
+        <h2 class="pl-display pl-settings-title">Email log</h2>
+        {{if .EmailLogs}}
+        <p class="pl-settings-sub">
+          {{if gt .EmailLogTotal (len .EmailLogs)}}
+          The {{len .EmailLogs}} most recent of {{.EmailLogTotal}} emails this circle has sent.
+          {{else}}
+          Every email this circle has sent — announcements, reminders, invites, and comment notifications.
+          {{end}}
+        </p>
+        <table style="width:100%;font-size:var(--text-7);">
+          <thead>
+            <tr style="text-align:left;color:var(--muted-foreground);">
+              <th style="font-weight:500;padding:6px 0;">When</th>
+              <th style="font-weight:500;">Type</th>
+              <th style="font-weight:500;">To</th>
+              <th style="font-weight:500;">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .EmailLogs}}
+            <tr style="border-top:1px solid var(--border);">
+              <td style="padding:8px 12px 8px 0;white-space:nowrap;" title='{{.CreatedAt.Format "02/01/2006 15:04"}} UTC'>{{formatRelative .CreatedAt}}</td>
+              <td style="padding:8px 12px 8px 0;text-transform:capitalize;">{{.Type}}</td>
+              <td style="padding:8px 12px 8px 0;">{{if .RecipientName}}<span{{if .RecipientEmail}} title="{{.RecipientEmail}}"{{end}}>{{.RecipientName}}</span>{{else}}—{{end}}</td>
+              <td style="padding:8px 0;">
+                <span class="badge {{if eq .Status "sent"}}badge-green{{else if eq .Status "failed"}}badge-yellow{{else}}badge-gray{{end}}"{{if .Error}} title="{{.Error}}"{{end}}>{{.Status}}</span>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <p class="pl-settings-sub">Nothing has been sent yet — invites, announcements, and reminders will show up here.</p>
+        {{end}}
+      </section>
+
     </div>
   </div>
 </div>
