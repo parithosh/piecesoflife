@@ -241,17 +241,21 @@ func (s *Store) ListIssues(
 	var rows *sql.Rows
 	var err error
 
+	// Edition order (year, month), not creation order: a catch-up round
+	// created after a later month's must not lead the archive or read as
+	// the "latest edition" on /loops.
 	if status != nil {
 		rows, err = s.read.QueryContext(ctx,
 			`SELECT `+issueColumns+`
 			 FROM issues WHERE group_id = ? AND status = ?
-			 ORDER BY created_at DESC`,
+			 ORDER BY year DESC, month DESC, id DESC`,
 			groupID, *status,
 		)
 	} else {
 		rows, err = s.read.QueryContext(ctx,
 			`SELECT `+issueColumns+`
-			 FROM issues WHERE group_id = ? ORDER BY created_at DESC`,
+			 FROM issues WHERE group_id = ?
+			 ORDER BY year DESC, month DESC, id DESC`,
 			groupID,
 		)
 	}

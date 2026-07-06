@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+// groupMemberSelect is the shared SELECT for GroupMember scans; callers
+// append extra conditions and ORDER BY. Effective IsActive is the AND of
+// the membership and global user flags.
+const groupMemberSelect = `
+	SELECT u.id, u.name, u.email, u.avatar_url, u.bio,
+	       (m.is_active AND u.is_active), u.is_instance_admin,
+	       u.last_group_id, u.created_at,
+	       m.role, m.is_active, m.created_at
+	FROM memberships m
+	JOIN users u ON u.id = m.user_id
+	WHERE m.group_id = ?`
+
 // Membership ties a user to one group with a per-group role and active
 // flag. A user has at most one membership per group.
 type Membership struct {
@@ -202,18 +214,6 @@ func (s *Store) ListUserGroups(
 
 	return groups, nil
 }
-
-// groupMemberSelect is the shared SELECT for GroupMember scans; callers
-// append extra conditions and ORDER BY. Effective IsActive is the AND of
-// the membership and global user flags.
-const groupMemberSelect = `
-	SELECT u.id, u.name, u.email, u.avatar_url, u.bio,
-	       (m.is_active AND u.is_active), u.is_instance_admin,
-	       u.last_group_id, u.created_at,
-	       m.role, m.is_active, m.created_at
-	FROM memberships m
-	JOIN users u ON u.id = m.user_id
-	WHERE m.group_id = ?`
 
 func scanGroupMembers(rows *sql.Rows) ([]GroupMember, error) {
 	members := make([]GroupMember, 0, 16)

@@ -102,34 +102,6 @@ func (s *Store) GetNextPendingEventByType(
 	return &e, nil
 }
 
-// GetNextPendingLegacyEventByType returns the earliest unfired event of the
-// given type that carries no issue reference. Only events queued before
-// multi-group (migration 016) look like this — they can only belong to the
-// instance's original Loop.
-func (s *Store) GetNextPendingLegacyEventByType(
-	ctx context.Context, eventType string,
-) (*SchedulerEvent, error) {
-	var e SchedulerEvent
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id, issue_id, event_type, scheduled_at,
-		        fired_at, was_late, created_at
-		 FROM scheduler_events
-		 WHERE fired_at IS NULL AND event_type = ? AND issue_id IS NULL
-		 ORDER BY scheduled_at ASC LIMIT 1`,
-		eventType,
-	).Scan(&e.ID, &e.IssueID, &e.EventType, &e.ScheduledAt,
-		&e.FiredAt, &e.WasLate, &e.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getting next pending legacy %s event: %w", eventType, err)
-	}
-
-	return &e, nil
-}
-
 // MarkEventFired records that a scheduled event has been executed.
 func (s *Store) MarkEventFired(
 	ctx context.Context, id int64, wasLate bool,
@@ -174,6 +146,30 @@ func (s *Store) GetNextPendingEventForGroup(
 	}
 
 	return &ev, nil
+}
+
+// DeletePendingEventsForGroup removes every unfired event belonging to a
+// group's issues — called when a Loop is archived so its rounds stop
+// closing, publishing, and emailing. Fired events stay as history.
+func (s *Store) DeletePendingEventsForGroup(
+	ctx context.Context, groupID int64,
+) (int64, error) {
+	result, err := s.write.ExecContext(ctx,
+		`DELETE FROM scheduler_events
+		 WHERE fired_at IS NULL
+		   AND issue_id IN (SELECT id FROM issues WHERE group_id = ?)`,
+		groupID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deleting pending events for group %d: %w", groupID, err)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting deleted events for group %d: %w", groupID, err)
+	}
+
+	return n, nil
 }
 
 // DeleteEventsForIssue removes all scheduled events for an issue.

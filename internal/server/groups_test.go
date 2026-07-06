@@ -17,7 +17,7 @@ func weaveSecondLoop(t *testing.T, env *integrationEnv, name string) int64 {
 	t.Helper()
 	ctx := context.Background()
 
-	groupID, err := env.store.CreateGroup(ctx, name)
+	groupID, err := env.store.CreateGroup(ctx, name, nil)
 	require.NoError(t, err, "create second group")
 	require.NoError(t, env.store.CompleteSetup(ctx, groupID), "complete second group setup")
 
@@ -91,25 +91,39 @@ func TestGroupAutoSwitchOnGet(t *testing.T) {
 
 	issueB, _ := seedIssueInGroup(t, env, groupB, "collecting")
 
-	// Current Loop is 1; the GET into Loop B redirects (the switch) …
+	// Current Loop is 1; a PAGE navigation into Loop B redirects (the
+	// switch) …
 	session := env.sessionCookie(t, dual.ID)
 
 	req := httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/issues/%d", issueB), nil)
+		fmt.Sprintf("/issues/%d/respond", issueB), nil)
 	req.AddCookie(session)
 	rr := env.do(t, req)
 
 	require.Equal(t, http.StatusSeeOther, rr.Code,
-		"cross-Loop GET should switch and replay")
+		"cross-Loop page GET should switch and replay")
 
 	// … and the replayed request (same session, now switched) succeeds.
 	again := httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/issues/%d", issueB), nil)
+		fmt.Sprintf("/issues/%d/respond", issueB), nil)
 	again.AddCookie(session)
 	againRR := env.do(t, again)
 
 	assert.Equal(t, http.StatusOK, againRR.Code,
 		"after the switch the issue is readable")
+
+	// API GETs never switch: reset to Loop 1, then fetch a Loop-B issue —
+	// a stale tab's fetch must not flip the session's Loop underneath the
+	// user, so it reads as not found instead.
+	require.NoError(t, env.store.SetLastGroup(context.Background(), dual.ID, 1))
+
+	apiSession := env.sessionCookie(t, dual.ID)
+
+	apiReq := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/issues/%d", issueB), nil)
+	apiReq.AddCookie(apiSession)
+	assert.Equal(t, http.StatusNotFound, env.do(t, apiReq).Code,
+		"cross-Loop API GET must 404, not switch")
 }
 
 // TestGroupRoleIsolation verifies that being an admin in one Loop grants
@@ -357,7 +371,7 @@ func TestAutoSwitchStripsGroupOverride(t *testing.T) {
 
 	// ?g=1 contradicts the issue's Loop (B): the switch must strip it.
 	req := httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/issues/%d?g=1", issueB), nil)
+		fmt.Sprintf("/issues/%d/respond?g=1", issueB), nil)
 	req.AddCookie(session)
 	rr := env.do(t, req)
 
@@ -371,13 +385,113 @@ func TestAutoSwitchStripsGroupOverride(t *testing.T) {
 	assert.Equal(t, http.StatusOK, env.do(t, again).Code)
 }
 
+// TestCrossLoopDumpDeleteBlocked verifies dump items can't be deleted
+// across Loops — the guard fails closed and probing reads as not found.
+func TestCrossLoopDumpDeleteBlocked(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	groupB := weaveSecondLoop(t, env, "Loop B")
+
+	owner := env.createUser(t, "Owner", "owner-dump@example.com")
+	require.NoError(t, env.store.CreateMembership(ctx, groupB, owner.ID, "member"))
+
+	issueB, _ := seedIssueInGroup(t, env, groupB, "collecting")
+
+	itemID, err := env.store.CreateDumpItem(ctx, issueB, owner.ID, "photo",
+		nil, "/tmp/nonexistent-dump.jpg", nil)
+	require.NoError(t, err)
+
+	adminA := env.createUserWithRole(t, "AdminA", "admin-dump@example.com", "admin")
+	session := env.sessionCookie(t, adminA.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	req := httptest.NewRequest(http.MethodDelete,
+		fmt.Sprintf("/api/dump/%d", itemID), nil)
+	req.AddCookie(session)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfHeader)
+	rr := env.do(t, req)
+
+	assert.Equal(t, http.StatusNotFound, rr.Code,
+		"cross-Loop dump delete must read as not found")
+
+	_, err = env.store.GetDumpItemByID(ctx, itemID)
+	assert.NoError(t, err, "the item survives")
+}
+
+// TestArchiveCancelsPendingEvents verifies archiving a Loop deletes its
+// pending scheduler events so it stops closing rounds and emailing.
+func TestArchiveCancelsPendingEvents(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	groupB := weaveSecondLoop(t, env, "Loop B")
+	issueB, _ := seedIssueInGroup(t, env, groupB, "collecting")
+
+	require.NoError(t, env.store.CreateSchedulerEvent(ctx, &issueB,
+		"auto_close", time.Now().Add(48*time.Hour)))
+
+	pending, err := env.store.GetNextPendingEventForGroup(ctx, "auto_close", groupB)
+	require.NoError(t, err)
+	require.NotNil(t, pending)
+
+	require.NoError(t, env.store.SeedAdminUser(ctx, "operator-arch@example.com"))
+	operator, err := env.store.GetUserByEmail(ctx, "operator-arch@example.com")
+	require.NoError(t, err)
+
+	session := env.sessionCookie(t, operator.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	req := newJSONRequest(http.MethodPatch,
+		fmt.Sprintf("/api/instance/groups/%d", groupB), `{"is_active": false}`)
+	req.AddCookie(session)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfHeader)
+	rr := env.do(t, req)
+
+	require.Equal(t, http.StatusOK, rr.Code, "archive: %s", rr.Body.String())
+
+	pending, err = env.store.GetNextPendingEventForGroup(ctx, "auto_close", groupB)
+	require.NoError(t, err)
+	assert.Nil(t, pending, "archiving cancels the Loop's pending events")
+}
+
+// TestReconcileAutoCreateRequeues verifies the reconcile sweep re-queues a
+// stalled auto-create cycle: auto-create on, nothing collecting, and no
+// pending next-round event.
+func TestReconcileAutoCreateRequeues(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	// Group 1 has a published round and nothing queued — a stalled cycle.
+	issueID, _ := env.seedIssue(t, "published", 6, 2026, 1)
+	require.NoError(t, env.store.PublishIssue(ctx, issueID))
+
+	pending, err := env.store.GetNextPendingEventForGroup(ctx, "create_next_issue", 1)
+	require.NoError(t, err)
+	require.Nil(t, pending, "precondition: nothing queued")
+
+	require.NoError(t, env.srv.ReconcileAutoCreate(ctx))
+
+	pending, err = env.store.GetNextPendingEventForGroup(ctx, "create_next_issue", 1)
+	require.NoError(t, err)
+	require.NotNil(t, pending, "reconcile queues the next-round event")
+	require.NotNil(t, pending.IssueID, "the event references the pre-created draft")
+
+	draft, err := env.store.GetNextDraftIssue(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, draft, "reconcile pre-created the draft")
+	assert.Equal(t, *pending.IssueID, draft.ID)
+}
+
 // TestSetupGateForMembers verifies members of a not-yet-set-up Loop are held
 // at the Loop list, while its admin reaches the wizard.
 func TestSetupGateForMembers(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
-	groupID, err := env.store.CreateGroup(ctx, "Unwoven Loop")
+	groupID, err := env.store.CreateGroup(ctx, "Unwoven Loop", nil)
 	require.NoError(t, err)
 
 	member := env.createUser(t, "Mem", "mem@example.com")

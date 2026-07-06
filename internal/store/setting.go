@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -49,9 +50,11 @@ func (s *Store) GetSettings(ctx context.Context, groupID int64) (*Settings, erro
 	return &st, nil
 }
 
-// UpdateSettings writes all editable settings fields of st's group.
+// UpdateSettings writes all editable settings fields of st's group. A
+// GroupID that matches no settings row is an error, never a silent no-op —
+// the single-row table this replaced made that impossible by construction.
 func (s *Store) UpdateSettings(ctx context.Context, st *Settings) error {
-	_, err := s.write.ExecContext(ctx,
+	result, err := s.write.ExecContext(ctx,
 		`UPDATE settings SET
 			loop_name = ?, tagline = ?, frequency = ?,
 			submission_window_days = ?, start_datetime = ?,
@@ -71,17 +74,26 @@ func (s *Store) UpdateSettings(ctx context.Context, st *Settings) error {
 		return fmt.Errorf("updating settings for group %d: %w", st.GroupID, err)
 	}
 
+	if n, err := result.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("settings for group %d: %w", st.GroupID, sql.ErrNoRows)
+	}
+
 	return nil
 }
 
-// CompleteSetup marks a group's onboarding wizard as finished.
+// CompleteSetup marks a group's onboarding wizard as finished. A groupID
+// that matches no settings row is an error, never a silent no-op.
 func (s *Store) CompleteSetup(ctx context.Context, groupID int64) error {
-	_, err := s.write.ExecContext(ctx,
+	result, err := s.write.ExecContext(ctx,
 		`UPDATE settings SET setup_complete = 1,
 		 updated_at = CURRENT_TIMESTAMP WHERE group_id = ?`, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("completing setup for group %d: %w", groupID, err)
+	}
+
+	if n, err := result.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("settings for group %d: %w", groupID, sql.ErrNoRows)
 	}
 
 	return nil

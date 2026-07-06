@@ -215,38 +215,25 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groupID, err := s.store.CreateGroup(ctx, req.Name)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to create group",
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create Loop")
-
-		return
-	}
-
-	// Find or create the keeper's account, then grant the admin membership.
-	// A globally deactivated account is restored — naming someone keeper is
-	// explicit intent that they can log in.
+	// Resolve the keeper's account FIRST: the Loop and its keeper commit in
+	// one transaction below, so no failure can leave an admin-less Loop
+	// behind (and a retry can't mint duplicates). A globally deactivated
+	// account is restored — naming someone keeper is explicit intent that
+	// they can log in.
 	keeper, err := s.store.GetUserByEmail(ctx, req.AdminEmail)
-	if err == nil && !keeper.IsActive {
-		if err := s.store.ReactivateUser(ctx, keeper.ID); err != nil {
-			s.logger.ErrorContext(ctx, "Failed to reactivate keeper",
-				slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to restore keeper account")
 
-			return
+	switch {
+	case err == nil:
+		if !keeper.IsActive {
+			if err := s.store.ReactivateUser(ctx, keeper.ID); err != nil {
+				s.logger.ErrorContext(ctx, "Failed to reactivate keeper",
+					slog.String("error", err.Error()))
+				writeError(w, http.StatusInternalServerError, "server_error", "Failed to restore keeper account")
+
+				return
+			}
 		}
-	}
-
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.ErrorContext(ctx, "Failed to look up keeper",
-				slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to look up keeper")
-
-			return
-		}
-
+	case errors.Is(err, sql.ErrNoRows):
 		name := req.AdminName
 		if name == "" {
 			name = strings.Split(req.AdminEmail, "@")[0]
@@ -274,12 +261,19 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 
 			return
 		}
+	default:
+		s.logger.ErrorContext(ctx, "Failed to look up keeper",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to look up keeper")
+
+		return
 	}
 
-	if err := s.store.CreateMembership(ctx, groupID, keeper.ID, "admin"); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to create keeper membership",
+	groupID, err := s.store.CreateGroup(ctx, req.Name, &keeper.ID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to create group",
 			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to add keeper")
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create Loop")
 
 		return
 	}
@@ -326,6 +320,24 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update Loop")
 
 		return
+	}
+
+	// An archived Loop stops living: cancel its pending reminders,
+	// auto-closes, and next-round events so it doesn't keep publishing and
+	// emailing members who can no longer enter it. Restoring the Loop
+	// doesn't resurrect them — the admin starts the next round by hand (or
+	// the daily auto-create reconcile picks it back up).
+	if !*req.IsActive {
+		cancelled, err := s.store.DeletePendingEventsForGroup(ctx, groupID)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to cancel events for archived Loop",
+				slog.Int64("group_id", groupID),
+				slog.String("error", err.Error()))
+		} else if cancelled > 0 {
+			s.logger.InfoContext(ctx, "Cancelled pending events for archived Loop",
+				slog.Int64("group_id", groupID),
+				slog.Int64("events", cancelled))
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

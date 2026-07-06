@@ -277,7 +277,7 @@ func TestOnboardingQuestionsPerIssue(t *testing.T) {
 	// The wizard runs against a freshly woven second Loop — group 1 is
 	// already set up by the test env, and this doubles as multi-group
 	// coverage of onboarding.
-	groupID, err := env.store.CreateGroup(ctx, "Chaos Crew")
+	groupID, err := env.store.CreateGroup(ctx, "Chaos Crew", nil)
 	require.NoError(t, err)
 	require.NoError(t, env.store.CreateMembership(ctx, groupID, adminID, "admin"))
 

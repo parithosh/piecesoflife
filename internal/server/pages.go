@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -739,6 +740,32 @@ func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, current)
 }
 
+// mementoAccess evaluates the memento access gate shared by the page and
+// file handlers: whether the viewer is an active member of the owning Loop
+// (instance admins pass), and whether public viewing is allowed — the
+// Loop's switch ANDed with the instance policy.
+func (s *Server) mementoAccess(
+	ctx context.Context, viewer *store.User, groupID int64,
+	settings *store.Settings,
+) (isMember, publicAllowed bool) {
+	if viewer != nil {
+		if viewer.IsInstanceAdmin {
+			isMember = true
+		} else if m, err := s.store.GetMembership(ctx, groupID, viewer.ID); err == nil &&
+			m.IsActive {
+			isMember = true
+		}
+	}
+
+	publicAllowed = settings.AllowPublicMementos
+
+	if inst, err := s.store.GetInstanceSettings(ctx); err == nil {
+		publicAllowed = publicAllowed && inst.AllowPublicMementos
+	}
+
+	return isMember, publicAllowed
+}
+
 // handleMemento renders a single response as a shareable page with Open
 // Graph tags so link previews on social/chat apps look nice. The page is
 // public iff settings.AllowPublicMementos is true AND the parent issue is
@@ -788,40 +815,25 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Access control: a signed-in member of the owning Loop (or an instance
-	// admin) always may view. Anyone else counts as a public visitor, which
-	// requires the Loop's public-memento switch AND the instance policy.
+	// Access control: a signed-in active member of the owning Loop (or an
+	// instance admin) always may view. Anyone else counts as a public
+	// visitor, which requires the Loop's public-memento switch AND the
+	// instance policy.
 	viewer := s.lookupSessionUser(r)
 
-	isMember := false
-	if viewer != nil {
-		if viewer.IsInstanceAdmin {
-			isMember = true
-		} else if m, mErr := s.store.GetMembership(ctx, issue.GroupID, viewer.ID); mErr == nil &&
-			m.IsActive {
-			isMember = true
-		}
-	}
+	isMember, publicAllowed := s.mementoAccess(ctx, viewer, issue.GroupID, settings)
 
-	if !isMember {
-		publicAllowed := settings.AllowPublicMementos
-
-		if inst, iErr := s.store.GetInstanceSettings(ctx); iErr == nil {
-			publicAllowed = publicAllowed && inst.AllowPublicMementos
-		}
-
-		if !publicAllowed {
-			// Anonymous visitors might just need to log in; a signed-in
-			// non-member gets a plain 404 — a login form can't help them.
-			if viewer == nil {
-				http.Redirect(w, r, "/login", http.StatusSeeOther)
-				return
-			}
-
-			http.NotFound(w, r)
-
+	if !isMember && !publicAllowed {
+		// Anonymous visitors might just need to log in; a signed-in
+		// non-member gets a plain 404 — a login form can't help them.
+		if viewer == nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
+
+		http.NotFound(w, r)
+
+		return
 	}
 
 	blocks, err := s.store.ListBlocksByResponse(ctx, responseID)
@@ -920,31 +932,14 @@ func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mirror handleMemento: Loop members and instance admins pass; anyone
-	// else needs public mementos allowed by both the Loop and the instance.
+	// Same gate as handleMemento; files always deny with a plain 404.
 	viewer := s.lookupSessionUser(r)
 
-	isMember := false
-	if viewer != nil {
-		if viewer.IsInstanceAdmin {
-			isMember = true
-		} else if m, mErr := s.store.GetMembership(ctx, issue.GroupID, viewer.ID); mErr == nil &&
-			m.IsActive {
-			isMember = true
-		}
-	}
+	isMember, publicAllowed := s.mementoAccess(ctx, viewer, issue.GroupID, settings)
 
-	if !isMember {
-		publicAllowed := settings.AllowPublicMementos
-
-		if inst, iErr := s.store.GetInstanceSettings(ctx); iErr == nil {
-			publicAllowed = publicAllowed && inst.AllowPublicMementos
-		}
-
-		if !publicAllowed {
-			http.NotFound(w, r)
-			return
-		}
+	if !isMember && !publicAllowed {
+		http.NotFound(w, r)
+		return
 	}
 
 	blocks, err := s.store.ListBlocksByResponse(ctx, responseID)

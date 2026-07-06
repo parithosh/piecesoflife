@@ -433,7 +433,7 @@ func (s *Store) SeedDefaultGroup(ctx context.Context) error {
 		return nil
 	}
 
-	groupID, err := s.CreateGroup(ctx, "PiecesOfLife")
+	groupID, err := s.CreateGroup(ctx, "PiecesOfLife", nil)
 	if err != nil {
 		return fmt.Errorf("seeding default group: %w", err)
 	}

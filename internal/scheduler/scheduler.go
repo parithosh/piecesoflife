@@ -25,6 +25,7 @@ type Actions interface {
 	) error
 	AutoPublishIssue(ctx context.Context, issueID int64) error
 	CreateNextIssue(ctx context.Context, groupID int64) error
+	ReconcileAutoCreate(ctx context.Context) error
 }
 
 // Scheduler dispatches timed scheduler_events.
@@ -65,6 +66,16 @@ func (s *Scheduler) Start(parent context.Context) {
 		// 1. Recovery: fire any events that were scheduled while we were down.
 		s.fireOverdueEvents(ctx, true)
 
+		// 1b. Re-queue any auto-create cycle that stalled (e.g. a transient
+		//     store error at publish time meant no next-round event was
+		//     queued). Repeated daily from the tick loop.
+		if err := s.actions.ReconcileAutoCreate(ctx); err != nil {
+			s.logger.ErrorContext(ctx, "Auto-create reconcile failed",
+				slog.String("error", err.Error()))
+		}
+
+		lastReconcile := time.Now()
+
 		// 2. Make sure the daily cleanup events are queued. If the app has
 		//    been running for a while without these, this is a no-op after
 		//    the first run thanks to the UNIQUE(issue_id, event_type,
@@ -81,6 +92,15 @@ func (s *Scheduler) Start(parent context.Context) {
 				return
 			case <-ticker.C:
 				s.fireOverdueEvents(ctx, false)
+
+				if time.Since(lastReconcile) >= 24*time.Hour {
+					lastReconcile = time.Now()
+
+					if err := s.actions.ReconcileAutoCreate(ctx); err != nil {
+						s.logger.ErrorContext(ctx, "Auto-create reconcile failed",
+							slog.String("error", err.Error()))
+					}
+				}
 			}
 		}
 	}()
@@ -135,6 +155,27 @@ func (s *Scheduler) fireEvent(
 		slog.String("event_type", ev.EventType),
 	)
 
+	// An archived Loop must not keep closing rounds and emailing members.
+	// Archiving deletes its pending events, but events created through any
+	// other path still land here — mark them fired so they never retry.
+	if ev.IssueID != nil {
+		issue, err := s.store.GetIssueByID(ctx, *ev.IssueID)
+		if err == nil {
+			if group, gErr := s.store.GetGroup(ctx, issue.GroupID); gErr == nil &&
+				!group.IsActive {
+				logger.InfoContext(ctx, "Skipping event for archived Loop",
+					slog.Int64("group_id", issue.GroupID))
+
+				if markErr := s.store.MarkEventFired(ctx, ev.ID, wasLate); markErr != nil {
+					logger.ErrorContext(ctx, "Failed to mark skipped event fired",
+						slog.String("error", markErr.Error()))
+				}
+
+				return
+			}
+		}
+	}
+
 	var err error
 
 	switch ev.EventType {
@@ -168,26 +209,20 @@ func (s *Scheduler) fireEvent(
 
 	case "create_next_issue":
 		// The event references the pre-created draft it should open, which
-		// is also how it knows its Loop. Events queued before multi-group
-		// (issue_id NULL) fall back to the instance's oldest Loop.
-		var groupID int64
-
-		if ev.IssueID != nil {
-			issue, issueErr := s.store.GetIssueByID(ctx, *ev.IssueID)
-			if issueErr != nil {
-				err = issueErr
-				break
-			}
-
-			groupID = issue.GroupID
-		} else {
-			groupID, err = s.store.GetOldestActiveGroupID(ctx)
-			if err != nil {
-				break
-			}
+		// is also how it knows its Loop (migration 017 backfilled the
+		// pre-multi-group events that carried no reference).
+		if ev.IssueID == nil {
+			err = errInvalidEvent("create_next_issue missing issue_id")
+			break
 		}
 
-		err = s.actions.CreateNextIssue(ctx, groupID)
+		issue, issueErr := s.store.GetIssueByID(ctx, *ev.IssueID)
+		if issueErr != nil {
+			err = issueErr
+			break
+		}
+
+		err = s.actions.CreateNextIssue(ctx, issue.GroupID)
 
 	case "token_cleanup":
 		var n int64

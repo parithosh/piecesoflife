@@ -35,9 +35,14 @@ type GroupOverview struct {
 }
 
 // CreateGroup creates a Loop with a fresh settings row, the standard
-// default questions, and its own copy of the question bank seed. Returns
-// the new group's ID.
-func (s *Store) CreateGroup(ctx context.Context, loopName string) (int64, error) {
+// default questions, and its own copy of the question bank seed. When
+// keeperID is non-nil that user receives an admin membership in the same
+// transaction — a Loop and its keeper commit together or not at all, so a
+// failure can never leave an admin-less Loop behind. Returns the new
+// group's ID.
+func (s *Store) CreateGroup(
+	ctx context.Context, loopName string, keeperID *int64,
+) (int64, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("beginning group creation: %w", err)
@@ -73,6 +78,16 @@ func (s *Store) CreateGroup(ctx context.Context, loopName string) (int64, error)
 
 	if err := seedQuestionBankTx(ctx, tx, groupID); err != nil {
 		return 0, fmt.Errorf("seeding question bank for group %d: %w", groupID, err)
+	}
+
+	if keeperID != nil {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO memberships (group_id, user_id, role, is_active)
+			 VALUES (?, ?, 'admin', 1)`,
+			groupID, *keeperID,
+		); err != nil {
+			return 0, fmt.Errorf("adding keeper to group %d: %w", groupID, err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

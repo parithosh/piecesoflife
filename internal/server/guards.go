@@ -78,7 +78,12 @@ func (s *Server) requireIssue(
 	if issue.GroupID != currentGroupID(r.Context()) {
 		user := UserFromContext(r.Context())
 
-		if r.Method == http.MethodGet && user != nil &&
+		// Auto-switch only on page navigations. API GETs are fetches from an
+		// already-rendered page — silently rewriting the session's Loop from
+		// one would let a stale tab flip the current Loop underneath the
+		// user (mirrors requireResponseInGroup, which never switches).
+		if r.Method == http.MethodGet &&
+			!strings.HasPrefix(r.URL.Path, "/api/") && user != nil &&
 			s.tryGroup(r.Context(), user, issue.GroupID) != nil {
 			s.switchGroup(w, r, user, issue.GroupID)
 			return nil, false
@@ -215,8 +220,11 @@ func (s *Server) loadOwnedBlock(
 }
 
 // isGroupAdminOver reports whether the request's user administers the
-// current Loop AND the target user belongs to it — the scope of an admin's
-// authority over someone else's profile or preferences.
+// current Loop AND the target user is an active member of it — the scope of
+// an admin's authority over someone else's profile or preferences. A
+// deactivated membership ends that authority: the profile fields it guards
+// are instance-global, and a removed member's identity belongs to their
+// remaining Loops.
 func (s *Server) isGroupAdminOver(ctx context.Context, targetUserID int64) bool {
 	if !isGroupAdmin(ctx) {
 		return false
@@ -227,7 +235,7 @@ func (s *Server) isGroupAdminOver(ctx context.Context, targetUserID int64) bool 
 		return false
 	}
 
-	_, err := s.store.GetMembership(ctx, gc.Group.ID, targetUserID)
+	m, err := s.store.GetMembership(ctx, gc.Group.ID, targetUserID)
 
-	return err == nil
+	return err == nil && m.IsActive
 }

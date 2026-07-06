@@ -664,23 +664,6 @@ func (s *Server) nextIssueOpensLabel(
 		return ""
 	}
 
-	// Events queued before multi-group carry no issue reference. They can
-	// only belong to the instance's original (oldest) Loop, so surface them
-	// there rather than showing no label until the next publish cycle.
-	if ev == nil {
-		oldest, oErr := s.store.GetOldestActiveGroupID(ctx)
-		if oErr != nil || oldest != settings.GroupID {
-			return ""
-		}
-
-		ev, err = s.store.GetNextPendingLegacyEventByType(ctx, "create_next_issue")
-		if err != nil {
-			s.logger.WarnContext(ctx, "Failed to look up legacy create_next_issue event",
-				slog.String("error", err.Error()))
-			return ""
-		}
-	}
-
 	if ev == nil {
 		return ""
 	}
@@ -751,6 +734,66 @@ func (s *Server) CreateNextIssue(ctx context.Context, groupID int64) error {
 	}
 
 	return s.openIssueForCollecting(ctx, settings, issue, 0)
+}
+
+// ReconcileAutoCreate re-queues the next-round event for any Loop whose
+// auto-create cycle has stalled: auto-create on, no active round, and no
+// pending create_next_issue event. queueNextIssueEvent deliberately aborts
+// (rather than queue a Loop-less event) when a transient store error hits
+// at publish time — this reconciliation is the retry that makes that abort
+// safe. Runs at scheduler startup and daily; per-Loop failures are logged
+// so one bad Loop can't block the sweep.
+func (s *Server) ReconcileAutoCreate(ctx context.Context) error {
+	overviews, err := s.store.ListGroupOverviews(ctx)
+	if err != nil {
+		return fmt.Errorf("listing groups for auto-create reconcile: %w", err)
+	}
+
+	for _, ov := range overviews {
+		if !ov.IsActive || !ov.SetupComplete {
+			continue
+		}
+
+		settings, err := s.store.GetSettings(ctx, ov.ID)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Reconcile: failed to load settings",
+				slog.Int64("group_id", ov.ID),
+				slog.String("error", err.Error()))
+
+			continue
+		}
+
+		if !settings.AutoCreateEnabled {
+			continue
+		}
+
+		active, err := s.store.HasActiveIssue(ctx, ov.ID)
+		if err != nil || active {
+			continue
+		}
+
+		pending, err := s.store.GetNextPendingEventForGroup(ctx,
+			"create_next_issue", ov.ID)
+		if err != nil || pending != nil {
+			continue
+		}
+
+		// Stalled: nothing is open and nothing is queued. Anchor the next
+		// round to the latest published edition; a Loop that never published
+		// anything has nothing to continue from.
+		published := "published"
+
+		issues, err := s.store.ListIssues(ctx, ov.ID, &published)
+		if err != nil || len(issues) == 0 {
+			continue
+		}
+
+		s.logger.InfoContext(ctx, "Reconcile: re-queueing stalled auto-create cycle",
+			slog.Int64("group_id", ov.ID))
+		s.queueNextIssueEvent(ctx, settings, issues[0].OpensAt)
+	}
+
+	return nil
 }
 
 // nextIssueOpenTime calculates when the next issue should open based on the

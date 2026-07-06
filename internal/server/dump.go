@@ -191,18 +191,20 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The Loop check fails closed (requireIssue 500s on lookup errors and
+	// 404s cross-Loop) and runs BEFORE the ownership check so probing other
+	// Loops' item IDs yields 404, not 403.
+	issue, ok := s.requireIssue(w, r, item.IssueID)
+	if !ok {
+		return
+	}
+
 	if item.UserID != user.ID && !isGroupAdmin(r.Context()) {
 		writeError(w, http.StatusForbidden, "forbidden", "Not your dump item")
 		return
 	}
 
-	issue, err := s.store.GetIssueByID(ctx, item.IssueID)
-	if err == nil && issue.GroupID != currentGroupID(ctx) {
-		writeError(w, http.StatusNotFound, "not_found", "Dump item not found")
-		return
-	}
-
-	if err == nil && issue.Status == "published" {
+	if issue.Status == "published" {
 		writeError(w, http.StatusConflict, "issue_published",
 			"This issue is already woven & posted — the dump is closed")
 		return

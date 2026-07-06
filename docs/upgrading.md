@@ -79,6 +79,12 @@ docker run --rm -v <project>_app-data:/data -v "$PWD":/backup alpine \
 
 ## Version notes
 
+### v017 — legacy scheduler events
+
+Attaches pre-multi-group `create_next_issue` events (which carried no issue
+reference) to the original Loop's most recent issue, so they can never be
+attributed to the wrong Loop. No operator action needed.
+
 ### v016 — multi-group ("many Loops, one instance")
 
 The largest migration to date; see `docs/multi-group.md` for the design.

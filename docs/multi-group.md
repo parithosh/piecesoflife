@@ -139,8 +139,15 @@ below appears only when it applies.
 
 Issue-bound events (`reminder_*`, `auto_close`, `create_next_issue`) resolve
 their Loop through `issues.group_id` and load that Loop's settings for
-timezone/frequency/copy. Global cleanup events are untouched. Auto-create
-works independently per Loop.
+timezone/frequency/copy (migration 017 backfills the pre-multi-group events
+that carried no issue reference). Global cleanup events are untouched.
+Auto-create works independently per Loop.
+
+Archiving a Loop cancels its pending events, and the scheduler additionally
+skips any event whose Loop has since been archived — an archived Loop never
+closes rounds or emails members. A daily reconcile sweep re-queues any
+auto-create cycle that stalled (e.g. a transient store error at publish time
+meant no next-round event was queued).
 
 ## Backwards compatibility / rollout
 
