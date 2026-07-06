@@ -94,7 +94,7 @@ func (s *Server) handleSwitchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.tryGroup(ctx, user, req.GroupID) == nil {
-		writeError(w, http.StatusNotFound, "not_found", "No such Loop")
+		writeError(w, http.StatusNotFound, "not_found", "No such circle")
 		return
 	}
 
@@ -102,7 +102,7 @@ func (s *Server) handleSwitchGroup(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.SetSessionGroup(ctx, gc.SessionID, req.GroupID); err != nil {
 			s.logger.ErrorContext(ctx, "Failed to switch session group",
 				slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to switch Loop")
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to switch circle")
 
 			return
 		}
@@ -203,11 +203,11 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	fields := make(map[string]string, 2)
 
 	if req.Name == "" {
-		fields["name"] = "Loop name is required"
+		fields["name"] = "Circle name is required"
 	}
 
 	if req.AdminEmail == "" || !strings.Contains(req.AdminEmail, "@") {
-		fields["admin_email"] = "A valid keeper email is required"
+		fields["admin_email"] = "A valid superadmin email is required"
 	}
 
 	if len(fields) > 0 {
@@ -228,7 +228,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 			if err := s.store.ReactivateUser(ctx, keeper.ID); err != nil {
 				s.logger.ErrorContext(ctx, "Failed to reactivate keeper",
 					slog.String("error", err.Error()))
-				writeError(w, http.StatusInternalServerError, "server_error", "Failed to restore keeper account")
+				writeError(w, http.StatusInternalServerError, "server_error", "Failed to restore superadmin account")
 
 				return
 			}
@@ -243,7 +243,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.logger.ErrorContext(ctx, "Failed to create keeper user",
 				slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create keeper")
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create superadmin")
 
 			return
 		}
@@ -257,14 +257,14 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.logger.ErrorContext(ctx, "Failed to reload keeper",
 				slog.String("error", err.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create keeper")
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to create superadmin")
 
 			return
 		}
 	default:
 		s.logger.ErrorContext(ctx, "Failed to look up keeper",
 			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to look up keeper")
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to look up superadmin")
 
 		return
 	}
@@ -273,7 +273,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to create group",
 			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create Loop")
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create circle")
 
 		return
 	}
@@ -309,7 +309,7 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := s.store.GetGroup(ctx, groupID); err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "No such Loop")
+		writeError(w, http.StatusNotFound, "not_found", "No such circle")
 		return
 	}
 
@@ -317,7 +317,7 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 		s.logger.ErrorContext(ctx, "Failed to update group",
 			slog.Int64("group_id", groupID),
 			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update Loop")
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update circle")
 
 		return
 	}

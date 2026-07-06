@@ -274,7 +274,7 @@ func (s *Server) requireGroupMiddleware(next http.Handler) http.Handler {
 			user := UserFromContext(r.Context())
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				writeError(w, http.StatusConflict,
-					"no_group", "You are not a member of any Loop")
+					"no_group", "You are not a member of any circle")
 			} else if user != nil && user.IsInstanceAdmin {
 				http.Redirect(w, r, "/instance", http.StatusSeeOther)
 			} else {
@@ -287,7 +287,7 @@ func (s *Server) requireGroupMiddleware(next http.Handler) http.Handler {
 		if !gc.Settings.SetupComplete && !isGroupAdmin(r.Context()) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				writeError(w, http.StatusConflict,
-					"setup_incomplete", "This Loop is still being set up")
+					"setup_incomplete", "This circle is still being set up")
 			} else {
 				http.Redirect(w, r, "/loops", http.StatusSeeOther)
 			}

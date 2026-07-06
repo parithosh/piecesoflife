@@ -21,7 +21,7 @@ and friend circles, one account per person across all of them.
 | **Loop** (group) | One friend circle: members, rounds/issues, questions, media, settings. Internally `groups`. |
 | **Membership** | A user's relationship to one Loop: role (`admin`/`member`) and active flag. |
 | **Instance admin** | The operator. Can create/archive Loops, edit instance settings, and has implicit admin rights in every Loop. |
-| **Loop admin** | The keeper of one Loop. Full admin UI, but only inside that Loop. |
+| **Loop admin** | The superadmin of one Loop (UI term: "circle"). Full admin UI, but only inside that Loop. |
 
 ## Identity model
 
@@ -117,12 +117,13 @@ below appears only when it applies.
   multi-Loop users here when there is no obvious current Loop; single-Loop
   users never see it.
 - **Instance console — /instance** (instance admins only): list of Loops
-  (name, members, current round status), "Weave a new Loop" (name + keeper's
-  email → creates the Loop, invites its admin), archive Loop, and instance
+  (name, members, current round status), "Start a new circle of friends"
+  (name + superadmin's email → creates the Loop, invites its admin), archive
+  Loop, and instance
   settings (instance name, public-memento policy). Linked from the nav for
   instance admins only. Styled with the same Pallu system as the admin pages.
-- **New-Loop bootstrap:** creating a Loop invites its keeper by email. When
-  that keeper enters the new Loop (login or switcher), they get the existing
+- **New-Loop bootstrap:** creating a Loop invites its superadmin by email.
+  When that superadmin enters the new Loop (login or switcher), they get the existing
   setup wizard (`/admin/setup`) scoped to that Loop; members who arrive before
   setup completes see a friendly "this Loop is still being set up" note
   instead of broken pages.

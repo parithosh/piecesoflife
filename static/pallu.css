@@ -3424,3 +3424,47 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 }
 .pl-inst-meta { font: 500 13px var(--font-ui); color: var(--ink-soft); }
 .pl-inst-actions { display: flex; align-items: center; gap: 8px; }
+
+/* Info popover — a small "i" beside a control that explains what it does.
+   The popover drops downward inside the card, so .pl-card's
+   overflow:hidden never clips it. */
+.pl-info {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.pl-info-btn {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1.5px solid var(--marigold);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ink-soft);
+    font: italic 700 13px/1 var(--font-display);
+    cursor: pointer;
+}
+.pl-info-btn:hover { background: var(--strip); color: var(--rani); }
+.pl-info-btn:focus-visible { outline: 3px solid var(--marigold); outline-offset: 2px; }
+.pl-info-btn[aria-expanded="true"] { background: var(--marigold); color: var(--ivory); }
+.pl-info-pop {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: min(340px, 78vw);
+    background: var(--ivory);
+    border: 1.5px solid var(--marigold);
+    border-radius: var(--pl-radius);
+    box-shadow: 8px 8px 0 rgba(122, 15, 56, 0.18);
+    padding: 12px 14px;
+    font: 500 13px/1.55 var(--font-ui);
+    color: var(--ink-soft);
+    text-align: left;
+    z-index: 60;
+}
+@media (max-width: 720px) {
+    .pl-info { width: 100%; }
+    .pl-info .pl-btn { flex: 1; }
+}

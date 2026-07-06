@@ -1,4 +1,4 @@
-{{define "title"}}Your Loops — {{.Settings.LoopName}}{{end}}
+{{define "title"}}Your circles — {{.Settings.LoopName}}{{end}}
 
 {{define "mainClass"}}pl-main{{end}}
 
@@ -9,7 +9,7 @@
 
       <div class="pl-admin-head">
         <div>
-          <p class="pl-eyebrow pl-eyebrow--peacock">Your Loops</p>
+          <p class="pl-eyebrow pl-eyebrow--peacock">Your circles</p>
           <h1 class="pl-admin-title">Every circle you belong to</h1>
         </div>
       </div>
@@ -24,10 +24,10 @@
           <span class="pl-loop-card-name">{{.LoopName}}</span>
           {{if .Tagline}}<span class="pl-loop-card-tagline">{{.Tagline}}</span>{{end}}
           <span class="pl-loop-card-meta">
-            {{if eq .Role "admin"}}<span class="pl-pill pl-pill--admin">✦ Keeper</span>{{end}}
+            {{if eq .Role "admin"}}<span class="pl-pill pl-pill--admin">✦ Superadmin</span>{{end}}
             {{if .Current}}<span class="pl-pill pl-pill--active">● You're here</span>{{end}}
             {{if not .SetupComplete}}
-            <span class="pl-pill pl-pill--inactive">Still being woven</span>
+            <span class="pl-pill pl-pill--inactive">Still being set up</span>
             {{else if .Collecting}}
             <span class="pl-pill pl-pill--active">Collecting until {{formatDay .Deadline}}</span>
             {{else if .LatestEdition}}
@@ -41,8 +41,8 @@
       </div>
       {{else}}
       <div class="pl-archive-empty">
-        <h3 class="pl-display pl-archive-empty-title">No Loops yet</h3>
-        <p class="pl-archive-empty-sub">Ask a keeper to invite you —
+        <h3 class="pl-display pl-archive-empty-title">No circles yet</h3>
+        <p class="pl-archive-empty-sub">Ask a superadmin to invite you —
         the invite email brings you straight in.</p>
       </div>
       {{end}}

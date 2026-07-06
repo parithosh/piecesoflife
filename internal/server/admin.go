@@ -506,7 +506,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if req.LoopName != nil {
 		trimmed := strings.TrimSpace(*req.LoopName)
 		if trimmed == "" {
-			writeValidationError(w, map[string]string{"loop_name": "Loop name cannot be empty"})
+			writeValidationError(w, map[string]string{"loop_name": "Newsletter name cannot be empty"})
 			return
 		}
 		current.LoopName = trimmed

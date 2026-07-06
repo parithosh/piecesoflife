@@ -58,7 +58,7 @@
             {{end}}
             {{if .MultiLoop}}
             <details class="pl-nav-loops" id="loop-switcher">
-                <summary aria-label="Switch Loop">Loops ▾</summary>
+                <summary aria-label="Switch circle">Circles ▾</summary>
                 <div class="pl-nav-loops-menu">
                     {{$current := .Group}}
                     {{range .Loops}}
@@ -69,7 +69,7 @@
                         {{.LoopName}}
                     </button>
                     {{end}}
-                    <a href="/loops" class="pl-nav-loop pl-nav-loop--all">All your Loops →</a>
+                    <a href="/loops" class="pl-nav-loop pl-nav-loop--all">All your circles →</a>
                 </div>
             </details>
             {{end}}

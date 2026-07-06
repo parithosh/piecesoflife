@@ -17,8 +17,20 @@
       <div class="zari pl-admin-rule" aria-hidden="true"></div>
 
       <div class="pl-members-head">
-        <p class="pl-eyebrow">Loops on this instance</p>
-        <button type="button" id="new-loop-btn" class="pl-btn pl-btn--gold">＋ Weave a new Loop</button>
+        <p class="pl-eyebrow">Circles on this instance</p>
+        <div class="pl-info">
+          <button type="button" id="new-loop-btn" class="pl-btn pl-btn--gold">＋ Start a new circle of friends</button>
+          <button type="button" id="new-circle-info-btn" class="pl-info-btn"
+                  aria-label="What starting a new circle means"
+                  aria-expanded="false" aria-controls="new-circle-info-pop">i</button>
+          <div class="pl-info-pop" id="new-circle-info-pop" hidden>
+            Starting a circle creates a fresh, private newsletter of its own —
+            members, questions, monthly editions, and settings are all separate
+            from every other circle on this instance. You name its superadmin:
+            they get an invite email and run the circle's setup themselves.
+            The superadmin can be you.
+          </div>
+        </div>
       </div>
 
       <div class="pl-members-list">
@@ -28,14 +40,14 @@
             <div class="pl-inst-name">{{.LoopName}}</div>
             <div class="pl-inst-meta">
               {{.MemberCount}} member{{if ne .MemberCount 1}}s{{end}}
-              · {{.AdminCount}} keeper{{if ne .AdminCount 1}}s{{end}}
+              · {{.AdminCount}} superadmin{{if ne .AdminCount 1}}s{{end}}
               · since {{formatDay .CreatedAt}}
             </div>
           </div>
           {{if not .IsActive}}
           <span class="pl-pill pl-pill--inactive">Archived</span>
           {{else if not .SetupComplete}}
-          <span class="pl-pill pl-pill--inactive">Still being woven</span>
+          <span class="pl-pill pl-pill--inactive">Still being set up</span>
           {{else if .Collecting}}
           <span class="pl-pill pl-pill--active">Collecting until {{formatDay .Deadline}}</span>
           {{else}}
@@ -65,7 +77,7 @@
         <input type="text" id="instance-name" class="pl-field pl-login-input"
                value="{{.Instance.InstanceName}}">
         <p class="pl-inst-meta">Shown on the login page and in login emails —
-        each Loop keeps its own name everywhere else.</p>
+        each circle keeps its own name everywhere else.</p>
       </div>
 
       <div class="pl-form-field">
@@ -74,7 +86,7 @@
                  {{if .Instance.AllowPublicMementos}}checked{{end}}>
           Allow public mementos anywhere on this instance
         </label>
-        <p class="pl-inst-meta">A policy ceiling: when off, no Loop can share
+        <p class="pl-inst-meta">A policy ceiling: when off, no circle can share
         public memento links, whatever its own setting says.</p>
       </div>
 
@@ -84,28 +96,28 @@
 
       <dialog id="new-loop-dialog" class="pl-dialog" aria-labelledby="new-loop-title">
         <div class="pl-dialog-body">
-          <h3 id="new-loop-title" class="pl-dialog-title">Weave a new Loop</h3>
+          <h3 id="new-loop-title" class="pl-dialog-title">Start a new circle of friends</h3>
           <div class="pl-form-field">
-            <label for="loop-name" class="pl-login-label">Loop name</label>
+            <label for="loop-name" class="pl-login-label">Circle name</label>
             <input type="text" id="loop-name" class="pl-field pl-login-input"
                    placeholder="The Sharma Family" required>
           </div>
           <div class="pl-form-field">
-            <label for="keeper-email" class="pl-login-label">Keeper's email</label>
-            <input type="email" id="keeper-email" class="pl-field pl-login-input"
-                   placeholder="keeper@example.com" required>
-            <p class="pl-inst-meta">They become the Loop's admin and get an
+            <label for="admin-email" class="pl-login-label">Superadmin's email</label>
+            <input type="email" id="admin-email" class="pl-field pl-login-input"
+                   placeholder="superadmin@example.com" required>
+            <p class="pl-inst-meta">They become the circle's superadmin and get an
             invite to run its setup. It can be you.</p>
           </div>
           <div class="pl-form-field">
-            <label for="keeper-name" class="pl-login-label">Keeper's name <span class="pl-inst-meta">(optional)</span></label>
-            <input type="text" id="keeper-name" class="pl-field pl-login-input"
+            <label for="admin-name" class="pl-login-label">Superadmin's name <span class="pl-inst-meta">(optional)</span></label>
+            <input type="text" id="admin-name" class="pl-field pl-login-input"
                    placeholder="Asha">
           </div>
           <div class="pl-dialog-actions">
             <button type="button" class="pl-btn pl-btn--outline"
                     onclick="document.getElementById('new-loop-dialog').close()">Cancel</button>
-            <button type="button" id="create-loop-btn" class="pl-btn pl-btn--rani">Create Loop</button>
+            <button type="button" id="create-loop-btn" class="pl-btn pl-btn--rani">Start the circle</button>
           </div>
         </div>
       </dialog>
@@ -121,11 +133,28 @@ document.getElementById('new-loop-btn').addEventListener('click', () => {
     document.getElementById('new-loop-dialog').showModal();
 });
 
+const circleInfoBtn = document.getElementById('new-circle-info-btn');
+const circleInfoPop = document.getElementById('new-circle-info-pop');
+function setCircleInfoOpen(open) {
+    circleInfoPop.hidden = !open;
+    circleInfoBtn.setAttribute('aria-expanded', String(open));
+}
+circleInfoBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setCircleInfoOpen(circleInfoPop.hidden);
+});
+document.addEventListener('click', (e) => {
+    if (!circleInfoPop.hidden && !circleInfoPop.contains(e.target)) { setCircleInfoOpen(false); }
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !circleInfoPop.hidden) { setCircleInfoOpen(false); }
+});
+
 document.getElementById('create-loop-btn').addEventListener('click', async () => {
     const name = document.getElementById('loop-name').value.trim();
-    const adminEmail = document.getElementById('keeper-email').value.trim();
-    const adminName = document.getElementById('keeper-name').value.trim();
-    if (!name || !adminEmail) { alert('Loop name and keeper email are required.'); return; }
+    const adminEmail = document.getElementById('admin-email').value.trim();
+    const adminName = document.getElementById('admin-name').value.trim();
+    if (!name || !adminEmail) { alert('Circle name and superadmin email are required.'); return; }
 
     const res = await fetch('/api/instance/groups', {
         method: 'POST',
@@ -138,7 +167,7 @@ document.getElementById('create-loop-btn').addEventListener('click', async () =>
         location.reload();
     } else {
         const data = await res.json();
-        alert(data.error?.message || 'Failed to create the Loop.');
+        alert(data.error?.message || 'Failed to create the circle.');
     }
 });
 
@@ -162,7 +191,7 @@ async function setLoopActive(groupId, isActive) {
     if (res.ok) { location.reload(); }
     else {
         const data = await res.json();
-        alert(data.error?.message || 'Failed to update the Loop.');
+        alert(data.error?.message || 'Failed to update the circle.');
     }
 }
 
