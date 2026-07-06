@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"modernc.org/sqlite"
 )
@@ -49,6 +50,7 @@ func init() {
 type Store struct {
 	write  *sql.DB
 	read   *sql.DB
+	dbPath string
 	logger *slog.Logger
 }
 
@@ -94,6 +96,7 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 	return &Store{
 		write:  writeDB,
 		read:   readDB,
+		dbPath: dbPath,
 		logger: log,
 	}, nil
 }
@@ -147,6 +150,22 @@ func (s *Store) RunMigrations(ctx context.Context) error {
 		return entries[i].Name() < entries[j].Name()
 	})
 
+	// First pass: work out which migrations are pending, so an upgrade of an
+	// existing database can snapshot itself before anything is applied.
+	var appliedCount int
+	if err := s.write.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM schema_migrations",
+	).Scan(&appliedCount); err != nil {
+		return fmt.Errorf("counting applied migrations: %w", err)
+	}
+
+	type pendingMigration struct {
+		name    string
+		version int
+	}
+
+	pending := make([]pendingMigration, 0, len(entries))
+
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
@@ -170,22 +189,75 @@ func (s *Store) RunMigrations(ctx context.Context) error {
 			continue
 		}
 
-		sqlBytes, err := migrationsFS.ReadFile("migrations/" + entry.Name())
+		pending = append(pending, pendingMigration{name: entry.Name(), version: version})
+	}
+
+	if len(pending) == 0 {
+		return nil
+	}
+
+	// An existing database (some migrations already applied) is about to be
+	// upgraded: take a consistent snapshot first so the operator can roll
+	// back to the previous release by restoring one file. Fails closed — a
+	// schema upgrade without a rollback path is how databases get bricked.
+	if appliedCount > 0 {
+		backupPath, err := s.backupBeforeMigration(ctx, pending[0].version)
 		if err != nil {
-			return fmt.Errorf("reading migration %s: %w", entry.Name(), err)
+			return fmt.Errorf(
+				"refusing to migrate without a backup (free disk space or remove old *.backup files): %w",
+				err)
 		}
 
-		if err := s.applyMigration(ctx, entry.Name(), version, string(sqlBytes)); err != nil {
+		s.logger.InfoContext(ctx, "Database backed up before migration",
+			slog.String("backup", backupPath),
+			slog.Int("pending", len(pending)),
+		)
+	}
+
+	for _, mig := range pending {
+		sqlBytes, err := migrationsFS.ReadFile("migrations/" + mig.name)
+		if err != nil {
+			return fmt.Errorf("reading migration %s: %w", mig.name, err)
+		}
+
+		if err := s.applyMigration(ctx, mig.name, mig.version, string(sqlBytes)); err != nil {
 			return err
 		}
 
 		s.logger.InfoContext(ctx, "Applied migration",
-			slog.Int("version", version),
-			slog.String("file", entry.Name()),
+			slog.Int("version", mig.version),
+			slog.String("file", mig.name),
 		)
 	}
 
 	return nil
+}
+
+// backupBeforeMigration writes a consistent snapshot of the database next
+// to the live file, named after the first migration about to be applied
+// (piecesoflife.db.backup-before-016-20260706-093000). VACUUM INTO produces
+// a compact single-file copy that is safe to take under WAL and needs no
+// -wal/-shm siblings to restore.
+func (s *Store) backupBeforeMigration(
+	ctx context.Context, firstPendingVersion int,
+) (string, error) {
+	backupPath := fmt.Sprintf("%s.backup-before-%03d-%s",
+		s.dbPath, firstPendingVersion, time.Now().UTC().Format("20060102-150405"))
+
+	if _, err := s.write.ExecContext(ctx,
+		"VACUUM INTO "+quoteSQLString(backupPath),
+	); err != nil {
+		return "", fmt.Errorf("snapshotting database to %s: %w", backupPath, err)
+	}
+
+	return backupPath, nil
+}
+
+// quoteSQLString returns s as a single-quoted SQL string literal. VACUUM
+// INTO cannot take a bound parameter in all SQLite builds, so the path is
+// inlined; it comes from our own config, never from user input.
+func quoteSQLString(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
 }
 
 // applyMigration runs one migration inside a transaction.

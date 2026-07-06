@@ -91,6 +91,11 @@ ending with the admin **Send test email** button to prove delivery works.
 database (`/data/db`) and the uploads directory (`/data/uploads`). Snapshot
 the volume, or use Admin → Settings → Data export for a ZIP from the UI.
 
+**Upgrades**: schema migrations apply automatically on startup, and the app
+snapshots the database before touching an existing one. The upgrade,
+verification, and rollback procedure lives in
+[docs/upgrading.md](docs/upgrading.md).
+
 ### Configuration reference
 
 | Variable | Required | Default | Purpose |
