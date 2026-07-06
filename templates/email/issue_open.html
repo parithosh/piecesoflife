@@ -1,21 +1,24 @@
 {{define "email_title"}}{{.LoopName}} — {{.Month}} is open{{end}}
 
+{{define "email_preheader"}}A new round of {{.LoopName}} just opened — come share your answers.{{end}}
+
 {{define "email_content"}}
-<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">
-  {{.LoopName}} — {{.Month}} Edition
+{{$n := len .Questions}}
+<h2 class="em-accent" style="margin:0 0 18px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:22px;letter-spacing:0.3px;color:#7a0f38;">
+  The {{.Month}} edition is open
 </h2>
 <p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
-<p style="margin:0 0 16px;">A new issue is open. Here's what we're answering this round:</p>
-
-<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#333;">
-  {{range .Questions}}
-  <li style="margin:6px 0;">{{.}}</li>
-  {{end}}
-</ul>
+<p style="margin:0 0 16px;">
+  A fresh round of <strong>{{.LoopName}}</strong> just opened{{if $n}},
+  and {{$n}} new question{{if ne $n 1}}s are{{else}} is{{end}} waiting for
+  you{{end}}. No spoilers here — head over to see what we're answering
+  this time.
+</p>
 
 {{template "cta_button" .CTA}}
 
-<p style="margin:24px 0 0;color:#666;font-size:14px;">
-  You can answer any or all of the questions, add photos or recordings, and come back to edit before the deadline.
+<p class="em-muted" style="margin:24px 0 16px;color:#77695a;font-size:14px;line-height:1.6;">
+  Answer any or all of the questions, add photos or recordings, and come
+  back to edit as often as you like before the round closes.
 </p>
 {{end}}

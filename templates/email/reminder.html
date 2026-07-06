@@ -1,24 +1,23 @@
 {{define "email_title"}}{{if .IsFinal}}Last chance{{else}}Reminder{{end}} — {{.LoopName}} {{.Month}}{{end}}
 
+{{define "email_preheader"}}{{if .IsFinal}}Last chance — the{{else}}The{{end}} {{.Month}} round of {{.LoopName}} is still waiting for your answers.{{end}}
+
 {{define "email_content"}}
-<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">
-  {{if .IsFinal}}Last chance to share{{else}}Just a friendly nudge{{end}}
+<h2 class="em-accent" style="margin:0 0 18px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:22px;letter-spacing:0.3px;color:#7a0f38;">
+  {{if .IsFinal}}Last call for {{.Month}}{{else}}A gentle nudge{{end}}
 </h2>
 <p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
 <p style="margin:0 0 16px;">
-  This issue of <strong>{{.LoopName}}</strong> is still open. Here are the questions:
+  The {{.Month}} round of <strong>{{.LoopName}}</strong> is still open,
+  and your answers are missing. Here's what's on the table:
 </p>
 
-<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#333;">
-  {{range .Questions}}
-  <li style="margin:6px 0;">{{.}}</li>
-  {{end}}
-</ul>
+{{template "question_list" .Questions}}
 
 {{if gt .DaysLeft 0}}
-<p style="margin:0 0 16px;color:#666;">
-  There {{if eq .DaysLeft 1}}is 1 day{{else}}are {{.DaysLeft}} days{{end}} left until this issue closes.
-  So far {{.Responded}} of {{.Total}} members have shared.
+<p class="em-muted" style="margin:0 0 16px;color:#77695a;font-size:14px;line-height:1.6;">
+  There {{if eq .DaysLeft 1}}is 1 day{{else}}are {{.DaysLeft}} days{{end}} left before this round closes.
+  So far {{.Responded}} of {{.Total}} friends have shared.
 </p>
 {{end}}
 

@@ -1,8 +1,12 @@
 {{define "email_title"}}{{.LoopName}} — {{.Month}} publishes tomorrow{{end}}
 
+{{define "email_preheader"}}{{.Month}} publishes tomorrow — {{len .Responded}} in, {{len .Waiting}} still to go.{{end}}
+
 {{define "email_content"}}
-<p style="margin:0 0 8px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#0e6b6b;">The loom report</p>
-<h2 style="margin:0 0 16px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;color:#7a0f38;font-size:24px;">{{.Month}} publishes tomorrow</h2>
+<p class="em-gold" style="margin:0 0 8px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#a5771e;">The loom report</p>
+<h2 class="em-accent" style="margin:0 0 18px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:22px;letter-spacing:0.3px;color:#7a0f38;">
+  {{.Month}} publishes tomorrow
+</h2>
 <p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
 <p style="margin:0 0 16px;">
   This round closes and publishes on <strong>{{.DeadlineDay}}</strong>.
@@ -10,22 +14,32 @@
 </p>
 
 {{if .Responded}}
-<p style="margin:0 0 6px;color:#4f7042;"><strong>&#10003; Woven in ({{len .Responded}})</strong></p>
-<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#2a0e15;">
-  {{range .Responded}}<li style="margin:4px 0;">{{.}}</li>{{end}}
-</ul>
+<p class="em-ok" style="margin:0 0 6px;color:#4f7042;"><strong>&#10003; Woven in ({{len .Responded}})</strong></p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin:0 0 16px;">
+    {{range .Responded}}
+    <tr>
+        <td class="em-gold" valign="baseline" style="width:22px;color:#a5771e;font-size:12px;line-height:1.7;">&#10022;</td>
+        <td class="em-ink" style="padding:3px 0;color:#322a22;font-size:16px;line-height:1.5;">{{.}}</td>
+    </tr>
+    {{end}}
+</table>
 {{end}}
 
 {{if .Waiting}}
-<p style="margin:0 0 6px;color:#c3362b;"><strong>&#9679; Still waiting ({{len .Waiting}})</strong></p>
-<ul style="margin:0 0 16px;padding:0 0 0 20px;color:#2a0e15;">
-  {{range .Waiting}}<li style="margin:4px 0;">{{.}}</li>{{end}}
-</ul>
+<p class="em-warn" style="margin:0 0 6px;color:#b3372c;"><strong>&#9679; Still waiting ({{len .Waiting}})</strong></p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin:0 0 16px;">
+    {{range .Waiting}}
+    <tr>
+        <td class="em-gold" valign="baseline" style="width:22px;color:#a5771e;font-size:12px;line-height:1.7;">&#10022;</td>
+        <td class="em-ink" style="padding:3px 0;color:#322a22;font-size:16px;line-height:1.5;">{{.}}</td>
+    </tr>
+    {{end}}
+</table>
 <p style="margin:0 0 16px;">
   You can nudge them, extend the deadline, or let the round publish as it is.
 </p>
 {{else}}
-<p style="margin:0 0 16px;color:#4f7042;">
+<p class="em-ok" style="margin:0 0 16px;color:#4f7042;">
   Everyone has answered — this one is ready to go out.
 </p>
 {{end}}

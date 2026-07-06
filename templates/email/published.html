@@ -1,13 +1,16 @@
 {{define "email_title"}}{{.LoopName}} — {{.Month}} is published{{end}}
 
+{{define "email_preheader"}}The {{.Month}} edition of {{.LoopName}} is out — come read everyone's answers.{{end}}
+
 {{define "email_content"}}
-<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">
-  {{.LoopName}} — {{.Month}} is published
+<h2 class="em-accent" style="margin:0 0 18px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:22px;letter-spacing:0.3px;color:#7a0f38;">
+  Hot off the press
 </h2>
 <p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
 <p style="margin:0 0 16px;">
-  The {{.Month}} edition of <strong>{{.LoopName}}</strong> is now published.
-  Head over to read everyone's responses.
+  The <strong>{{.Month}}</strong> edition of <strong>{{.LoopName}}</strong>
+  has been published. Pour yourself something nice and come read what
+  everyone shared this round.
 </p>
 
 {{template "cta_button" .CTA}}

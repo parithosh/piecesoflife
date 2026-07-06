@@ -4,28 +4,54 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
     <title>{{block "email_title" .}}{{end}}</title>
+    <style>
+        @import url("https://fonts.googleapis.com/css2?family=Marcellus&display=swap");
+        /* Declaring both schemes (plus the meta tags above) tells Apple Mail
+           we handle dark mode ourselves — without it, it auto-inverts the
+           light palette into muddy olive/pink. */
+        :root { color-scheme: light dark; supported-color-schemes: light dark; }
+        body { margin:0; padding:0; }
+        @media (prefers-color-scheme: dark) {
+            .em-bg      { background-color:#141110 !important; }
+            .em-card    { background-color:#211b18 !important; border-color:#3a322b !important; }
+            .em-ink     { color:#ece4d6 !important; }
+            .em-muted   { color:#a4968a !important; }
+            .em-accent  { color:#e2a4b4 !important; }
+            .em-gold    { color:#d9b45e !important; }
+            .em-goldbar { background-color:#b8933f !important; }
+            .em-rule    { background-color:#3a322b !important; }
+            .em-quote   { background-color:#2a231f !important; }
+            .em-ok      { color:#97b989 !important; }
+            .em-warn    { color:#e0897f !important; }
+        }
+        @media only screen and (max-width: 620px) {
+            .em-pad { padding-left:24px !important; padding-right:24px !important; }
+        }
+    </style>
 </head>
-<body style="margin:0;padding:0;background-color:#fbf4e3;">
-<!-- Pallu palette: rani #7a0f38 · marigold #e6b23c · zari #c8962c · ivory #fbf4e3 · ink #2a0e15 -->
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#fbf4e3;">
-<tr><td style="padding:28px 12px;">
-<table class="email-container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="width:600px;max-width:100%;margin:0 auto;background-color:#fffaf0;border:1px solid #ddc9a6;">
-    <tr><td style="height:8px;background-color:#c8962c;background-image:repeating-linear-gradient(90deg,#c8962c 0 8px,#e6b23c 8px 12px,#c8962c 12px 20px);font-size:0;line-height:8px;">&nbsp;</td></tr>
-    <tr><td style="padding:26px 36px 22px;background-color:#7a0f38;border-bottom:3px solid #c8962c;">
-        <p style="margin:0 0 6px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#e6b23c;">&#10022; A letter from</p>
-        <h1 style="margin:0;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:28px;letter-spacing:0.5px;color:#fbf4e3;">{{.LoopName}}</h1>
+<body class="em-bg" style="margin:0;padding:0;background-color:#f2ecdf;">
+<!-- Email palette (deliberately softer than the site's): paper #f2ecdf · card #fffdf8 · ink #322a22 · rani #7a0f38 · marigold #e6b23c · gold #a5771e -->
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{{block "email_preheader" .}}{{end}}&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;</div>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" class="em-bg" style="background-color:#f2ecdf;">
+<tr><td style="padding:36px 12px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" align="center" class="em-card" style="width:600px;max-width:100%;margin:0 auto;background-color:#fffdf8;border:1px solid #e7dcc7;border-radius:16px;">
+    <tr><td class="em-pad" align="center" style="padding:40px 40px 0;text-align:center;">
+        <p class="em-gold" style="margin:0 0 10px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#a5771e;">&#10022;&nbsp; A letter from &nbsp;&#10022;</p>
+        <h1 class="em-accent" style="margin:0;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:30px;letter-spacing:0.5px;line-height:1.25;color:#7a0f38;">{{.LoopName}}</h1>
+        <div class="em-goldbar" style="width:44px;height:2px;margin:18px auto 0;background-color:#c8962c;font-size:0;line-height:0;">&nbsp;</div>
     </td></tr>
-    <tr><td class="email-body" style="padding:32px 36px;font-family:'Newsreader',Georgia,'Times New Roman',serif;color:#2a0e15;font-size:16px;line-height:1.65;">
+    <tr><td class="em-pad em-ink" style="padding:28px 40px 10px;font-family:'Newsreader',Georgia,'Times New Roman',serif;color:#322a22;font-size:16px;line-height:1.7;">
         {{block "email_content" .}}{{end}}
     </td></tr>
-    <tr><td style="padding:0 36px;">
-        <div style="height:1px;line-height:1px;font-size:0;background-color:#ddc9a6;">&nbsp;</div>
+    <tr><td class="em-pad" style="padding:8px 40px 0;">
+        <div class="em-rule" style="height:1px;line-height:1px;font-size:0;background-color:#ece2cf;">&nbsp;</div>
     </td></tr>
-    <tr><td style="padding:18px 36px 24px;text-align:center;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#8a6d55;">
+    <tr><td class="em-pad em-muted" align="center" style="padding:18px 40px 28px;text-align:center;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#77695a;">
         &#10022; Sent with {{.LoopName}} &#10022;
     </td></tr>
-    <tr><td style="height:8px;background-color:#c8962c;background-image:repeating-linear-gradient(90deg,#c8962c 0 8px,#e6b23c 8px 12px,#c8962c 12px 20px);font-size:0;line-height:8px;">&nbsp;</td></tr>
 </table>
 </td></tr>
 </table>
@@ -34,11 +60,22 @@
 {{end}}
 
 {{define "cta_button"}}
-<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:26px auto;">
-<tr><td style="background-color:#e6b23c;border:1px solid #a8791f;border-radius:3px;">
-    <a href="{{.URL}}" style="display:inline-block;padding:13px 34px;color:#2a0e15;text-decoration:none;font-weight:600;font-size:14px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;letter-spacing:1px;text-transform:uppercase;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="margin:28px auto;">
+<tr><td style="background-color:#e6b23c;border:1px solid #c79a2b;border-radius:999px;">
+    <a href="{{.URL}}" style="display:inline-block;padding:13px 34px;color:#241a0e;text-decoration:none;font-weight:600;font-size:13px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;letter-spacing:1.5px;text-transform:uppercase;border-radius:999px;">
         {{.Label}}
     </a>
 </td></tr>
+</table>
+{{end}}
+
+{{define "question_list"}}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin:0 0 16px;">
+    {{range .}}
+    <tr>
+        <td class="em-gold" valign="baseline" style="width:22px;color:#a5771e;font-size:12px;line-height:1.7;">&#10022;</td>
+        <td class="em-ink" style="padding:4px 0;color:#322a22;font-size:16px;line-height:1.55;">{{.}}</td>
+    </tr>
+    {{end}}
 </table>
 {{end}}

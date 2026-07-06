@@ -1,14 +1,18 @@
 {{define "email_title"}}Log in to {{.LoopName}}{{end}}
 
+{{define "email_preheader"}}Your single-use login link — valid for 30 minutes.{{end}}
+
 {{define "email_content"}}
-<p style="margin:0 0 8px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#0e6b6b;">Your key to the archive</p>
-<h2 style="margin:0 0 16px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;color:#7a0f38;font-size:24px;">Log in to {{.LoopName}}</h2>
+<p class="em-gold" style="margin:0 0 8px;font-family:'Mukta',-apple-system,'Segoe UI',system-ui,sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#a5771e;">Your key to the archive</p>
+<h2 class="em-accent" style="margin:0 0 18px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:22px;letter-spacing:0.3px;color:#7a0f38;">
+  Log in to {{.LoopName}}
+</h2>
 <p style="margin:0 0 16px;">Hi {{.Name}},</p>
 <p style="margin:0 0 16px;">Press the button below to sign in. This link is single-use and expires in 30&nbsp;minutes.</p>
 
 {{template "cta_button" .CTA}}
 
-<p style="margin:24px 0 0;color:#8a6d55;font-size:14px;font-style:italic;">
+<p class="em-muted" style="margin:24px 0 16px;color:#77695a;font-size:14px;font-style:italic;line-height:1.6;">
   If you didn't request this, you can safely ignore the email — nothing will happen.
 </p>
 {{end}}

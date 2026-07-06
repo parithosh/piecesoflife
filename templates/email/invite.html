@@ -1,7 +1,11 @@
 {{define "email_title"}}You're invited to {{.LoopName}}{{end}}
 
+{{define "email_preheader"}}{{.AdminName}} has invited you to join {{.LoopName}}.{{end}}
+
 {{define "email_content"}}
-<h2 style="margin:0 0 16px;color:#7a0f38;font-size:22px;">You're invited to {{.LoopName}}</h2>
+<h2 class="em-accent" style="margin:0 0 18px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:22px;letter-spacing:0.3px;color:#7a0f38;">
+  You're invited
+</h2>
 <p style="margin:0 0 16px;">
   <strong>{{.AdminName}}</strong> has invited you to join
   <strong>{{.LoopName}}</strong> — a small, private group newsletter where
@@ -9,14 +13,15 @@
 </p>
 
 {{if .Note}}
-<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #7a0f38;background:#fbf4e3;font-style:italic;color:#555;">
+<blockquote class="em-quote" style="margin:16px 0;padding:14px 18px;border-left:3px solid #c8962c;border-radius:0 8px 8px 0;background-color:#f8f2e5;font-style:italic;">
   {{.Note}}
 </blockquote>
 {{end}}
 
 {{template "cta_button" .CTA}}
 
-<p style="margin:24px 0 0;color:#666;font-size:14px;">
-  Not interested? No worries — you can ignore this email and no account will be created for you.
+<p class="em-muted" style="margin:24px 0 16px;color:#77695a;font-size:14px;line-height:1.6;">
+  Not interested? No worries — you can ignore this email and no account
+  will be created for you.
 </p>
 {{end}}
