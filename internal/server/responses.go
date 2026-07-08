@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"html/template"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +35,19 @@ const (
 	videoBlockType  = "video"
 	maxCommentBytes = 4000
 )
+
+// heifBrands are the ISO-BMFF ftyp brands that identify HEIF-family images,
+// including AVIF (which is HEIF with an AV1 payload). Phone cameras (Android
+// "high efficiency" mode, iPhone) default to HEIC and newer Androids can
+// produce AVIF, but Go's http.DetectContentType has no HEIF signature and
+// reports these files as application/octet-stream, so they are sniffed
+// separately.
+var heifBrands = []string{
+	"heic", "heix", "heim", "heis", // HEVC-coded still images
+	"hevc", "hevx", "hevm", "hevs", // HEVC-coded image sequences
+	"mif1", "msf1", // codec-agnostic HEIF
+	"avif", "avis", // AV1-coded (AVIF) stills and sequences
+}
 
 // markdownRenderer renders comment bodies. goldmark's default config strips
 // raw HTML (safe by default) — no WithUnsafe() is set.
@@ -433,9 +448,10 @@ func (s *Server) handleReorderBlocks(w http.ResponseWriter, r *http.Request) {
 // receiveMediaUpload validates and persists the "media" (or legacy "photo")
 // form file for the given block type: sniffs and checks the content type,
 // writes the file under UPLOAD_PATH/year/month, and returns the stored path
-// plus normalized content type. On failure it writes the HTTP error response
-// itself and returns ok = false. Callers must have applied MaxBytesReader
-// and ParseMultipartForm already.
+// plus normalized content type. HEIC photos are transcoded to JPEG on the
+// way in, so the returned path/type may differ from what was uploaded. On
+// failure it writes the HTTP error response itself and returns ok = false.
+// Callers must have applied MaxBytesReader and ParseMultipartForm already.
 func (s *Server) receiveMediaUpload(
 	w http.ResponseWriter, r *http.Request, blockType string,
 ) (string, string, bool) {
@@ -517,6 +533,25 @@ func (s *Server) receiveMediaUpload(
 		)
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to write uploaded file")
 		return "", "", false
+	}
+
+	if contentType == "image/heic" {
+		jpegPath, err := s.transcodeHEIC(r.Context(), filePath)
+		if err != nil {
+			_ = os.Remove(filePath)
+			s.logger.ErrorContext(r.Context(), "Failed to transcode HEIC upload",
+				slog.String("path", filePath),
+				slog.String("error", err.Error()),
+			)
+			writeError(w, http.StatusUnprocessableEntity, "conversion_failed",
+				"Couldn't convert this photo — please try again, "+
+					"or switch the camera to JPEG (\"Most compatible\")")
+
+			return "", "", false
+		}
+
+		filePath = jpegPath
+		contentType = "image/jpeg"
 	}
 
 	s.normalizeWebM(r.Context(), filePath)
@@ -911,9 +946,11 @@ func parseID(r *http.Request, name string) (int64, error) {
 }
 
 // isAllowedImageType reports whether a MIME type is an accepted image format.
+// HEIC is accepted at upload time but transcoded to JPEG before storage —
+// see receiveMediaUpload.
 func isAllowedImageType(contentType string) bool {
 	switch contentType {
-	case "image/jpeg", "image/png", "image/webp":
+	case "image/jpeg", "image/png", "image/webp", "image/heic":
 		return true
 	default:
 		return false
@@ -954,6 +991,10 @@ func isAllowedUploadType(blockType, contentType string) bool {
 func normalizedUploadContentType(blockType, headerContentType string, sniff []byte) string {
 	detected := http.DetectContentType(sniff)
 	if blockType == photoBlockType {
+		if detected == "application/octet-stream" && isHEIF(sniff) {
+			return "image/heic"
+		}
+
 		return detected
 	}
 
@@ -968,6 +1009,39 @@ func normalizedUploadContentType(blockType, headerContentType string, sniff []by
 	return declared
 }
 
+// isHEIF reports whether sniffed upload bytes are an ISO-BMFF file whose
+// ftyp box declares a HEIF-family brand (HEIC or AVIF), either as the major
+// brand or in the compatible-brands list. All matches are treated as
+// image/heic internally — the distinction doesn't matter, since every match
+// takes the same transcode-to-JPEG path.
+func isHEIF(sniff []byte) bool {
+	const brandSize = 4
+
+	if len(sniff) < 12 || string(sniff[4:8]) != "ftyp" {
+		return false
+	}
+
+	// The ftyp box size field bounds the brand list; clamp implausible
+	// values (truncated sniff buffer, 64-bit box sizes) to what we have.
+	boxEnd := int(binary.BigEndian.Uint32(sniff[0:4]))
+	if boxEnd < 16 || boxEnd > len(sniff) {
+		boxEnd = len(sniff)
+	}
+
+	if slices.Contains(heifBrands, string(sniff[8:12])) {
+		return true
+	}
+
+	// Compatible brands follow the 4-byte minor version.
+	for off := 16; off+brandSize <= boxEnd; off += brandSize {
+		if slices.Contains(heifBrands, string(sniff[off:off+brandSize])) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // extensionFromContentType maps an upload MIME type to a file extension.
 func extensionFromContentType(contentType string) string {
 	switch contentType {
@@ -977,6 +1051,8 @@ func extensionFromContentType(contentType string) string {
 		return ".png"
 	case "image/webp":
 		return ".webp"
+	case "image/heic":
+		return ".heic"
 	case "audio/webm", "video/webm":
 		return ".webm"
 	case "audio/ogg":

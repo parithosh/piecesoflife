@@ -16,7 +16,11 @@ FROM alpine:3.21
 
 # ffmpeg remuxes browser-recorded WebM uploads (MediaRecorder output has no
 # duration/seek cues, which breaks playback in some contexts).
-RUN apk add --no-cache ca-certificates tzdata ffmpeg
+# libheif-tools provides heif-convert, which transcodes HEIC and AVIF photo
+# uploads (default camera formats on iPhones and many Androids) to JPEG.
+# This image's ffmpeg 6.1 cannot decode tiled HEIC, so it is not a
+# substitute.
+RUN apk add --no-cache ca-certificates tzdata ffmpeg libheif-tools
 
 COPY --from=builder /bin/piecesoflife /usr/local/bin/piecesoflife
 
