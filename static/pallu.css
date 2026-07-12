@@ -1643,11 +1643,17 @@ input.pl-field::placeholder,
     margin: 20px 0 0;
 }
 
+/* Never crop an answer photo: portraits keep their full frame (the
+ * lightbox already had the whole image — the preview was cover-cropping
+ * it). Landscape photos still fill the column; portraits cap at 480px tall
+ * and center. */
 .published-photo img {
     display: block;
-    width: 100%;
-    max-height: 360px;
-    object-fit: cover;
+    max-width: 100%;
+    max-height: 480px;
+    width: auto;
+    height: auto;
+    margin: 0 auto;
     border: 1px solid var(--rani);
     border-radius: 4px;
 }
