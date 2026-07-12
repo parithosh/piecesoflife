@@ -77,6 +77,25 @@ func (s *Store) GetDumpItemByID(
 	return &d, nil
 }
 
+// GetIssueByDumpItemID resolves the issue that owns a dump item — the guard
+// path for dump-item comment endpoints.
+func (s *Store) GetIssueByDumpItemID(
+	ctx context.Context, dumpItemID int64,
+) (*Issue, error) {
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT i.id, i.group_id, i.title, i.month, i.year, i.status,
+		        i.opens_at, i.deadline, i.published_at, i.created_at
+		 FROM issues i
+		 JOIN dump_items d ON d.issue_id = i.id
+		 WHERE d.id = ?`, dumpItemID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("getting issue for dump item %d: %w", dumpItemID, err)
+	}
+
+	return iss, nil
+}
+
 // ListDumpItemsByIssue returns every dump item for an issue joined with the
 // contributor's name and avatar, ordered by user then upload order — the
 // order the collage groups render in.

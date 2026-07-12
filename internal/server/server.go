@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/parithosh/piecesoflife/internal/config"
 	"github.com/parithosh/piecesoflife/internal/email"
@@ -304,7 +303,10 @@ func (s *Server) registerRoutes() {
 	// Comment routes.
 	s.mux.Handle("GET /api/responses/{id}/comments", groupMW(s.handleListComments))
 	s.mux.Handle("POST /api/responses/{id}/comments", groupMW(s.handleAddComment))
+	s.mux.Handle("PATCH /api/comments/{id}", groupMW(s.handleEditComment))
 	s.mux.Handle("DELETE /api/comments/{id}", groupMW(s.handleDeleteComment))
+	s.mux.Handle("GET /api/dump/{id}/comments", groupMW(s.handleListDumpComments))
+	s.mux.Handle("POST /api/dump/{id}/comments", groupMW(s.handleAddDumpComment))
 
 	// Ramble — the private journal. Person-scoped: authMW only, no Loop
 	// context required.
@@ -363,7 +365,6 @@ func (s *Server) loadTemplates() {
 		"letterAvatar":  letterAvatar,
 		"questionWord":  questionWord,
 		"dayDisplay":    rambleDayDisplay,
-		"dropCap":       dropCap,
 		"jsonMarshal":   jsonMarshal,
 		"categoryLabel": categoryLabel,
 		"dict":          dict,
@@ -824,22 +825,6 @@ func questionWord(n int) string {
 	}
 
 	return strconv.Itoa(n)
-}
-
-// dropCapMinRunes is the shortest leading text block that can carry a
-// magazine-style drop cap without the oversized initial dwarfing the
-// answer (e.g. a bare "hey!").
-const dropCapMinRunes = 100
-
-// dropCap reports whether the first answer on a paginated spread should
-// render a drop cap. It only applies when the leading block is text long
-// enough for the copy to wrap alongside the initial.
-func dropCap(blocks []store.ResponseBlock) bool {
-	if len(blocks) == 0 || blocks[0].Type != "text" || blocks[0].Content == nil {
-		return false
-	}
-
-	return utf8.RuneCountInString(strings.TrimSpace(*blocks[0].Content)) >= dropCapMinRunes
 }
 
 func jsonMarshal(v any) template.JS {

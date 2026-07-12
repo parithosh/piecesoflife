@@ -62,11 +62,13 @@ type IssuePageData struct {
 	DumpGroups []DumpGroup
 	// DiaryGroups is the "From the notebooks" spread: one group per member
 	// who wove their rambles in. DiaryCommentCounts maps diary day IDs to
-	// comment counts. PageCount is questions + notebooks page (when any) +
-	// dump page (when any); DiaryIdx/DumpIdx are the 0-based page indices of
-	// the extra pages, -1 when absent.
+	// comment counts, DumpCommentCounts dump item IDs to theirs. PageCount
+	// is questions + notebooks page (when any) + dump page (when any);
+	// DiaryIdx/DumpIdx are the 0-based page indices of the extra pages, -1
+	// when absent.
 	DiaryGroups        []store.DiaryGroup
 	DiaryCommentCounts map[int64]int
+	DumpCommentCounts  map[int64]int
 	PageCount          int
 	DiaryIdx           int
 	DumpIdx            int
@@ -372,6 +374,21 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 
 	dumpGroups := groupDumpItems(dumpItems)
 
+	dumpCommentCounts := make(map[int64]int, len(dumpItems))
+
+	for i := range dumpItems {
+		comments, cErr := s.store.ListCommentsByDumpItem(ctx, dumpItems[i].ID)
+		if cErr != nil {
+			s.logger.WarnContext(ctx, "Failed to count dump comments",
+				slog.Int64("dump_item_id", dumpItems[i].ID),
+				slog.String("error", cErr.Error()))
+
+			continue
+		}
+
+		dumpCommentCounts[dumpItems[i].ID] = len(comments)
+	}
+
 	// The notebooks spread: diary sections members wove in, plus per-day
 	// comment counts (day comments use the same panels answers do).
 	diaryGroups, err := s.store.ListDiarySectionsByIssue(ctx, targetIssue.ID)
@@ -456,6 +473,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		CurrentQ:           currentQ,
 		CurrentQIdx:        currentQ - 1,
 		DumpGroups:         dumpGroups,
+		DumpCommentCounts:  dumpCommentCounts,
 		DiaryGroups:        diaryGroups,
 		DiaryCommentCounts: diaryCommentCounts,
 		PageCount:          pageCount,

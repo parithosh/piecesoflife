@@ -31,8 +31,10 @@
         <input type="file" accept="video/*" data-media-input="video" hidden>
         <input type="file" accept="audio/*" data-media-input="audio" hidden>
         <button type="button" class="pl-chip-btn" data-media-btn="photo">＋ Photos</button>
-        <button type="button" class="pl-chip-btn" data-media-btn="video">▣ Video</button>
-        <button type="button" class="pl-chip-btn" data-media-btn="audio">● Audio</button>
+        <button type="button" class="pl-chip-btn" data-media-btn="video">＋ Video</button>
+        <button type="button" class="pl-chip-btn" data-media-btn="audio">＋ Audio</button>
+        <button type="button" class="pl-chip-btn" data-record-btn="audio">● Record audio</button>
+        <button type="button" class="pl-chip-btn" data-record-btn="video">▣ Record video</button>
         <span class="pl-dump-status" data-media-status role="status" aria-live="polite"></span>
       </div>
     </section>
@@ -99,6 +101,7 @@
 {{end}}
 
 {{define "scripts"}}
+<script src="/static/recorder.js?v={{assetVersion}}"></script>
 <script>
 (function () {
     // "Today" is the browser's day, not the server's — the page you opened
@@ -220,6 +223,45 @@
                 btn.disabled = false;
                 if (uploaded > 0) setTimeout(() => window.location.reload(), 2000);
             }
+        });
+    });
+
+    // ---- recording (today card): shared dialog from recorder.js ---------
+    todayCard.querySelectorAll('[data-record-btn]').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const kind = this.dataset.recordBtn;
+            const status = todayCard.querySelector('[data-media-status]');
+
+            POLRecorder.record(kind, {
+                toast: msg => { if (status) status.textContent = msg; },
+                upload: async (file) => {
+                    // Flush pending text first so the reload after saving
+                    // doesn't lose a fresh page.
+                    clearTimeout(timers[today]);
+                    await saveDay(today, todayEditor.value, todayStatus);
+
+                    const form = new FormData();
+                    form.append('kind', kind);
+                    form.append('media', file);
+                    const res = await fetch(`/api/ramble/${today}/media`, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCSRFToken() },
+                        body: form,
+                    });
+                    if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        throw new Error(data?.error?.message || 'Upload failed');
+                    }
+                    const block = await res.json();
+                    return { id: block.id, url: block.url };
+                },
+                discard: (id) =>
+                    fetch(`/api/ramble/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() }),
+                onSaved: () => {
+                    if (status) status.textContent = 'Recording added — reloading…';
+                    setTimeout(() => window.location.reload(), 500);
+                },
+            });
         });
     });
 

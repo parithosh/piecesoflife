@@ -878,19 +878,6 @@ input.pl-field::placeholder,
 .pl-answer-text p { margin: 0 0 0.75em; white-space: pre-wrap; }
 .pl-answer-text p:last-child { margin-bottom: 0; }
 
-/* Neutralize drop caps in the continuous (3c) reading view only. Kept off
- * the paginated view, and expressed as longhands: the `font:` shorthand
- * also resets font-style/weight/variant at this specificity, which the
- * .published-issue drop-cap rule below doesn't re-declare — that combo
- * rendered the drop cap in the body typeface instead of the display font. */
-.pl-issue:not(.published-issue) .pl-answer.is-first .pl-answer-text > p:first-child::first-letter {
-    font-family: inherit;
-    font-size: inherit;
-    color: inherit;
-    float: none;
-    line-height: inherit;
-    margin: 0;
-}
 
 .pl-answer-text figure { margin: 14px 0 0; }
 .pl-answer-text img { border: 1px solid var(--rani); border-radius: 4px; max-width: 100%; }
@@ -1630,14 +1617,6 @@ input.pl-field::placeholder,
     margin-bottom: 0;
 }
 
-.published-issue .pl-answer.has-dropcap .pl-answer-text > p:first-child::first-letter {
-    float: left;
-    margin: 7px 12px 0 0;
-    font-family: var(--font-display);
-    font-size: 62px;
-    line-height: 0.72;
-    color: var(--sindoor);
-}
 
 .published-photo {
     margin: 20px 0 0;
@@ -1828,7 +1807,8 @@ input.pl-field::placeholder,
     margin: 8px 0 12px;
 }
 
-.published-issue .comment-reply-cancel {
+.published-issue .comment-reply-cancel,
+.published-issue .comment-edit-cancel {
     min-height: 34px;
     margin-right: 6px;
     padding: 6px 10px;
@@ -1842,7 +1822,8 @@ input.pl-field::placeholder,
     cursor: pointer;
 }
 
-.published-issue .comment-reply-cancel:hover {
+.published-issue .comment-reply-cancel:hover,
+.published-issue .comment-edit-cancel:hover {
     border-color: var(--ink-soft);
 }
 
@@ -1850,6 +1831,8 @@ input.pl-field::placeholder,
     margin-top: 8px;
 }
 
+/* The composer types in the same upright Newsreader the posted comment
+ * renders in — only the placeholder keeps the italic invitation. */
 .published-issue .comment-body-input {
     width: 100%;
     min-height: 34px;
@@ -1862,8 +1845,11 @@ input.pl-field::placeholder,
     color: var(--ink);
     font-family: var(--font-read);
     font-size: 15px;
-    font-style: italic;
     line-height: 1.45;
+}
+
+.published-issue .comment-body-input::placeholder {
+    font-style: italic;
 }
 
 /* Expand while the form is focused OR holds text — keying growth off
@@ -2141,10 +2127,6 @@ input.pl-field::placeholder,
         line-height: 1.68;
     }
 
-    .published-issue .pl-answer.has-dropcap .pl-answer-text > p:first-child::first-letter {
-        font-size: 54px;
-        margin-top: 6px;
-    }
 
     .published-pager {
         position: sticky;
@@ -3585,14 +3567,6 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 .pl-nb-text p { margin: 0 0 0.9em; white-space: pre-wrap; }
 .pl-nb-text p:last-child { margin-bottom: 0; }
 
-.pl-nb-day--first .pl-nb-text > p:first-child::first-letter {
-    float: left;
-    margin: 7px 12px 0 0;
-    font-family: var(--font-display);
-    font-size: 62px;
-    line-height: 0.72;
-    color: var(--sindoor);
-}
 
 .pl-notebook-divider { margin: 48px auto 0; }
 
@@ -3901,4 +3875,24 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
     .pl-ramble-title { font-size: 30px; }
     .pl-nb-text { font-size: 17px; }
     .published-notebooks-standfirst { font-size: 15px; }
+}
+
+/* "(edited)" marker on reworked comments */
+.published-issue .comment-edited {
+    font-style: italic;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+/* comment threads tucked under each dump photo/video */
+.pl-collage-comments {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--line);
+    text-align: left;
+}
+
+.pl-collage-item .comment-thread,
+.pl-collage-video .comment-thread {
+    padding-left: 10px;
 }

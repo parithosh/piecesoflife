@@ -91,7 +91,7 @@
               {{range $.Responses}}
                 {{if eq .Response.QuestionID $q.ID}}
                   {{$hasAny = true}}
-                  <article class="response-article response-block pl-answer {{if $first}}is-first{{end}} {{if and $first (dropCap .Blocks)}}has-dropcap{{end}} {{if and $.User (eq .User.ID $.User.ID)}}is-self{{else}}is-other{{end}}"
+                  <article class="response-article response-block pl-answer {{if $first}}is-first{{end}} {{if and $.User (eq .User.ID $.User.ID)}}is-self{{else}}is-other{{end}}"
                            data-response-id="{{.Response.ID}}"
                            data-user-id="{{.User.ID}}"
                            data-user-name="{{.User.Name}}"
@@ -193,7 +193,7 @@
               </div>
 
               {{range $di, $d := $g.Days}}
-              <article class="pl-nb-day {{if eq $di 0}}pl-nb-day--first{{end}}">
+              <article class="pl-nb-day">
                 <h3 class="pl-nb-date">{{$d.DiaryDay.Day | dayDisplay}}</h3>
                 <div class="pl-nb-text">
                 {{range $d.Blocks}}
@@ -265,11 +265,16 @@
               {{if .Photos}}
               <div class="pl-collage">
                 {{range .Photos}}
-                <figure class="pl-collage-item" data-lightbox
+                <figure class="pl-collage-item">
+                  <span data-lightbox
                         data-lightbox-src="{{.FilePath | uploadURL}}"
                         data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
-                  <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                    <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                  </span>
                   {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                  <div class="comments-panel pl-collage-comments"
+                       data-dump-item-id="{{.ID}}"
+                       data-comment-count="{{index $.DumpCommentCounts .ID}}"></div>
                 </figure>
                 {{end}}
               </div>
@@ -281,6 +286,9 @@
                 <figure class="pl-collage-video">
                   <video controls preload="metadata" playsinline src="{{.FilePath | uploadURL}}"></video>
                   {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                  <div class="comments-panel pl-collage-comments"
+                       data-dump-item-id="{{.ID}}"
+                       data-comment-count="{{index $.DumpCommentCounts .ID}}"></div>
                 </figure>
                 {{end}}
               </div>
@@ -390,6 +398,10 @@
 
 {{define "scripts"}}
 <script>
+// Who's reading — social.js shows edit affordances on this member's own
+// comments.
+{{if .User}}window.POLUserID = {{.User.ID}};{{end}}
+
 // Suggest-a-question for the upcoming round (card only renders when a
 // pre-created draft exists).
 (function () {

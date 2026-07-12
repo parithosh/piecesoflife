@@ -3,10 +3,12 @@ package server
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/parithosh/piecesoflife/internal/store"
 )
@@ -226,4 +228,142 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+// handleListDumpComments lists comments on a dump photo/video.
+// GET /api/dump/{id}/comments
+func (s *Server) handleListDumpComments(w http.ResponseWriter, r *http.Request) {
+	itemID, ok := s.parseIDParam(w, r, "id", "dump item ID")
+	if !ok {
+		return
+	}
+
+	if _, ok := s.requireDumpItemInGroup(w, r, itemID); !ok {
+		return
+	}
+
+	comments, err := s.store.ListCommentsByDumpItem(r.Context(), itemID)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to list dump comments",
+			slog.Int64("dump_item_id", itemID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to list comments")
+
+		return
+	}
+
+	out := make([]commentResponse, 0, len(comments))
+	for _, c := range comments {
+		out = append(out, commentResponse{
+			CommentWithUser: c,
+			BodyHTML:        renderCommentBody(c.Body),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"comments": out})
+}
+
+// handleAddDumpComment posts a comment on a dump photo/video. Same rules as
+// everywhere else: any member of the Loop, threads one level deep.
+// POST /api/dump/{id}/comments
+func (s *Server) handleAddDumpComment(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
+	itemID, ok := s.parseIDParam(w, r, "id", "dump item ID")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Body     string `json:"body"`
+		ParentID *int64 `json:"parent_id"`
+	}
+
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	if _, ok := s.requireDumpItemInGroup(w, r, itemID); !ok {
+		return
+	}
+
+	req.Body = strings.TrimSpace(req.Body)
+	if req.Body == "" {
+		writeValidationError(w, map[string]string{"body": "Comment body is required"})
+		return
+	}
+
+	if len(req.Body) > maxCommentBytes {
+		writeValidationError(w, map[string]string{
+			"body": fmt.Sprintf("Comment too long (max %d characters)", maxCommentBytes),
+		})
+
+		return
+	}
+
+	if req.ParentID != nil {
+		parent, err := s.store.GetCommentByID(ctx, *req.ParentID)
+		if err != nil || parent.DumpItemID == nil || *parent.DumpItemID != itemID {
+			writeValidationError(w, map[string]string{
+				"parent_id": "Parent comment not found on this item",
+			})
+
+			return
+		}
+	}
+
+	id, err := s.store.CreateDumpComment(ctx, user.ID, itemID, req.ParentID, req.Body)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to create dump comment",
+			slog.Int64("dump_item_id", itemID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to post comment")
+
+		return
+	}
+
+	// Queue the contributor's digest mention.
+	if item, iErr := s.store.GetDumpItemByID(ctx, itemID); iErr == nil {
+		s.enqueueCommentNotification(ctx, item.UserID, user.ID, id)
+	}
+
+	created := store.CommentWithUser{
+		Comment: store.Comment{
+			ID:         id,
+			UserID:     user.ID,
+			DumpItemID: &itemID,
+			ParentID:   req.ParentID,
+			Body:       req.Body,
+			CreatedAt:  time.Now(),
+		},
+		AuthorName:      user.Name,
+		AuthorAvatarURL: user.AvatarURL,
+	}
+
+	writeJSON(w, http.StatusCreated, commentResponse{
+		CommentWithUser: created,
+		BodyHTML:        renderCommentBody(req.Body),
+	})
+}
+
+// requireDumpItemInGroup resolves a dump item's owning issue and verifies it
+// belongs to the current Loop — same ID-walking guard as the other comment
+// targets.
+func (s *Server) requireDumpItemInGroup(
+	w http.ResponseWriter, r *http.Request, itemID int64,
+) (*store.Issue, bool) {
+	issue, err := s.store.GetIssueByDumpItemID(r.Context(), itemID)
+	if err != nil {
+		s.writeNotFound(w, r, "Item not found")
+		return nil, false
+	}
+
+	if issue.GroupID != currentGroupID(r.Context()) {
+		s.writeNotFound(w, r, "Item not found")
+		return nil, false
+	}
+
+	return issue, true
 }

@@ -336,7 +336,12 @@ func (s *Server) handleAddDiaryComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.notifyDiaryCommentAsync(ctx, dayID, user, req.Body)
+	// Queue the notebook owner's digest mention.
+	if day, dErr := s.store.GetDiaryDayByID(ctx, dayID); dErr == nil {
+		if section, sErr := s.store.GetDiarySectionByID(ctx, day.SectionID); sErr == nil {
+			s.enqueueCommentNotification(ctx, section.UserID, user.ID, id)
+		}
+	}
 
 	created := store.CommentWithUser{
 		Comment: store.Comment{
@@ -474,45 +479,4 @@ func (s *Server) loadOwnedDiaryDay(
 	}
 
 	return day, true
-}
-
-// notifyDiaryCommentAsync mirrors notifyCommentAsync for notebook days: the
-// section owner hears about new comments on their published pages.
-func (s *Server) notifyDiaryCommentAsync(
-	ctx context.Context, dayID int64, commenter *store.User, body string,
-) {
-	groupID := currentGroupID(ctx)
-	bgCtx := context.WithoutCancel(ctx)
-
-	go func() {
-		nCtx, cancel := context.WithTimeout(bgCtx, 45*time.Second)
-		defer cancel()
-
-		day, err := s.store.GetDiaryDayByID(nCtx, dayID)
-		if err != nil {
-			s.logger.ErrorContext(nCtx, "Failed to load diary day for notification",
-				slog.Int64("day_id", dayID),
-				slog.String("error", err.Error()))
-			return
-		}
-
-		section, err := s.store.GetDiarySectionByID(nCtx, day.SectionID)
-		if err != nil {
-			s.logger.ErrorContext(nCtx, "Failed to load diary section for notification",
-				slog.Int64("section_id", day.SectionID),
-				slog.String("error", err.Error()))
-			return
-		}
-
-		owner, err := s.store.GetUserByID(nCtx, section.UserID)
-		if err != nil {
-			s.logger.ErrorContext(nCtx, "Failed to load notebook owner for notification",
-				slog.Int64("user_id", section.UserID),
-				slog.String("error", err.Error()))
-			return
-		}
-
-		contextText := fmt.Sprintf("your notebook — %s", rambleDayDisplay(day.Day))
-		s.SendCommentNotification(nCtx, groupID, owner, commenter, contextText, body, "notebook")
-	}()
 }

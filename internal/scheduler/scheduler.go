@@ -26,6 +26,7 @@ type Actions interface {
 	AutoPublishIssue(ctx context.Context, issueID int64) error
 	CreateNextIssue(ctx context.Context, groupID int64) error
 	ReconcileAutoCreate(ctx context.Context) error
+	SendCommentDigests(ctx context.Context) error
 }
 
 // Scheduler dispatches timed scheduler_events.
@@ -240,6 +241,9 @@ func (s *Scheduler) fireEvent(
 				slog.Int64("deleted", n))
 		}
 
+	case "comment_digest":
+		err = s.actions.SendCommentDigests(ctx)
+
 	default:
 		err = errInvalidEvent("unknown event type: " + ev.EventType)
 	}
@@ -256,8 +260,8 @@ func (s *Scheduler) fireEvent(
 	}
 }
 
-// scheduleDailyCleanup ensures token_cleanup and session_cleanup events
-// exist for the next UTC midnight. The UNIQUE
+// scheduleDailyCleanup ensures the daily events — token/session cleanup and
+// the comment digest — exist for the next UTC midnight. The UNIQUE
 // constraint on (issue_id, event_type, scheduled_at) makes this idempotent
 // within a given day.
 func (s *Scheduler) scheduleDailyCleanup(ctx context.Context) {
@@ -267,7 +271,7 @@ func (s *Scheduler) scheduleDailyCleanup(ctx context.Context) {
 	)
 
 	for _, eventType := range []string{
-		"token_cleanup", "session_cleanup",
+		"token_cleanup", "session_cleanup", "comment_digest",
 	} {
 		if err := s.store.CreateSchedulerEvent(ctx, nil, eventType, nextMidnight); err != nil {
 			// UNIQUE violation is expected on repeat scheduling. Only log

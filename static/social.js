@@ -11,13 +11,17 @@
     // Panels target either a response or a published notebook (diary) day;
     // the data attribute decides which comments API the panel talks to.
     const PANEL_SELECTOR =
-        '.comments-panel[data-response-id], .comments-panel[data-diary-day-id]';
+        '.comments-panel[data-response-id], .comments-panel[data-diary-day-id], ' +
+        '.comments-panel[data-dump-item-id]';
 
     function commentsEndpoint(panel) {
         if (panel.dataset.responseId) {
             return `/api/responses/${panel.dataset.responseId}/comments`;
         }
-        return `/api/diary-days/${panel.dataset.diaryDayId}/comments`;
+        if (panel.dataset.diaryDayId) {
+            return `/api/diary-days/${panel.dataset.diaryDayId}/comments`;
+        }
+        return `/api/dump/${panel.dataset.dumpItemId}/comments`;
     }
 
     // CSRF helpers (getCSRFToken/apiHeaders) come from the base layout.
@@ -79,22 +83,86 @@
         // Replies always target the top-level comment so the thread stays
         // one level deep no matter which comment the user replies to.
         const replyTarget = c.parent_id || c.id;
+        const mine = window.POLUserID && c.user_id === window.POLUserID;
         return `
-            <li class="comment-item" data-comment-id="${c.id}">
+            <li class="comment-item" data-comment-id="${c.id}"
+                data-raw-body="${escapeHtml(c.body || '')}">
                 <div class="comment-meta">
                     <strong>${escapeHtml(c.author_name)}</strong>
                     <span>${formatTimestamp(c.created_at)}</span>
+                    ${c.edited_at ? '<span class="comment-edited">(edited)</span>' : ''}
                 </div>
                 <div class="comment-body">${safeCommentHTML(c)}</div>
                 <button type="button" class="comment-reply-btn"
                         data-reply-to="${replyTarget}"
                         aria-label="Reply to ${escapeHtml(c.author_name)}">↳ reply</button>
+                ${mine ? `
+                <button type="button" class="comment-reply-btn comment-edit-btn"
+                        data-edit-comment="${c.id}"
+                        aria-label="Edit your comment">✎ edit</button>` : ''}
                 ${replies && replies.length ? `
                 <ul class="comment-replies">
                     ${replies.map(r => commentItemHTML(r, null)).join('')}
                 </ul>` : ''}
             </li>
         `;
+    }
+
+    function openEditForm(panel, btn) {
+        const item = btn.closest('.comment-item');
+        if (!item || item.querySelector(':scope > .comment-edit-form')) return;
+
+        removeReplyForm(document);
+
+        const body = item.querySelector(':scope > .comment-body');
+        const form = document.createElement('form');
+        form.className = 'comment-form comment-edit-form has-content';
+        form.dataset.editId = btn.dataset.editComment;
+        form.innerHTML = `
+            <textarea class="comment-body-input" rows="2" maxlength="4000"></textarea>
+            <div class="comment-form-actions">
+                <span class="comment-status"></span>
+                <span>
+                    <button type="button" class="comment-edit-cancel">Cancel</button>
+                    <button type="submit">Save</button>
+                </span>
+            </div>
+        `;
+        form.querySelector('.comment-body-input').value = item.dataset.rawBody || '';
+        body.hidden = true;
+        item.insertBefore(form, body.nextSibling);
+        form.querySelector('.comment-body-input')?.focus();
+    }
+
+    async function saveEdit(form) {
+        const panel = form.closest(PANEL_SELECTOR);
+        const textarea = form.querySelector('.comment-body-input');
+        const status = form.querySelector('.comment-status');
+        const body = textarea.value.trim();
+        if (!panel || !body) return;
+
+        status.textContent = 'Saving...';
+        status.dataset.state = 'pending';
+
+        try {
+            const res = await fetch(`/api/comments/${form.dataset.editId}`, {
+                method: 'PATCH',
+                headers: apiHeaders(),
+                body: JSON.stringify({ body }),
+            });
+
+            if (res.ok) {
+                await loadComments(panel);
+                return;
+            }
+
+            const data = await res.json().catch(() => ({}));
+            status.textContent = data?.error?.message || 'Failed';
+            status.dataset.state = 'error';
+        } catch {
+            status.textContent = 'Network error';
+            status.dataset.state = 'error';
+        }
     }
 
     function renderComments(panel, comments) {
@@ -318,7 +386,22 @@
     }
 
     document.addEventListener('click', ev => {
-        const replyBtn = ev.target.closest('.comment-reply-btn');
+        const editBtn = ev.target.closest('.comment-edit-btn');
+        if (editBtn) {
+            const panel = editBtn.closest(PANEL_SELECTOR);
+            if (panel) openEditForm(panel, editBtn);
+            return;
+        }
+
+        if (ev.target.closest('.comment-edit-cancel')) {
+            const form = ev.target.closest('.comment-edit-form');
+            const item = form?.closest('.comment-item');
+            item?.querySelector(':scope > .comment-body')?.removeAttribute('hidden');
+            form?.remove();
+            return;
+        }
+
+        const replyBtn = ev.target.closest('.comment-reply-btn:not(.comment-edit-btn)');
         if (replyBtn) {
             const panel = replyBtn.closest(PANEL_SELECTOR);
             if (panel) openReplyForm(panel, replyBtn);
@@ -353,6 +436,12 @@
         if (!form) return;
 
         ev.preventDefault();
+
+        if (form.classList.contains('comment-edit-form')) {
+            saveEdit(form);
+            return;
+        }
+
         postComment(form);
     });
 
