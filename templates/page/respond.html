@@ -181,6 +181,96 @@
           </div>
         </section>
 
+        {{/* ---- your rambles: attach a notebook to this issue ------ */}}
+        <section class="pl-dump pl-diary" aria-label="Your rambles">
+          <div class="pl-dump-head">
+            <div class="pl-q-num pl-dump-num" aria-hidden="true">✎</div>
+            <div class="pl-dump-head-body">
+              <h3 class="pl-q-prompt">From your notebook</h3>
+              {{if .Diary}}
+              <p class="pl-dump-sub">
+                An editable <b>copy</b> of your rambles — trim days, soften
+                sentences, drop photos. Your journal itself never changes.
+                Whatever is below gets its own notebook spread when the issue
+                is woven.
+              </p>
+              {{else}}
+              <p class="pl-dump-sub">
+                {{if gt .RambleWindowCount 0}}
+                You've rambled on <b>{{.RambleWindowCount}}
+                day{{if ne .RambleWindowCount 1}}s{{end}}</b>{{if .RambleFromLabel}}
+                since {{.RambleFromLabel}}{{end}}. Weave them in? You'll get an
+                editable copy to review first — nothing is shared until the
+                issue is published, and your journal stays private either way.
+                {{else}}
+                Keep a private note-a-day on the
+                <a href="/ramble">Ramble page</a>, and when the next round
+                opens you can weave those days into the issue — reviewed and
+                trimmed by you first.
+                {{end}}
+              </p>
+              {{end}}
+            </div>
+          </div>
+
+          {{if .Diary}}
+          {{range .DiaryDays}}
+          <div class="pl-diary-day" data-diary-day-id="{{.DiaryDay.ID}}">
+            <div class="pl-diary-day-head">
+              <span class="pl-nb-date">{{.DiaryDay.Day | dayDisplay}}</span>
+              <span class="save-status" data-diary-status></span>
+              <button type="button" class="pl-diary-day-remove"
+                      data-diary-day-remove>✕ Remove day</button>
+            </div>
+            <textarea class="pl-diary-editor" data-diary-editor
+                      placeholder="(No words for this day — only what's below)"
+>{{range .Blocks}}{{if eq .Type "text"}}{{.Content}}{{end}}{{end}}</textarea>
+            <div class="pl-ramble-media">
+              {{range .Blocks}}
+              {{if eq .Type "photo"}}
+              <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+                <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                <button type="button" class="pl-thumb-remove" data-diary-block-remove="{{.ID}}"
+                        aria-label="Remove this photo">✕</button>
+              </figure>
+              {{else if eq .Type "video"}}
+              <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+                <video src="{{.FilePath | uploadURL}}" preload="metadata" muted playsinline></video>
+                <button type="button" class="pl-thumb-remove" data-diary-block-remove="{{.ID}}"
+                        aria-label="Remove this video">✕</button>
+              </figure>
+              {{else if eq .Type "audio"}}
+              <figure class="pl-ramble-thumb pl-ramble-thumb--audio" data-block-id="{{.ID}}">
+                <audio controls preload="metadata" src="{{.FilePath | uploadURL}}"></audio>
+                <button type="button" class="pl-thumb-remove" data-diary-block-remove="{{.ID}}"
+                        aria-label="Remove this recording">✕</button>
+              </figure>
+              {{end}}
+              {{end}}
+            </div>
+          </div>
+          {{end}}
+
+          <div class="pl-q-actions">
+            {{if gt .DiaryNewCount 0}}
+            <button type="button" class="pl-chip-btn" id="diary-refresh-btn">
+              ⟲ Pull in {{.DiaryNewCount}} new day{{if ne .DiaryNewCount 1}}s{{end}}
+            </button>
+            {{end}}
+            <button type="button" class="pl-chip-btn" id="diary-detach-btn">✕ Detach from this issue</button>
+            <span class="pl-dump-status" id="diary-status" role="status" aria-live="polite"></span>
+          </div>
+          {{else}}
+          <div class="pl-q-actions">
+            <button type="button" class="pl-btn pl-btn--gold" id="diary-attach-btn"
+                    {{if eq .RambleWindowCount 0}}disabled{{end}}>
+              Share your rambles →
+            </button>
+            <span class="pl-dump-status" id="diary-status" role="status" aria-live="polite"></span>
+          </div>
+          {{end}}
+        </section>
+
         <div class="pl-submitbar">
           <p class="pl-submitbar-note">
             {{if .Submitted}}
@@ -756,6 +846,128 @@ document.querySelectorAll('.pl-record-btn').forEach(btn => {
         recordMedia(section, this.dataset.kind);
     });
 });
+
+// --- "From your notebook": attach / edit / refresh / detach -------------
+(function () {
+    const status = document.getElementById('diary-status');
+
+    function setDiaryStatus(text, isError) {
+        if (!status) return;
+        status.textContent = text;
+        status.style.color = isError ? 'var(--sindoor)' : '';
+    }
+
+    async function diaryCall(url, method) {
+        const res = await fetch(url, { method, headers: apiHeaders() });
+        if (!res.ok && res.status !== 204) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data?.error?.message || 'Something went wrong');
+        }
+    }
+
+    document.getElementById('diary-attach-btn')?.addEventListener('click', async function () {
+        this.disabled = true;
+        setDiaryStatus('Copying your rambles…');
+        try {
+            await diaryCall(`/api/issues/${issueID}/diary`, 'POST');
+            window.location.reload();
+        } catch (err) {
+            setDiaryStatus(err.message, true);
+            this.disabled = false;
+        }
+    });
+
+    document.getElementById('diary-refresh-btn')?.addEventListener('click', async function () {
+        this.disabled = true;
+        setDiaryStatus('Pulling in new days…');
+        try {
+            await diaryCall(`/api/issues/${issueID}/diary/refresh`, 'POST');
+            window.location.reload();
+        } catch (err) {
+            setDiaryStatus(err.message, true);
+            this.disabled = false;
+        }
+    });
+
+    document.getElementById('diary-detach-btn')?.addEventListener('click', async function () {
+        if (!confirm('Detach your notebook from this issue? The copies below are discarded; your journal is untouched.')) return;
+        this.disabled = true;
+        setDiaryStatus('Detaching…');
+        try {
+            await diaryCall(`/api/issues/${issueID}/diary`, 'DELETE');
+            window.location.reload();
+        } catch (err) {
+            setDiaryStatus(err.message, true);
+            this.disabled = false;
+        }
+    });
+
+    // Per-day autosave of the snapshot copies.
+    const diaryTimers = {};
+    document.querySelectorAll('[data-diary-editor]').forEach(textarea => {
+        const dayEl = textarea.closest('[data-diary-day-id]');
+        const dayID = dayEl.dataset.diaryDayId;
+        const dayStatus = dayEl.querySelector('[data-diary-status]');
+
+        textarea.addEventListener('input', () => {
+            clearTimeout(diaryTimers[dayID]);
+            if (dayStatus) { dayStatus.className = 'save-status'; dayStatus.textContent = ''; }
+            diaryTimers[dayID] = setTimeout(async () => {
+                if (dayStatus) { dayStatus.className = 'save-status saving'; dayStatus.textContent = 'Saving…'; }
+                try {
+                    const res = await fetch(`/api/diary-days/${dayID}/autosave`, {
+                        method: 'PUT',
+                        headers: apiHeaders(),
+                        body: JSON.stringify({ text: textarea.value }),
+                    });
+                    if (!res.ok) throw new Error();
+                    const data = await res.json();
+                    if (data.removed) { dayEl.remove(); return; }
+                    if (dayStatus) { dayStatus.className = 'save-status saved'; dayStatus.textContent = 'Saved'; }
+                } catch {
+                    if (dayStatus) { dayStatus.className = 'save-status error'; dayStatus.textContent = 'Save failed'; }
+                }
+            }, 1500);
+        });
+    });
+
+    // Remove a whole day from the snapshot.
+    document.querySelectorAll('[data-diary-day-remove]').forEach(btn => {
+        btn.addEventListener('click', async function () {
+            const dayEl = this.closest('[data-diary-day-id]');
+            this.disabled = true;
+            try {
+                await diaryCall(`/api/diary-days/${dayEl.dataset.diaryDayId}`, 'DELETE');
+                dayEl.remove();
+            } catch (err) {
+                setDiaryStatus(err.message, true);
+                this.disabled = false;
+            }
+        });
+    });
+
+    // Remove one media block from a snapshot day.
+    document.querySelectorAll('[data-diary-block-remove]').forEach(btn => {
+        btn.addEventListener('click', async function () {
+            this.disabled = true;
+            try {
+                await diaryCall(`/api/diary-blocks/${this.dataset.diaryBlockRemove}`, 'DELETE');
+                const fig = this.closest('[data-block-id]');
+                const dayEl = this.closest('[data-diary-day-id]');
+                fig?.remove();
+                // Server removes a day that ends up empty; mirror it.
+                if (dayEl &&
+                    !dayEl.querySelector('[data-block-id]') &&
+                    !dayEl.querySelector('[data-diary-editor]')?.value.trim()) {
+                    dayEl.remove();
+                }
+            } catch (err) {
+                setDiaryStatus(err.message, true);
+                this.disabled = false;
+            }
+        });
+    });
+})();
 
 </script>
 {{end}}

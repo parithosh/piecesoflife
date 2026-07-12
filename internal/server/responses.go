@@ -812,7 +812,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	// (prevents cross-thread injection).
 	if req.ParentID != nil {
 		parent, err := s.store.GetCommentByID(r.Context(), *req.ParentID)
-		if err != nil || parent.ResponseID != responseID {
+		if err != nil || parent.ResponseID == nil || *parent.ResponseID != responseID {
 			writeValidationError(w, map[string]string{
 				"parent_id": "Parent comment not found on this response",
 			})
@@ -837,7 +837,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		Comment: store.Comment{
 			ID:         id,
 			UserID:     user.ID,
-			ResponseID: responseID,
+			ResponseID: &responseID,
 			ParentID:   req.ParentID,
 			Body:       req.Body,
 			CreatedAt:  time.Now(),
@@ -870,8 +870,20 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The comment must live in the current Loop — isGroupAdmin only vouches
-	// for the caller's authority here, not in other Loops.
-	if _, ok := s.requireResponseInGroup(w, r, comment.ResponseID); !ok {
+	// for the caller's authority here, not in other Loops. Comments carry
+	// either a response or a notebook-day target; resolve the Loop through
+	// whichever is set.
+	switch {
+	case comment.ResponseID != nil:
+		if _, ok := s.requireResponseInGroup(w, r, *comment.ResponseID); !ok {
+			return
+		}
+	case comment.DiaryDayID != nil:
+		if _, ok := s.requireDiaryDayInGroup(w, r, *comment.DiaryDayID); !ok {
+			return
+		}
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "Comment not found")
 		return
 	}
 
@@ -918,7 +930,7 @@ func (s *Server) notifyCommentAsync(
 			questionText = question.Text
 		}
 
-		s.SendCommentNotification(nCtx, groupID, author, commenter, questionText, body, responseID)
+		s.SendCommentNotification(nCtx, groupID, author, commenter, questionText, body, "response")
 	}()
 }
 

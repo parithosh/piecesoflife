@@ -8,6 +8,18 @@
         'ul', 'ol', 'li', 'a',
     ]);
 
+    // Panels target either a response or a published notebook (diary) day;
+    // the data attribute decides which comments API the panel talks to.
+    const PANEL_SELECTOR =
+        '.comments-panel[data-response-id], .comments-panel[data-diary-day-id]';
+
+    function commentsEndpoint(panel) {
+        if (panel.dataset.responseId) {
+            return `/api/responses/${panel.dataset.responseId}/comments`;
+        }
+        return `/api/diary-days/${panel.dataset.diaryDayId}/comments`;
+    }
+
     // CSRF helpers (getCSRFToken/apiHeaders) come from the base layout.
 
     function commentLabel(count) {
@@ -49,8 +61,7 @@
 
     async function loadComments(panel) {
         try {
-            const responseID = panel.dataset.responseId;
-            const res = await fetch(`/api/responses/${responseID}/comments`);
+            const res = await fetch(commentsEndpoint(panel));
             if (!res.ok) throw new Error(`comments fetch failed: ${res.status}`);
             const data = await res.json();
             renderComments(panel, data.comments || []);
@@ -182,10 +193,9 @@
     }
 
     async function postComment(form) {
-        const panel = form.closest('.comments-panel[data-response-id]');
+        const panel = form.closest(PANEL_SELECTOR);
         if (!panel) return;
 
-        const responseID = panel.dataset.responseId;
         const textarea = form.querySelector('.comment-body-input');
         const status = form.querySelector('.comment-status');
         const submit = form.querySelector('button[type="submit"]');
@@ -201,7 +211,7 @@
         if (parentID > 0) payload.parent_id = parentID;
 
         try {
-            const res = await fetch(`/api/responses/${responseID}/comments`, {
+            const res = await fetch(commentsEndpoint(panel), {
                 method: 'POST',
                 headers: apiHeaders(),
                 body: JSON.stringify(payload),
@@ -304,13 +314,13 @@
 
     function init(root) {
         const scope = root || document;
-        scope.querySelectorAll('.comments-panel[data-response-id]').forEach(setupPanel);
+        scope.querySelectorAll(PANEL_SELECTOR).forEach(setupPanel);
     }
 
     document.addEventListener('click', ev => {
         const replyBtn = ev.target.closest('.comment-reply-btn');
         if (replyBtn) {
-            const panel = replyBtn.closest('.comments-panel[data-response-id]');
+            const panel = replyBtn.closest(PANEL_SELECTOR);
             if (panel) openReplyForm(panel, replyBtn);
             return;
         }
@@ -323,7 +333,7 @@
         const btn = ev.target.closest('.comment-toggle');
         if (!btn) return;
 
-        const panel = btn.closest('.comments-panel[data-response-id]');
+        const panel = btn.closest(PANEL_SELECTOR);
         if (panel) togglePanel(panel);
     });
 

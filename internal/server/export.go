@@ -29,6 +29,9 @@ type exportRoot struct {
 	Questions   []store.Question        `json:"questions"`
 	Responses   []exportResponse        `json:"responses"`
 	Comments    []store.CommentWithUser `json:"comments"`
+	// DiarySections are the notebook spreads members attached to this
+	// Loop's issues — snapshot copies only, never the private journals.
+	DiarySections []exportDiarySection `json:"diary_sections"`
 }
 
 type exportPrefs struct {
@@ -52,6 +55,25 @@ type exportBlock struct {
 
 	// URL is the browser-accessible path for photo blocks. Useful when the
 	// export is consumed by something that wants to fetch the images too.
+	URL string `json:"url,omitempty"`
+}
+
+type exportDiarySection struct {
+	store.DiarySection
+
+	UserName string           `json:"user_name"`
+	Days     []exportDiaryDay `json:"days"`
+}
+
+type exportDiaryDay struct {
+	store.DiaryDay
+
+	Blocks []exportDiaryBlock `json:"blocks"`
+}
+
+type exportDiaryBlock struct {
+	store.DiaryBlock
+
 	URL string `json:"url,omitempty"`
 }
 
@@ -185,6 +207,7 @@ func (s *Server) buildExportPayload(
 	questions := make([]store.Question, 0)
 	responses := make([]exportResponse, 0)
 	comments := make([]store.CommentWithUser, 0)
+	diarySections := make([]exportDiarySection, 0, 8)
 	exportIssues := make([]exportIssue, 0, len(issues))
 
 	for _, iss := range issues {
@@ -253,27 +276,68 @@ func (s *Server) buildExportPayload(
 				comments = append(comments, cs...)
 			}
 		}
+
+		// Notebook spreads attached to this issue, with their day comments.
+		groups, err := s.store.ListDiarySectionsByIssue(ctx, iss.ID)
+		if err != nil {
+			s.logger.WarnContext(ctx, "Export: list diary sections failed",
+				slog.Int64("issue_id", iss.ID),
+				slog.String("error", err.Error()))
+
+			continue
+		}
+
+		for _, g := range groups {
+			days := make([]exportDiaryDay, 0, len(g.Days))
+
+			for _, d := range g.Days {
+				blocks := make([]exportDiaryBlock, 0, len(d.Blocks))
+
+				for _, b := range d.Blocks {
+					url := ""
+					if b.FilePath != nil && b.Type != "text" {
+						url = s.uploadURL(*b.FilePath)
+					}
+
+					blocks = append(blocks, exportDiaryBlock{DiaryBlock: b, URL: url})
+				}
+
+				days = append(days, exportDiaryDay{DiaryDay: d.DiaryDay, Blocks: blocks})
+
+				cs, cErr := s.store.ListCommentsByDiaryDay(ctx, d.DiaryDay.ID)
+				if cErr == nil {
+					comments = append(comments, cs...)
+				}
+			}
+
+			diarySections = append(diarySections, exportDiarySection{
+				DiarySection: g.Section,
+				UserName:     g.UserName,
+				Days:         days,
+			})
+		}
 	}
 
 	return &exportRoot{
-		Version:     1,
-		ExportedAt:  time.Now().UTC(),
-		LoopName:    settings.LoopName,
-		Settings:    settings,
-		Users:       users,
-		Preferences: prefs,
-		Issues:      exportIssues,
-		Questions:   questions,
-		Responses:   responses,
-		Comments:    comments,
+		Version:       1,
+		ExportedAt:    time.Now().UTC(),
+		LoopName:      settings.LoopName,
+		Settings:      settings,
+		Users:         users,
+		Preferences:   prefs,
+		Issues:        exportIssues,
+		Questions:     questions,
+		Responses:     responses,
+		Comments:      comments,
+		DiarySections: diarySections,
 	}, nil
 }
 
 // writeZipUploads copies every on-disk file referenced by the payload's
-// response blocks into the archive under uploads/, preserving each file's
-// path relative to the configured upload directory. Returns how many files
-// were included and how many were skipped (missing on disk, duplicate-safe,
-// or resolving outside the upload directory).
+// response and diary blocks into the archive under uploads/, preserving each
+// file's path relative to the configured upload directory. Returns how many
+// files were included and how many were skipped (missing on disk,
+// duplicate-safe, or resolving outside the upload directory).
 func (s *Server) writeZipUploads(
 	ctx context.Context, zw *zip.Writer, payload *exportRoot,
 ) (included, skipped int) {
@@ -282,48 +346,68 @@ func (s *Server) writeZipUploads(
 
 	for _, resp := range payload.Responses {
 		for _, b := range resp.Blocks {
-			if b.FilePath == nil || *b.FilePath == "" {
-				continue
+			s.zipOneUpload(ctx, zw, base, seen, b.ID, b.FilePath,
+				&included, &skipped)
+		}
+	}
+
+	for _, section := range payload.DiarySections {
+		for _, d := range section.Days {
+			for _, b := range d.Blocks {
+				s.zipOneUpload(ctx, zw, base, seen, b.ID, b.FilePath,
+					&included, &skipped)
 			}
-
-			cleanPath := filepath.Clean(*b.FilePath)
-			if _, dup := seen[cleanPath]; dup {
-				continue
-			}
-
-			seen[cleanPath] = struct{}{}
-
-			// Reject anything that could resolve outside the upload
-			// directory — same defense as handleUploadServe and
-			// handleMementoFile.
-			rel, err := filepath.Rel(base, cleanPath)
-			if err != nil || rel == "." || rel == ".." ||
-				strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				s.logger.WarnContext(ctx, "Zip export: path outside upload dir skipped",
-					slog.Int64("block_id", b.ID))
-
-				skipped++
-
-				continue
-			}
-
-			if err := addFileToZip(zw, cleanPath, rel); err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					s.logger.WarnContext(ctx, "Zip export: upload copy failed",
-						slog.Int64("block_id", b.ID),
-						slog.String("error", err.Error()))
-				}
-
-				skipped++
-
-				continue
-			}
-
-			included++
 		}
 	}
 
 	return included, skipped
+}
+
+// zipOneUpload streams a single referenced upload into the archive, applying
+// the dedupe and path-escape defenses shared by every block source.
+func (s *Server) zipOneUpload(
+	ctx context.Context, zw *zip.Writer,
+	base string, seen map[string]struct{},
+	blockID int64, filePath *string,
+	included, skipped *int,
+) {
+	if filePath == nil || *filePath == "" {
+		return
+	}
+
+	cleanPath := filepath.Clean(*filePath)
+	if _, dup := seen[cleanPath]; dup {
+		return
+	}
+
+	seen[cleanPath] = struct{}{}
+
+	// Reject anything that could resolve outside the upload directory —
+	// same defense as handleUploadServe and handleMementoFile.
+	rel, err := filepath.Rel(base, cleanPath)
+	if err != nil || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		s.logger.WarnContext(ctx, "Zip export: path outside upload dir skipped",
+			slog.Int64("block_id", blockID))
+
+		(*skipped)++
+
+		return
+	}
+
+	if err := addFileToZip(zw, cleanPath, rel); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.logger.WarnContext(ctx, "Zip export: upload copy failed",
+				slog.Int64("block_id", blockID),
+				slog.String("error", err.Error()))
+		}
+
+		(*skipped)++
+
+		return
+	}
+
+	(*included)++
 }
 
 // writeZipExportJSON adds export.json (the same payload as the plain JSON
@@ -366,12 +450,13 @@ Contents
 --------
 export.json   Full JSON snapshot of the loop: settings, members,
               notification preferences, issues, questions, responses
-              (with their content blocks), and comments. Identical to
+              (with their content blocks), comments, and the notebook
+              (diary) spreads members attached to issues. Identical to
               the payload served by GET /api/admin/export.
 uploads/      Every uploaded file (photos, audio, video) referenced by
-              a response block, laid out with the same relative paths
-              the app stores under its upload directory. Files that no
-              longer exist on disk are skipped.
+              a response or notebook block, laid out with the same
+              relative paths the app stores under its upload directory.
+              Files that no longer exist on disk are skipped.
 
 Note
 ----

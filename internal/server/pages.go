@@ -60,6 +60,16 @@ type IssuePageData struct {
 	// DumpGroups is the photo & video dump grouped per contributor — the
 	// collage closer page. Empty means no dump page is rendered.
 	DumpGroups []DumpGroup
+	// DiaryGroups is the "From the notebooks" spread: one group per member
+	// who wove their rambles in. DiaryCommentCounts maps diary day IDs to
+	// comment counts. PageCount is questions + notebooks page (when any) +
+	// dump page (when any); DiaryIdx/DumpIdx are the 0-based page indices of
+	// the extra pages, -1 when absent.
+	DiaryGroups        []store.DiaryGroup
+	DiaryCommentCounts map[int64]int
+	PageCount          int
+	DiaryIdx           int
+	DumpIdx            int
 	// NextIssue is the pre-created upcoming round (nil when none). Members
 	// can send it question suggestions until it opens at NextIssueOpens.
 	NextIssue      *store.Issue
@@ -84,6 +94,18 @@ type RespondPageData struct {
 	// DumpItems are the member's own photo & video dump entries for this
 	// issue, shown (and managed) in the dump section before the submit bar.
 	DumpItems []store.DumpItem
+	// Diary is the member's attached ramble snapshot for this issue (nil
+	// when not attached); DiaryDays are its editable day copies.
+	Diary     *store.DiarySection
+	DiaryDays []store.DiaryDayWithBlocks
+	// RambleWindowCount is how many journal days fall in this Loop's diary
+	// window ("since the last issue") — the opt-in card's pitch. FromLabel
+	// describes the window's start for display; empty when nothing has been
+	// published yet. DiaryNewCount counts journal days written after the
+	// section was attached/refreshed.
+	RambleWindowCount int
+	RambleFromLabel   string
+	DiaryNewCount     int
 }
 
 // ProfilePageData is the template data for the user profile page.
@@ -350,6 +372,40 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 
 	dumpGroups := groupDumpItems(dumpItems)
 
+	// The notebooks spread: diary sections members wove in, plus per-day
+	// comment counts (day comments use the same panels answers do).
+	diaryGroups, err := s.store.ListDiarySectionsByIssue(ctx, targetIssue.ID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to list diary sections",
+			slog.Int64("issue_id", targetIssue.ID),
+			slog.String("error", err.Error()))
+		diaryGroups = make([]store.DiaryGroup, 0)
+	}
+
+	diaryCommentCounts := make(map[int64]int, 16)
+
+	for gi := range diaryGroups {
+		for di := range diaryGroups[gi].Days {
+			day := &diaryGroups[gi].Days[di]
+
+			for bi := range day.Blocks {
+				if day.Blocks[bi].Type == "photo" {
+					photoCount++
+				}
+			}
+
+			comments, cErr := s.store.ListCommentsByDiaryDay(ctx, day.DiaryDay.ID)
+			if cErr != nil {
+				s.logger.WarnContext(ctx, "Failed to count diary comments",
+					slog.Int64("day_id", day.DiaryDay.ID),
+					slog.String("error", cErr.Error()))
+				continue
+			}
+
+			diaryCommentCounts[day.DiaryDay.ID] = len(comments)
+		}
+	}
+
 	// Surface the pre-created next round so readers can send it question
 	// suggestions while the current issue is fresh in their minds.
 	var nextIssue *store.Issue
@@ -364,10 +420,19 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Honor ?q=N deep links server-side so the correct question renders
-	// (and the pager links are right) before any JavaScript runs. The dump
-	// collage, when present, is one extra page after the last question.
+	// (and the pager links are right) before any JavaScript runs. Extra
+	// pages come after the questions: the notebooks spread (when anyone
+	// wove theirs in), then the dump collage as the closer.
 	pageCount := len(questions)
+	diaryIdx, dumpIdx := -1, -1
+
+	if len(diaryGroups) > 0 {
+		diaryIdx = pageCount
+		pageCount++
+	}
+
 	if len(dumpGroups) > 0 {
+		dumpIdx = pageCount
 		pageCount++
 	}
 
@@ -380,19 +445,24 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := IssuePageData{
-		PageData:       s.newPageData(r),
-		Issue:          *targetIssue,
-		Questions:      questions,
-		Responses:      responses,
-		CommentCounts:  commentCounts,
-		PeopleCount:    len(people),
-		AnswerCount:    len(responses),
-		PhotoCount:     photoCount,
-		CurrentQ:       currentQ,
-		CurrentQIdx:    currentQ - 1,
-		DumpGroups:     dumpGroups,
-		NextIssue:      nextIssue,
-		NextIssueOpens: nextIssueOpens,
+		PageData:           s.newPageData(r),
+		Issue:              *targetIssue,
+		Questions:          questions,
+		Responses:          responses,
+		CommentCounts:      commentCounts,
+		PeopleCount:        len(people),
+		AnswerCount:        len(responses),
+		PhotoCount:         photoCount,
+		CurrentQ:           currentQ,
+		CurrentQIdx:        currentQ - 1,
+		DumpGroups:         dumpGroups,
+		DiaryGroups:        diaryGroups,
+		DiaryCommentCounts: diaryCommentCounts,
+		PageCount:          pageCount,
+		DiaryIdx:           diaryIdx,
+		DumpIdx:            dumpIdx,
+		NextIssue:          nextIssue,
+		NextIssueOpens:     nextIssueOpens,
 	}
 
 	s.renderPage(w, "issue.html", data)
@@ -510,7 +580,62 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 		DumpItems: dumpItems,
 	}
 
+	s.loadRespondDiary(ctx, issue, user.ID, &data)
+
 	s.renderPage(w, "respond.html", data)
+}
+
+// loadRespondDiary fills the respond page's ramble card: either the pitch
+// (how many journal days the diary window holds) or the attached section's
+// editable day copies plus the pull-in count. All failures are non-fatal —
+// the editor renders without the card's numbers rather than not at all.
+func (s *Server) loadRespondDiary(
+	ctx context.Context, issue *store.Issue, userID int64, data *RespondPageData,
+) {
+	fromDay, throughDay := s.diaryWindow(ctx, issue.GroupID)
+
+	if fromDay != "" {
+		data.RambleFromLabel = rambleDayDisplay(fromDay)
+	}
+
+	section, err := s.store.GetDiarySection(ctx, issue.ID, userID)
+	if err != nil {
+		// Not attached yet: pitch the window.
+		count, cErr := s.store.CountRambleDaysBetween(ctx, userID, fromDay, throughDay)
+		if cErr != nil {
+			s.logger.WarnContext(ctx, "Failed to count ramble window",
+				slog.Int64("user_id", userID),
+				slog.String("error", cErr.Error()))
+			return
+		}
+
+		data.RambleWindowCount = count
+
+		return
+	}
+
+	data.Diary = section
+
+	days, err := s.store.ListDiaryDays(ctx, section.ID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to list diary days for respond page",
+			slog.Int64("section_id", section.ID),
+			slog.String("error", err.Error()))
+		days = make([]store.DiaryDayWithBlocks, 0)
+	}
+
+	data.DiaryDays = days
+
+	newCount, err := s.store.CountPullableRambleDays(
+		ctx, userID, section.ID, throughDay)
+	if err != nil {
+		s.logger.WarnContext(ctx, "Failed to count new ramble days",
+			slog.Int64("user_id", userID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	data.DiaryNewCount = newCount
 }
 
 // handleAlbumsPage renders the photo albums page.
@@ -1032,16 +1157,17 @@ func truncateWords(s string, max int) string {
 // mediaEntry is one item on the Media page: any photo, video, or audio ever
 // shared into a published issue — answer blocks and photo-dump items alike.
 type mediaEntry struct {
-	Kind      string    `json:"kind"` // photo | audio | video
-	URL       string    `json:"url"`
-	Caption   *string   `json:"caption"`
-	CreatedAt time.Time `json:"created_at"`
-	UserName  string    `json:"user_name"`
-	FromDump  bool      `json:"from_dump"`
-	IssueID   int64     `json:"issue_id"`
-	Title     *string   `json:"title"`
-	Month     int       `json:"month"`
-	Year      int       `json:"year"`
+	Kind         string    `json:"kind"` // photo | audio | video
+	URL          string    `json:"url"`
+	Caption      *string   `json:"caption"`
+	CreatedAt    time.Time `json:"created_at"`
+	UserName     string    `json:"user_name"`
+	FromDump     bool      `json:"from_dump"`
+	FromNotebook bool      `json:"from_notebook"`
+	IssueID      int64     `json:"issue_id"`
+	Title        *string   `json:"title"`
+	Month        int       `json:"month"`
+	Year         int       `json:"year"`
 }
 
 // handleListAlbums returns every media item (photos, videos, audio — from
@@ -1132,6 +1258,39 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 				Month:     issue.Month,
 				Year:      issue.Year,
 			})
+		}
+
+		// Published notebook media. Only what members wove into the issue —
+		// unattached journal media never appears here.
+		diaryGroups, err := s.store.ListDiarySectionsByIssue(ctx, issue.ID)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to list diary sections for album",
+				slog.Int64("issue_id", issue.ID),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		for _, g := range diaryGroups {
+			for _, d := range g.Days {
+				for _, b := range d.Blocks {
+					if b.Type == "text" || b.FilePath == nil || *b.FilePath == "" {
+						continue
+					}
+
+					media = append(media, mediaEntry{
+						Kind:         b.Type,
+						URL:          s.uploadURL(*b.FilePath),
+						Caption:      b.Caption,
+						CreatedAt:    b.CreatedAt,
+						UserName:     g.UserName,
+						FromNotebook: true,
+						IssueID:      issue.ID,
+						Title:        issue.Title,
+						Month:        issue.Month,
+						Year:         issue.Year,
+					})
+				}
+			}
 		}
 	}
 

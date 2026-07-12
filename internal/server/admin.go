@@ -33,6 +33,10 @@ type AdminDashboardData struct {
 	// have a response to it, powering the "already answered" warning.
 	Questions       []store.Question
 	QuestionAnswers map[int64]int
+	// RambleCounts maps member ID → journal days written in the current
+	// diary window ("since the last issue") — a pulse on whether the Ramble
+	// feature is being used. Counts only; content stays private.
+	RambleCounts map[int64]int
 }
 
 // AdminMembersData is the template data for the member management page.
@@ -107,6 +111,7 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	var progress *store.SubmissionProgress
 	var questions []store.Question
 	var questionAnswers map[int64]int
+	rambleCounts := make(map[int64]int, 8)
 
 	if currentIssue != nil {
 		progress, err = s.store.GetSubmissionProgress(ctx, currentIssue.ID)
@@ -114,6 +119,26 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 			s.logger.ErrorContext(ctx, "Failed to get submission progress",
 				slog.Int64("issue_id", currentIssue.ID),
 				slog.String("error", err.Error()))
+		}
+
+		// A per-member pulse on the Ramble feature: how many journal days
+		// fall in this round's diary window. Counts only — never content.
+		if progress != nil {
+			fromDay, throughDay := s.diaryWindow(ctx, groupID)
+
+			for _, m := range progress.Members {
+				n, cErr := s.store.CountRambleDaysBetween(
+					ctx, m.User.ID, fromDay, throughDay)
+				if cErr != nil {
+					s.logger.WarnContext(ctx, "Failed to count member rambles",
+						slog.Int64("user_id", m.User.ID),
+						slog.String("error", cErr.Error()))
+
+					continue
+				}
+
+				rambleCounts[m.User.ID] = n
+			}
 		}
 
 		questions, err = s.store.ListQuestionsByIssue(ctx, currentIssue.ID)
@@ -162,6 +187,7 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		NextIssueOpens:  nextIssueOpens,
 		Questions:       questions,
 		QuestionAnswers: questionAnswers,
+		RambleCounts:    rambleCounts,
 	}
 
 	s.renderPage(w, "dashboard.html", data)

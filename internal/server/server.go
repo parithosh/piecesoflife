@@ -306,6 +306,25 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("POST /api/responses/{id}/comments", groupMW(s.handleAddComment))
 	s.mux.Handle("DELETE /api/comments/{id}", groupMW(s.handleDeleteComment))
 
+	// Ramble — the private journal. Person-scoped: authMW only, no Loop
+	// context required.
+	s.mux.Handle("GET /ramble", authMW(s.handleRamblePage))
+	s.mux.Handle("GET /api/ramble/{day}", authMW(s.handleGetRambleDay))
+	s.mux.Handle("PUT /api/ramble/{day}/autosave", authMW(s.handleRambleAutosave))
+	s.mux.Handle("POST /api/ramble/{day}/media", authMW(s.handleRambleMediaUpload))
+	s.mux.Handle("DELETE /api/ramble/blocks/{id}", authMW(s.handleDeleteRambleBlock))
+	s.mux.Handle("GET /api/me/ramble/export", authMW(s.handleRambleExport))
+
+	// Diary sections — journal snapshots attached to an issue (Loop-scoped).
+	s.mux.Handle("POST /api/issues/{id}/diary", groupMW(s.handleAttachDiary))
+	s.mux.Handle("POST /api/issues/{id}/diary/refresh", groupMW(s.handleRefreshDiary))
+	s.mux.Handle("DELETE /api/issues/{id}/diary", groupMW(s.handleDetachDiary))
+	s.mux.Handle("PUT /api/diary-days/{id}/autosave", groupMW(s.handleDiaryDayAutosave))
+	s.mux.Handle("DELETE /api/diary-days/{id}", groupMW(s.handleDeleteDiaryDay))
+	s.mux.Handle("DELETE /api/diary-blocks/{id}", groupMW(s.handleDeleteDiaryBlock))
+	s.mux.Handle("GET /api/diary-days/{id}/comments", groupMW(s.handleListDiaryComments))
+	s.mux.Handle("POST /api/diary-days/{id}/comments", groupMW(s.handleAddDiaryComment))
+
 	// Albums API.
 	s.mux.Handle("GET /api/albums", groupMW(s.handleListAlbums))
 }
@@ -343,6 +362,7 @@ func (s *Server) loadTemplates() {
 		"join":          strings.Join,
 		"letterAvatar":  letterAvatar,
 		"questionWord":  questionWord,
+		"dayDisplay":    rambleDayDisplay,
 		"dropCap":       dropCap,
 		"jsonMarshal":   jsonMarshal,
 		"categoryLabel": categoryLabel,

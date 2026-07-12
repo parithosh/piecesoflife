@@ -32,6 +32,13 @@ editing, deadline extension, publish-now. Nothing gets lost afterwards:
 every photo, video, and audio clip ever shared stays browsable under
 Media, grouped by issue.
 
+Between rounds there's **Ramble** — one private page per day for whatever
+crossed your mind, in words, photos, video, or voice notes. Nobody sees a
+word of it unless, when a round opens, you weave those days into the
+issue: you get an editable copy to trim first (the journal itself never
+changes), and it's published as a "From the notebooks" spread where every
+day carries its own comment thread.
+
 It reads just as well on a phone, login is passwordless (email magic
 links), everything exports as JSON or a full ZIP — and one instance can
 host **several circles**, each with its own members, rounds, and settings,

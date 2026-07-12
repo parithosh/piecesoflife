@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -176,6 +177,29 @@ func (s *Store) GetUpcomingDraftIssue(ctx context.Context, groupID int64) (*Issu
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting upcoming draft issue: %w", err)
+	}
+
+	return iss, nil
+}
+
+// GetLatestPublishedIssue returns the group's most recently published issue,
+// or (nil, nil) when nothing has been published yet. The Ramble diary window
+// ("your notes since the last issue") starts at its publish date.
+func (s *Store) GetLatestPublishedIssue(
+	ctx context.Context, groupID int64,
+) (*Issue, error) {
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT `+issueColumns+`
+		 FROM issues
+		 WHERE group_id = ? AND status = 'published' AND published_at IS NOT NULL
+		 ORDER BY published_at DESC
+		 LIMIT 1`, groupID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting latest published issue: %w", err)
 	}
 
 	return iss, nil

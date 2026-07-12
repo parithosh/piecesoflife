@@ -819,14 +819,15 @@ func nextIssueOpenTime(currentOpen time.Time, frequency string, now time.Time) t
 	return next
 }
 
-// SendCommentNotification delivers a "new comment on your response" email
-// to the author of the response that was commented on. Fire-and-forget.
-// Skipped if the author commented on their own response or has the
-// comment_notify preference disabled.
+// SendCommentNotification delivers a "new comment on your <noun>" email to
+// the author of the response or notebook day that was commented on —
+// subjectNoun is "response" or "notebook". Fire-and-forget. Skipped if the
+// author commented on their own content or has the comment_notify
+// preference disabled.
 func (s *Server) SendCommentNotification(
 	ctx context.Context, groupID int64,
 	responseAuthor *store.User, commenter *store.User,
-	questionText, commentBody string, responseID int64,
+	questionText, commentBody, subjectNoun string,
 ) {
 	if responseAuthor == nil || commenter == nil {
 		return
@@ -856,7 +857,10 @@ func (s *Server) SendCommentNotification(
 	}
 
 	authURL := fmt.Sprintf("%s/?auth=%s&g=%d", s.config.BaseURL, raw, groupID)
-	subject := fmt.Sprintf("%s commented on your response", commenter.Name)
+	if subjectNoun == "" {
+		subjectNoun = "response"
+	}
+	subject := fmt.Sprintf("%s commented on your %s", commenter.Name, subjectNoun)
 	body := s.renderCommentEmail(
 		settings.LoopName, responseAuthor.Name, commenter.Name,
 		questionText, commentBody, authURL,

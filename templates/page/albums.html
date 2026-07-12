@@ -47,7 +47,8 @@ function cardHtml(item) {
     const name = escapeHtml(item.user_name || '');
     const url = escapeHtml(item.url || '');
     const month = `${item.year}-${String(item.month).padStart(2, '0')}`;
-    const dumpTag = item.from_dump ? '<span class="album-dump-tag">dump</span>' : '';
+    const dumpTag = item.from_dump ? '<span class="album-dump-tag">dump</span>'
+        : item.from_notebook ? '<span class="album-dump-tag">notebook</span>' : '';
     const captionHtml = caption ? `<div class="album-caption">${caption}</div>` : '';
     const meta = `
             <figcaption>
