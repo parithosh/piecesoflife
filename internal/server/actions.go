@@ -890,11 +890,17 @@ func (s *Server) sendCommentDigest(
 
 	var groupID *int64
 
+	anyOwned := false
+
 	for _, p := range batch {
-		label, gid := s.commentContextLabel(ctx, p)
+		label, gid, owned := s.commentContextLabel(ctx, p)
 		if groupID == nil && gid != 0 {
 			g := gid
 			groupID = &g
+		}
+
+		if owned {
+			anyOwned = true
 		}
 
 		excerpt := p.Body
@@ -925,9 +931,13 @@ func (s *Server) sendCommentDigest(
 
 	authURL := fmt.Sprintf("%s/?auth=%s&g=%d", s.config.BaseURL, raw, gParam)
 
-	subject := fmt.Sprintf("%d new comments on your pieces", len(items))
+	subject := fmt.Sprintf("%d new comments for you", len(items))
 	if len(items) == 1 {
-		subject = fmt.Sprintf("%s commented on your piece", items[0].Commenter)
+		if anyOwned {
+			subject = fmt.Sprintf("%s commented on your piece", items[0].Commenter)
+		} else {
+			subject = fmt.Sprintf("%s replied in a thread you're in", items[0].Commenter)
+		}
 	}
 
 	body := s.renderEmail("comment_digest.html", map[string]any{
@@ -972,12 +982,14 @@ func (s *Server) sendCommentDigest(
 	return true
 }
 
-// commentContextLabel describes what a queued comment landed on ("your
-// answer to …", "your notebook — …", "your photo in the dump") plus the
-// Loop it belongs to, and returns that Loop's ID for the sign-in link.
+// commentContextLabel describes what a queued comment landed on — phrased
+// for the recipient: "your answer to …" when they own the piece, "Meera's
+// answer to …" when they're a thread participant on someone else's. Returns
+// the Loop's ID for the sign-in link and whether the recipient owns the
+// piece.
 func (s *Server) commentContextLabel(
 	ctx context.Context, p store.PendingCommentNotification,
-) (string, int64) {
+) (label string, groupID int64, ownedByRecipient bool) {
 	loopName := func(groupID int64) string {
 		settings, err := s.store.GetSettings(ctx, groupID)
 		if err != nil {
@@ -987,17 +999,35 @@ func (s *Server) commentContextLabel(
 		return settings.LoopName
 	}
 
+	// possessive renders "your" for the recipient's own piece and
+	// "<owner>'s" for anyone else's.
+	possessive := func(ownerID int64) string {
+		if ownerID == p.RecipientID {
+			ownedByRecipient = true
+			return "your"
+		}
+
+		owner, err := s.store.GetUserByID(ctx, ownerID)
+		if err != nil {
+			return "a friend's"
+		}
+
+		return owner.Name + "'s"
+	}
+
 	switch {
 	case p.ResponseID != nil:
 		issue, err := s.store.GetIssueByResponseID(ctx, *p.ResponseID)
 		if err != nil {
-			return "your answer", 0
+			return "an answer", 0, false
 		}
 
-		label := "your answer"
+		label = "an answer"
 		if resp, rErr := s.store.GetResponseByID(ctx, *p.ResponseID); rErr == nil {
+			whose := possessive(resp.UserID)
+			label = whose + " answer"
 			if q, qErr := s.store.GetQuestionByID(ctx, resp.QuestionID); qErr == nil {
-				label = fmt.Sprintf("your answer to “%s”", q.Text)
+				label = fmt.Sprintf("%s answer to “%s”", whose, q.Text)
 			}
 		}
 
@@ -1005,44 +1035,48 @@ func (s *Server) commentContextLabel(
 			label += " · " + name
 		}
 
-		return label, issue.GroupID
+		return label, issue.GroupID, ownedByRecipient
 
 	case p.DiaryDayID != nil:
 		issue, err := s.store.GetIssueByDiaryDayID(ctx, *p.DiaryDayID)
 		if err != nil {
-			return "your notebook", 0
+			return "a notebook", 0, false
 		}
 
-		label := "your notebook"
+		label = "a notebook"
 		if day, dErr := s.store.GetDiaryDayByID(ctx, *p.DiaryDayID); dErr == nil {
-			label = "your notebook — " + rambleDayDisplay(day.Day)
+			if section, sErr := s.store.GetDiarySectionByID(ctx, day.SectionID); sErr == nil {
+				label = fmt.Sprintf("%s notebook — %s",
+					possessive(section.UserID), rambleDayDisplay(day.Day))
+			}
 		}
 
 		if name := loopName(issue.GroupID); name != "" {
 			label += " · " + name
 		}
 
-		return label, issue.GroupID
+		return label, issue.GroupID, ownedByRecipient
 
 	case p.DumpItemID != nil:
 		issue, err := s.store.GetIssueByDumpItemID(ctx, *p.DumpItemID)
 		if err != nil {
-			return "your photo & video dump", 0
+			return "the photo & video dump", 0, false
 		}
 
-		label := "your piece in the photo & video dump"
+		label = "the photo & video dump"
 		if item, iErr := s.store.GetDumpItemByID(ctx, *p.DumpItemID); iErr == nil {
-			label = fmt.Sprintf("your %s in the photo & video dump", item.Kind)
+			label = fmt.Sprintf("%s %s in the photo & video dump",
+				possessive(item.UserID), item.Kind)
 		}
 
 		if name := loopName(issue.GroupID); name != "" {
 			label += " · " + name
 		}
 
-		return label, issue.GroupID
+		return label, issue.GroupID, ownedByRecipient
 	}
 
-	return "your piece", 0
+	return "a piece", 0, false
 }
 
 // renderReminderEmail builds the reminder email via reminder.html.

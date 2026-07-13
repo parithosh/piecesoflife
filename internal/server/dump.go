@@ -326,7 +326,7 @@ func (s *Server) handleAddDumpComment(w http.ResponseWriter, r *http.Request) {
 
 	// Queue the contributor's digest mention.
 	if item, iErr := s.store.GetDumpItemByID(ctx, itemID); iErr == nil {
-		s.enqueueCommentNotification(ctx, item.UserID, user.ID, id)
+		s.enqueueCommentNotifications(ctx, item.UserID, user.ID, id, req.ParentID)
 	}
 
 	created := store.CommentWithUser{

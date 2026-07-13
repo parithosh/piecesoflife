@@ -25,6 +25,40 @@ type PendingCommentNotification struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// ListThreadParticipants returns the distinct authors of a comment thread —
+// the top-level comment plus every reply under it. Threads are one level
+// deep, so this is exactly "everyone who wrote in this conversation".
+func (s *Store) ListThreadParticipants(
+	ctx context.Context, topLevelCommentID int64,
+) ([]int64, error) {
+	rows, err := s.read.QueryContext(ctx,
+		`SELECT DISTINCT user_id FROM comments
+		 WHERE id = ? OR parent_id = ?`,
+		topLevelCommentID, topLevelCommentID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing thread participants: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]int64, 0, 8)
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning thread participant: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating thread participants: %w", err)
+	}
+
+	return ids, nil
+}
+
 // EnqueueCommentNotification queues a digest row for the owner of the
 // commented content. Duplicate (recipient, comment) pairs are ignored.
 func (s *Store) EnqueueCommentNotification(

@@ -339,7 +339,7 @@ func (s *Server) handleAddDiaryComment(w http.ResponseWriter, r *http.Request) {
 	// Queue the notebook owner's digest mention.
 	if day, dErr := s.store.GetDiaryDayByID(ctx, dayID); dErr == nil {
 		if section, sErr := s.store.GetDiarySectionByID(ctx, day.SectionID); sErr == nil {
-			s.enqueueCommentNotification(ctx, section.UserID, user.ID, id)
+			s.enqueueCommentNotifications(ctx, section.UserID, user.ID, id, req.ParentID)
 		}
 	}
 

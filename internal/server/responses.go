@@ -831,7 +831,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.enqueueCommentNotification(r.Context(), resp.UserID, user.ID, id)
+	s.enqueueCommentNotifications(r.Context(), resp.UserID, user.ID, id, req.ParentID)
 
 	created := store.CommentWithUser{
 		Comment: store.Comment{
@@ -983,21 +983,48 @@ func (s *Server) requireCommentInGroup(
 	}
 }
 
-// enqueueCommentNotification queues a digest row for the commented content's
-// owner — the daily comment_digest event turns the queue into at most one
-// email per recipient. Self-comments never queue, and failures only cost a
+// enqueueCommentNotifications queues digest rows for everyone who should
+// hear about a new comment: the content owner always, and — when the
+// comment is a reply — everyone who wrote in that thread. Other threads on
+// the same piece are other conversations and stay quiet; the commenter
+// never hears about their own words. The daily comment_digest event turns
+// the queue into at most one email per recipient, and failures only cost a
 // digest mention, so they log rather than fail the comment.
-func (s *Server) enqueueCommentNotification(
-	ctx context.Context, ownerID, commenterID, commentID int64,
+func (s *Server) enqueueCommentNotifications(
+	ctx context.Context, ownerID, commenterID, commentID int64, parentID *int64,
 ) {
-	if ownerID == commenterID {
-		return
+	recipients := map[int64]struct{}{ownerID: {}}
+
+	if parentID != nil {
+		// Replies target the thread's top-level comment; walk one hop up in
+		// case a crafted request nested deeper.
+		top := *parentID
+		if parent, err := s.store.GetCommentByID(ctx, top); err == nil &&
+			parent.ParentID != nil {
+			top = *parent.ParentID
+		}
+
+		participants, err := s.store.ListThreadParticipants(ctx, top)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to list thread participants",
+				slog.Int64("comment_id", commentID),
+				slog.String("error", err.Error()))
+		}
+
+		for _, id := range participants {
+			recipients[id] = struct{}{}
+		}
 	}
 
-	if err := s.store.EnqueueCommentNotification(ctx, ownerID, commentID); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to enqueue comment notification",
-			slog.Int64("comment_id", commentID),
-			slog.String("error", err.Error()))
+	delete(recipients, commenterID)
+
+	for id := range recipients {
+		if err := s.store.EnqueueCommentNotification(ctx, id, commentID); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to enqueue comment notification",
+				slog.Int64("comment_id", commentID),
+				slog.Int64("recipient_id", id),
+				slog.String("error", err.Error()))
+		}
 	}
 }
 
