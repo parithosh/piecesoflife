@@ -26,6 +26,7 @@ type Actions interface {
 	AutoPublishIssue(ctx context.Context, issueID int64) error
 	CreateNextIssue(ctx context.Context, groupID int64) error
 	ReconcileAutoCreate(ctx context.Context) error
+	SendCommentDigests(ctx context.Context) error
 }
 
 // Scheduler dispatches timed scheduler_events.
@@ -76,10 +77,8 @@ func (s *Scheduler) Start(parent context.Context) {
 
 		lastReconcile := time.Now()
 
-		// 2. Make sure the daily cleanup events are queued. If the app has
-		//    been running for a while without these, this is a no-op after
-		//    the first run thanks to the UNIQUE(issue_id, event_type,
-		//    scheduled_at) constraint.
+		// 2. Make sure the daily cleanup events are queued. Idempotent —
+		//    EnsureDailyEvent inserts nothing when the event already exists.
 		s.scheduleDailyCleanup(ctx)
 
 		ticker := time.NewTicker(s.tickInterval)
@@ -141,7 +140,8 @@ func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {
 	}
 
 	// Reschedule the daily cleanup trio after a tick so the next day's
-	// events exist. Cheap — UNIQUE prevents duplicates.
+	// events exist. Cheap — EnsureDailyEvent is a deduped no-op once the
+	// events are queued.
 	if !startup {
 		s.scheduleDailyCleanup(ctx)
 	}
@@ -240,6 +240,9 @@ func (s *Scheduler) fireEvent(
 				slog.Int64("deleted", n))
 		}
 
+	case "comment_digest":
+		err = s.actions.SendCommentDigests(ctx)
+
 	default:
 		err = errInvalidEvent("unknown event type: " + ev.EventType)
 	}
@@ -256,10 +259,10 @@ func (s *Scheduler) fireEvent(
 	}
 }
 
-// scheduleDailyCleanup ensures token_cleanup and session_cleanup events
-// exist for the next UTC midnight. The UNIQUE
-// constraint on (issue_id, event_type, scheduled_at) makes this idempotent
-// within a given day.
+// scheduleDailyCleanup ensures the daily events — token/session cleanup and
+// the comment digest — exist for the next UTC midnight. Idempotent:
+// EnsureDailyEvent dedupes via the partial unique index on issue-less
+// events, so repeat calls insert nothing and an error here is a real error.
 func (s *Scheduler) scheduleDailyCleanup(ctx context.Context) {
 	now := time.Now().UTC()
 	nextMidnight := time.Date(
@@ -267,13 +270,10 @@ func (s *Scheduler) scheduleDailyCleanup(ctx context.Context) {
 	)
 
 	for _, eventType := range []string{
-		"token_cleanup", "session_cleanup",
+		"token_cleanup", "session_cleanup", "comment_digest",
 	} {
-		if err := s.store.CreateSchedulerEvent(ctx, nil, eventType, nextMidnight); err != nil {
-			// UNIQUE violation is expected on repeat scheduling. Only log
-			// if the error message doesn't look like a uniqueness error.
-			s.logger.DebugContext(ctx, "Daily cleanup create returned error "+
-				"(usually UNIQUE — benign)",
+		if err := s.store.EnsureDailyEvent(ctx, eventType, nextMidnight); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to schedule daily event",
 				slog.String("event_type", eventType),
 				slog.String("error", err.Error()),
 			)

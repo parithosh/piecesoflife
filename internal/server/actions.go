@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/parithosh/piecesoflife/internal/auth"
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -819,73 +820,275 @@ func nextIssueOpenTime(currentOpen time.Time, frequency string, now time.Time) t
 	return next
 }
 
-// SendCommentNotification delivers a "new comment on your response" email
-// to the author of the response that was commented on. Fire-and-forget.
-// Skipped if the author commented on their own response or has the
-// comment_notify preference disabled.
-func (s *Server) SendCommentNotification(
-	ctx context.Context, groupID int64,
-	responseAuthor *store.User, commenter *store.User,
-	questionText, commentBody string, responseID int64,
-) {
-	if responseAuthor == nil || commenter == nil {
-		return
+// SendCommentDigests drains the comment-notification queue into at most one
+// email per recipient — a chatty newsletter must not mean an inbox full of
+// per-comment pings. Fired daily by the comment_digest scheduler event.
+// Rows for a recipient whose send fails stay queued and ride the next
+// digest; recipients with comment_notify off are drained silently.
+func (s *Server) SendCommentDigests(ctx context.Context) error {
+	pending, err := s.store.ListPendingCommentNotifications(ctx)
+	if err != nil {
+		return fmt.Errorf("listing pending comment notifications: %w", err)
 	}
 
-	if responseAuthor.ID == commenter.ID {
-		return
+	if len(pending) == 0 {
+		return nil
 	}
 
-	prefs, err := s.store.GetNotificationPreferences(ctx, responseAuthor.ID)
+	// Rows arrive ordered by recipient — walk them in batches.
+	sent := 0
+
+	for start := 0; start < len(pending); {
+		end := start
+		for end < len(pending) &&
+			pending[end].RecipientID == pending[start].RecipientID {
+			end++
+		}
+
+		if s.sendCommentDigest(ctx, pending[start:end]) {
+			sent++
+		}
+
+		start = end
+	}
+
+	s.logger.InfoContext(ctx, "Comment digests processed",
+		slog.Int("pending_rows", len(pending)),
+		slog.Int("digests_sent", sent))
+
+	return nil
+}
+
+// sendCommentDigest builds and delivers one recipient's digest. Reports
+// whether an email was actually handed to the mailer.
+func (s *Server) sendCommentDigest(
+	ctx context.Context, batch []store.PendingCommentNotification,
+) bool {
+	recipient := batch[0]
+
+	ids := make([]int64, 0, len(batch))
+	for _, p := range batch {
+		ids = append(ids, p.NotificationID)
+	}
+
+	// A failed preference read deliberately falls through to sending:
+	// missing one mute is recoverable (the email carries its own way out),
+	// silently dropping a wanted digest is not.
+	prefs, err := s.store.GetNotificationPreferences(ctx, recipient.RecipientID)
 	if err == nil && prefs != nil && !prefs.CommentNotify {
-		return
+		if err := s.store.DeleteCommentNotifications(ctx, ids); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to drain muted digest rows",
+				slog.String("error", err.Error()))
+		}
+
+		return false
 	}
 
-	settings, err := s.store.GetSettings(ctx, groupID)
+	type digestItem struct {
+		Commenter string
+		Context   string
+		Excerpt   string
+	}
+
+	items := make([]digestItem, 0, len(batch))
+
+	var groupID *int64
+
+	anyOwned := false
+
+	for _, p := range batch {
+		label, gid, owned := s.commentContextLabel(ctx, p)
+		if groupID == nil && gid != 0 {
+			g := gid
+			groupID = &g
+		}
+
+		if owned {
+			anyOwned = true
+		}
+
+		excerpt := p.Body
+		if len(excerpt) > 240 {
+			// Cut on a rune boundary — a byte slice mid-character would
+			// put a � in the email.
+			cut := 240
+			for cut > 0 && !utf8.RuneStart(excerpt[cut]) {
+				cut--
+			}
+
+			excerpt = strings.TrimSpace(excerpt[:cut]) + "…"
+		}
+
+		items = append(items, digestItem{
+			Commenter: p.CommenterName,
+			Context:   label,
+			Excerpt:   excerpt,
+		})
+	}
+
+	raw, err := s.mintEmailCTAToken(ctx, recipient.RecipientID)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings for comment notification",
+		s.logger.ErrorContext(ctx, "Failed to mint digest token",
+			slog.Int64("user_id", recipient.RecipientID),
 			slog.String("error", err.Error()))
-		return
+
+		return false // rows stay queued for the next digest
 	}
 
-	raw, err := s.mintEmailCTAToken(ctx, responseAuthor.ID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to mint comment notification token",
-			slog.String("error", err.Error()))
-		return
+	gParam := int64(1)
+	if groupID != nil {
+		gParam = *groupID
 	}
 
-	authURL := fmt.Sprintf("%s/?auth=%s&g=%d", s.config.BaseURL, raw, groupID)
-	subject := fmt.Sprintf("%s commented on your response", commenter.Name)
-	body := s.renderCommentEmail(
-		settings.LoopName, responseAuthor.Name, commenter.Name,
-		questionText, commentBody, authURL,
-	)
+	authURL := fmt.Sprintf("%s/?auth=%s&g=%d", s.config.BaseURL, raw, gParam)
 
-	logID, _ := s.store.LogEmail(ctx, &groupID, &responseAuthor.ID, nil,
+	subject := fmt.Sprintf("%d new comments for you", len(items))
+	if len(items) == 1 {
+		if anyOwned {
+			subject = fmt.Sprintf("%s commented on your piece", items[0].Commenter)
+		} else {
+			subject = fmt.Sprintf("%s replied in a thread you're in", items[0].Commenter)
+		}
+	}
+
+	body := s.renderEmail("comment_digest.html", map[string]any{
+		"RecipientName": recipient.RecipientName,
+		"Count":         len(items),
+		"AnyOwned":      anyOwned,
+		"Items":         items,
+		"CTA": map[string]any{
+			"URL":   authURL,
+			"Label": "Read & Reply",
+		},
+	})
+
+	logID, _ := s.store.LogEmail(ctx, groupID, &recipient.RecipientID, nil,
 		"comment_notification", "pending", nil)
 
-	bgCtx := context.WithoutCancel(ctx)
-	go func() {
-		sendCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
-		defer cancel()
+	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-		if err := s.emailer.Send(sendCtx, responseAuthor.Email, subject, body); err != nil {
-			errStr := err.Error()
-			if logID > 0 {
-				_ = s.store.UpdateEmailLog(bgCtx, logID, "failed", nil, &errStr)
-			}
-			s.logger.ErrorContext(bgCtx, "Failed to send comment notification",
-				slog.Int64("user_id", responseAuthor.ID),
-				slog.String("error", errStr))
-			return
-		}
-
-		now := time.Now()
+	if err := s.emailer.Send(sendCtx, recipient.RecipientEmail, subject, body); err != nil {
+		errStr := err.Error()
 		if logID > 0 {
-			_ = s.store.UpdateEmailLog(bgCtx, logID, "sent", &now, nil)
+			_ = s.store.UpdateEmailLog(ctx, logID, "failed", nil, &errStr)
 		}
-	}()
+
+		s.logger.ErrorContext(ctx, "Failed to send comment digest",
+			slog.Int64("user_id", recipient.RecipientID),
+			slog.String("error", errStr))
+
+		return false // rows stay queued for the next digest
+	}
+
+	now := time.Now()
+	if logID > 0 {
+		_ = s.store.UpdateEmailLog(ctx, logID, "sent", &now, nil)
+	}
+
+	if err := s.store.DeleteCommentNotifications(ctx, ids); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to drain sent digest rows",
+			slog.String("error", err.Error()))
+	}
+
+	return true
+}
+
+// commentContextLabel describes what a queued comment landed on — phrased
+// for the recipient: "your answer to …" when they own the piece, "Meera's
+// answer to …" when they're a thread participant on someone else's. Returns
+// the Loop's ID for the sign-in link and whether the recipient owns the
+// piece.
+func (s *Server) commentContextLabel(
+	ctx context.Context, p store.PendingCommentNotification,
+) (label string, groupID int64, ownedByRecipient bool) {
+	loopName := func(groupID int64) string {
+		settings, err := s.store.GetSettings(ctx, groupID)
+		if err != nil {
+			return ""
+		}
+
+		return settings.LoopName
+	}
+
+	// possessive renders "your" for the recipient's own piece and
+	// "<owner>'s" for anyone else's.
+	possessive := func(ownerID int64) string {
+		if ownerID == p.RecipientID {
+			ownedByRecipient = true
+			return "your"
+		}
+
+		owner, err := s.store.GetUserByID(ctx, ownerID)
+		if err != nil {
+			return "a friend's"
+		}
+
+		return owner.Name + "'s"
+	}
+
+	switch {
+	case p.ResponseID != nil:
+		issue, err := s.store.GetIssueByResponseID(ctx, *p.ResponseID)
+		if err != nil {
+			return "an answer", 0, false
+		}
+
+		label = "an answer"
+		if resp, rErr := s.store.GetResponseByID(ctx, *p.ResponseID); rErr == nil {
+			whose := possessive(resp.UserID)
+			label = whose + " answer"
+			if q, qErr := s.store.GetQuestionByID(ctx, resp.QuestionID); qErr == nil {
+				label = fmt.Sprintf("%s answer to “%s”", whose, q.Text)
+			}
+		}
+
+		if name := loopName(issue.GroupID); name != "" {
+			label += " · " + name
+		}
+
+		return label, issue.GroupID, ownedByRecipient
+
+	case p.DiaryDayID != nil:
+		issue, err := s.store.GetIssueByDiaryDayID(ctx, *p.DiaryDayID)
+		if err != nil {
+			return "a notebook", 0, false
+		}
+
+		label = "a notebook"
+		if day, dErr := s.store.GetDiaryDayByID(ctx, *p.DiaryDayID); dErr == nil {
+			if section, sErr := s.store.GetDiarySectionByID(ctx, day.SectionID); sErr == nil {
+				label = fmt.Sprintf("%s notebook — %s",
+					possessive(section.UserID), rambleDayDisplay(day.Day))
+			}
+		}
+
+		if name := loopName(issue.GroupID); name != "" {
+			label += " · " + name
+		}
+
+		return label, issue.GroupID, ownedByRecipient
+
+	case p.DumpItemID != nil:
+		issue, err := s.store.GetIssueByDumpItemID(ctx, *p.DumpItemID)
+		if err != nil {
+			return "the photo & video dump", 0, false
+		}
+
+		label = "the photo & video dump"
+		if item, iErr := s.store.GetDumpItemByID(ctx, *p.DumpItemID); iErr == nil {
+			label = fmt.Sprintf("%s %s in the photo & video dump",
+				possessive(item.UserID), item.Kind)
+		}
+
+		if name := loopName(issue.GroupID); name != "" {
+			label += " · " + name
+		}
+
+		return label, issue.GroupID, ownedByRecipient
+	}
+
+	return "a piece", 0, false
 }
 
 // renderReminderEmail builds the reminder email via reminder.html.
@@ -906,29 +1109,6 @@ func (s *Server) renderReminderEmail(
 		"CTA": map[string]any{
 			"URL":   authURL,
 			"Label": "Share Your Answers",
-		},
-	})
-}
-
-// renderCommentEmail builds the comment notification email via comment.html.
-func (s *Server) renderCommentEmail(
-	loopName, recipientName, commenterName,
-	questionText, commentBody, authURL string,
-) string {
-	excerpt := commentBody
-	if len(excerpt) > 240 {
-		excerpt = strings.TrimSpace(excerpt[:240]) + "…"
-	}
-
-	return s.renderEmail("comment.html", map[string]any{
-		"LoopName":       loopName,
-		"RecipientName":  recipientName,
-		"CommenterName":  commenterName,
-		"QuestionText":   questionText,
-		"CommentExcerpt": excerpt,
-		"CTA": map[string]any{
-			"URL":   authURL,
-			"Label": "View Thread",
 		},
 	})
 }

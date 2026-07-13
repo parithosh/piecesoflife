@@ -181,6 +181,96 @@
           </div>
         </section>
 
+        {{/* ---- your rambles: attach a notebook to this issue ------ */}}
+        <section class="pl-dump pl-diary" aria-label="Your rambles">
+          <div class="pl-dump-head">
+            <div class="pl-q-num pl-dump-num" aria-hidden="true">✎</div>
+            <div class="pl-dump-head-body">
+              <h3 class="pl-q-prompt">From your notebook</h3>
+              {{if .Diary}}
+              <p class="pl-dump-sub">
+                An editable <b>copy</b> of your rambles — trim days, soften
+                sentences, drop photos. Your journal itself never changes.
+                Whatever is below gets its own notebook spread when the issue
+                is woven.
+              </p>
+              {{else}}
+              <p class="pl-dump-sub">
+                {{if gt .RambleWindowCount 0}}
+                You've rambled on <b>{{.RambleWindowCount}}
+                day{{if ne .RambleWindowCount 1}}s{{end}}</b>{{if .RambleFromLabel}}
+                since {{.RambleFromLabel}}{{end}}. Weave them in? You'll get an
+                editable copy to review first — nothing is shared until the
+                issue is published, and your journal stays private either way.
+                {{else}}
+                Keep a private note-a-day on the
+                <a href="/ramble">Ramble page</a>, and when the next round
+                opens you can weave those days into the issue — reviewed and
+                trimmed by you first.
+                {{end}}
+              </p>
+              {{end}}
+            </div>
+          </div>
+
+          {{if .Diary}}
+          {{range .DiaryDays}}
+          <div class="pl-diary-day" data-diary-day-id="{{.DiaryDay.ID}}">
+            <div class="pl-diary-day-head">
+              <span class="pl-nb-date">{{.DiaryDay.Day | dayDisplay}}</span>
+              <span class="save-status" data-diary-status></span>
+              <button type="button" class="pl-diary-day-remove"
+                      data-diary-day-remove>✕ Remove day</button>
+            </div>
+            <textarea class="pl-diary-editor" data-diary-editor
+                      placeholder="(No words for this day — only what's below)"
+>{{range .Blocks}}{{if eq .Type "text"}}{{.Content}}{{end}}{{end}}</textarea>
+            <div class="pl-ramble-media">
+              {{range .Blocks}}
+              {{if eq .Type "photo"}}
+              <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+                <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                <button type="button" class="pl-thumb-remove" data-diary-block-remove="{{.ID}}"
+                        aria-label="Remove this photo">✕</button>
+              </figure>
+              {{else if eq .Type "video"}}
+              <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+                <video src="{{.FilePath | uploadURL}}" preload="metadata" muted playsinline></video>
+                <button type="button" class="pl-thumb-remove" data-diary-block-remove="{{.ID}}"
+                        aria-label="Remove this video">✕</button>
+              </figure>
+              {{else if eq .Type "audio"}}
+              <figure class="pl-ramble-thumb pl-ramble-thumb--audio" data-block-id="{{.ID}}">
+                <audio controls preload="metadata" src="{{.FilePath | uploadURL}}"></audio>
+                <button type="button" class="pl-thumb-remove" data-diary-block-remove="{{.ID}}"
+                        aria-label="Remove this recording">✕</button>
+              </figure>
+              {{end}}
+              {{end}}
+            </div>
+          </div>
+          {{end}}
+
+          <div class="pl-q-actions">
+            {{if gt .DiaryNewCount 0}}
+            <button type="button" class="pl-chip-btn" id="diary-refresh-btn">
+              ⟲ Pull in {{.DiaryNewCount}} new day{{if ne .DiaryNewCount 1}}s{{end}}
+            </button>
+            {{end}}
+            <button type="button" class="pl-chip-btn" id="diary-detach-btn">✕ Detach from this issue</button>
+            <span class="pl-dump-status" id="diary-status" role="status" aria-live="polite"></span>
+          </div>
+          {{else}}
+          <div class="pl-q-actions">
+            <button type="button" class="pl-btn pl-btn--gold" id="diary-attach-btn"
+                    {{if eq .RambleWindowCount 0}}disabled{{end}}>
+              Share your rambles →
+            </button>
+            <span class="pl-dump-status" id="diary-status" role="status" aria-live="polite"></span>
+          </div>
+          {{end}}
+        </section>
+
         <div class="pl-submitbar">
           <p class="pl-submitbar-note">
             {{if .Submitted}}
@@ -216,6 +306,7 @@
 
 {{define "scripts"}}
 <script src="/static/sortable.min.js?v={{assetVersion}}"></script>
+<script src="/static/recorder.js?v={{assetVersion}}"></script>
 <script src="/static/editor.js?v={{assetVersion}}"></script>
 <script>
 const issueID = {{.Issue.ID}};
@@ -432,330 +523,153 @@ document.querySelectorAll('.pl-link-btn').forEach(btn => {
     });
 });
 
-function preferredRecorderType(kind) {
-    const candidates = kind === 'video'
-        ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
-        : ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
-    if (!window.MediaRecorder) return '';
-    return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
-}
-
-function recorderExtension(type, kind) {
-    if (type.includes('mp4')) return kind === 'audio' ? 'm4a' : 'mp4';
-    if (type.includes('ogg')) return 'ogg';
-    return 'webm';
-}
-
-function recorderDialog() {
-    let dialog = document.getElementById('record-dialog');
-    if (dialog) return dialog;
-
-    dialog = document.createElement('dialog');
-    dialog.id = 'record-dialog';
-    dialog.className = 'record-dialog';
-    dialog.innerHTML = `
-      <div class="record-dialog-body">
-        <h3 data-record-title>Record</h3>
-        <p class="record-status" data-record-status role="status" aria-live="polite">Waiting for permission…</p>
-        <div class="record-stage">
-          <video class="record-preview" data-record-preview autoplay muted playsinline hidden></video>
-          <div class="record-playback" data-record-playback hidden></div>
-        </div>
-        <div class="record-readout">
-          <span class="record-dot" data-record-dot aria-hidden="true"></span>
-          <span class="record-timer" data-record-timer>0:00</span>
-        </div>
-        <div class="record-meter" aria-hidden="true"><span></span></div>
-        <div class="record-dialog-actions">
-          <button type="button" class="pl-btn pl-btn--outline" data-record-cancel>Cancel</button>
-          <button type="button" class="pl-btn pl-btn--outline" data-record-discard hidden>Discard &amp; redo</button>
-          <button type="button" class="pl-btn pl-btn--outline" data-record-pause hidden>Pause</button>
-          <button type="button" class="pl-btn pl-btn--gold" data-record-start disabled>● Start recording</button>
-          <button type="button" class="pl-btn pl-btn--gold" data-record-stop hidden>■ Stop</button>
-          <button type="button" class="pl-btn pl-btn--gold" data-record-save hidden>Save recording</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(dialog);
-    return dialog;
-}
-
-function formatDuration(ms) {
-    const total = Math.floor(ms / 1000);
-    const mins = Math.floor(total / 60);
-    const secs = total % 60;
-    return `${mins}:${String(secs).padStart(2, '0')}`;
-}
-
-// A single recording session: opens the dialog, requests permission, then
-// waits for the user to Start / Pause / Stop. Nothing is uploaded until the
-// user explicitly hits Save, and Discard & redo throws the current take away
-// so re-recording never leaves a stray second file behind.
-async function recordMedia(section, kind) {
-    const helper = window.__polEditor;
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        helper?.showToast('Recording is not supported in this browser');
-        return;
-    }
-
-    const dialog = recorderDialog();
-    const el = sel => dialog.querySelector(sel);
-    const title = el('[data-record-title]');
-    const status = el('[data-record-status]');
-    const preview = el('[data-record-preview]');
-    const playback = el('[data-record-playback]');
-    const timer = el('[data-record-timer]');
-    const startBtn = el('[data-record-start]');
-    const pauseBtn = el('[data-record-pause]');
-    const stopBtn = el('[data-record-stop]');
-    const saveBtn = el('[data-record-save]');
-    const discardBtn = el('[data-record-discard]');
-    const cancelBtn = el('[data-record-cancel]');
-
-    let stream;
-    let recorder;
-    let chunks = [];
-    let mimeType = preferredRecorderType(kind);
-    let saveType = '';
-    let savedBlockId = null;   // block uploaded for review but not yet kept
-    let savedBlockURL = '';
-    let elapsed = 0;
-    let segmentStart = 0;
-    let ticker = null;
-    let closed = false;
-
-    title.textContent = kind === 'video' ? 'Record video' : 'Record audio';
-
-    function setState(state) {
-        dialog.dataset.recordState = state;
-        startBtn.hidden = state !== 'idle';
-        pauseBtn.hidden = state !== 'recording' && state !== 'paused';
-        stopBtn.hidden = state !== 'recording' && state !== 'paused';
-        saveBtn.hidden = state !== 'recorded';
-        discardBtn.hidden = state !== 'recorded';
-    }
-
-    function startTicker() {
-        segmentStart = performance.now();
-        stopTicker();
-        ticker = setInterval(() => {
-            timer.textContent = formatDuration(elapsed + (performance.now() - segmentStart));
-        }, 200);
-    }
-
-    function stopTicker() {
-        if (ticker) {
-            clearInterval(ticker);
-            ticker = null;
-        }
-    }
-
-    function clearPlayback() {
-        playback.hidden = true;
-        playback.replaceChildren();
-        chunks = [];
-    }
-
-    // Fire-and-forget delete of an uploaded-but-unkept take.
-    function deleteBlock(id) {
-        if (id == null) return;
-        fetch(`/api/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() }).catch(() => {});
-    }
-
-    async function deleteSavedBlock() {
-        const id = savedBlockId;
-        savedBlockId = null;
-        savedBlockURL = '';
-        if (id == null) return;
-        try {
-            await fetch(`/api/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() });
-        } catch {}
-    }
-
-    function teardown() {
-        closed = true;
-        stopTicker();
-        clearPlayback();
-        if (preview.srcObject) preview.srcObject = null;
-        stream?.getTracks().forEach(track => track.stop());
-        // A take that was uploaded for review but never saved must not linger.
-        deleteBlock(savedBlockId);
-        savedBlockId = null;
-    }
-
-    function close() {
-        teardown();
-        if (dialog.open) dialog.close();
-    }
-
-    function resetToIdle() {
-        clearPlayback();
-        elapsed = 0;
-        timer.textContent = '0:00';
-        if (kind === 'video' && stream) {
-            preview.srcObject = stream;
-            preview.hidden = false;
-        }
-        status.textContent = kind === 'video'
-            ? 'Ready — press Start when the frame looks right.'
-            : 'Ready — press Start when you are.';
-        setState('idle');
-        if (!startBtn.disabled) startBtn.focus();
-    }
-
-    dialog.oncancel = ev => {
-        ev.preventDefault();
-        cancelBtn.click();
-    };
-    cancelBtn.onclick = () => close();
-
-    startBtn.onclick = () => {
-        chunks = [];
-        recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-        recorder.addEventListener('dataavailable', ev => {
-            if (ev.data && ev.data.size > 0) chunks.push(ev.data);
-        });
-        recorder.addEventListener('stop', async () => {
-            if (closed) return;
-            stopTicker();
-            timer.textContent = formatDuration(elapsed);
-
-            // Drop the ";codecs=…" suffix so the stored file gets a clean
-            // container MIME (matches what the server serves back).
-            const rawType = recorder.mimeType || mimeType || (kind === 'video' ? 'video/webm' : 'audio/webm');
-            saveType = rawType.split(';')[0].trim() || (kind === 'video' ? 'video/webm' : 'audio/webm');
-            const take = new Blob(chunks, { type: saveType });
-
-            if (preview.srcObject) preview.srcObject = null;
-            preview.hidden = true;
-
-            // Upload the take now and preview it over HTTP. A MediaRecorder
-            // clip played from a blob: URL frequently fails to decode inline
-            // ("No video with a supported format…"), while the same bytes
-            // served with range support play fine — that's why the recording
-            // only appeared after saving before. Discard/Cancel delete the
-            // block again, so an unkept take never lingers.
-            status.textContent = 'Processing your recording…';
-            setState('processing');
-            try {
-                const rid = await ensureResponse(section);
-                if (!rid) throw new Error('Could not create a response to attach to.');
-                const ext = recorderExtension(saveType, kind);
-                const file = new File([take], `${kind}-recording.${ext}`, { type: saveType });
-                const uploaded = await helper.uploadMedia(rid, file, kind);
-                const blockId = uploaded?.id ?? uploaded?.ID ?? null;
-
-                if (closed) { deleteBlock(blockId); return; }
-
-                savedBlockId = blockId;
-                savedBlockURL = uploaded?.url || '';
-
-                const media = document.createElement(kind === 'video' ? 'video' : 'audio');
-                media.className = 'record-playback-media';
-                media.controls = true;
-                media.playsInline = true;
-                media.preload = 'metadata';
-                media.src = savedBlockURL;
-                playback.replaceChildren(media);
-                playback.hidden = false;
-                media.load();
-
-                status.textContent = 'Review your take, then Save — or Discard & redo.';
-                setState('recorded');
-            } catch (err) {
-                status.textContent = err.message || 'Could not process the recording — try again.';
-                if (kind === 'video' && stream && !closed) {
-                    preview.srcObject = stream;
-                    preview.hidden = false;
-                }
-                setState('idle');
-                if (!startBtn.disabled) startBtn.focus();
-            }
-        });
-
-        recorder.start(1000);
-        elapsed = 0;
-        startTicker();
-        status.textContent = 'Recording…';
-        setState('recording');
-    };
-
-    pauseBtn.onclick = () => {
-        if (recorder?.state === 'recording') {
-            recorder.pause();
-            elapsed += performance.now() - segmentStart;
-            stopTicker();
-            timer.textContent = formatDuration(elapsed);
-            pauseBtn.textContent = 'Resume';
-            status.textContent = 'Paused.';
-            setState('paused');
-        } else if (recorder?.state === 'paused') {
-            recorder.resume();
-            startTicker();
-            pauseBtn.textContent = 'Pause';
-            status.textContent = 'Recording…';
-            setState('recording');
-        }
-    };
-
-    stopBtn.onclick = () => {
-        if (recorder?.state === 'recording') {
-            elapsed += performance.now() - segmentStart;
-        }
-        pauseBtn.textContent = 'Pause';
-        if (recorder && recorder.state !== 'inactive') recorder.stop();
-    };
-
-    discardBtn.onclick = async () => {
-        discardBtn.disabled = true;
-        status.textContent = 'Discarding…';
-        await deleteSavedBlock();
-        discardBtn.disabled = false;
-        resetToIdle();
-    };
-
-    saveBtn.onclick = () => {
-        if (savedBlockId == null) return;
-        // The take is already uploaded; just keep it (clear the id so teardown
-        // won't delete it) and reload so it renders inline in the editor.
-        savedBlockId = null;
-        helper.showToast(`${kind === 'video' ? 'Video' : 'Audio'} recording added`);
-        close();
-        setTimeout(() => window.location.reload(), 600);
-    };
-
-    setState('idle');
-    status.textContent = 'Waiting for permission…';
-    startBtn.disabled = true;
-    preview.hidden = true;
-    playback.hidden = true;
-    timer.textContent = '0:00';
-    dialog.showModal();
-
-    try {
-        stream = await navigator.mediaDevices.getUserMedia(
-            kind === 'video' ? { audio: true, video: true } : { audio: true },
-        );
-        if (closed) {
-            stream.getTracks().forEach(track => track.stop());
-            return;
-        }
-        startBtn.disabled = false;
-        resetToIdle();
-    } catch (err) {
-        close();
-        helper?.showToast(err.name === 'NotAllowedError'
-            ? 'Microphone/camera permission was denied'
-            : 'Could not start recording');
-    }
-}
-
+// --- Recording: shared dialog (static/recorder.js), wired to responses ---
 document.querySelectorAll('.pl-record-btn').forEach(btn => {
     btn.addEventListener('click', function() {
         const section = this.closest('.question-section');
-        recordMedia(section, this.dataset.kind);
+        const kind = this.dataset.kind;
+        const helper = window.__polEditor;
+
+        POLRecorder.record(kind, {
+            toast: msg => helper?.showToast(msg),
+            upload: async (file) => {
+                const rid = await ensureResponse(section);
+                if (!rid) throw new Error('Could not create a response to attach to.');
+                const uploaded = await helper.uploadMedia(rid, file, kind);
+                return { id: uploaded?.id ?? uploaded?.ID ?? null, url: uploaded?.url || '' };
+            },
+            discard: (id) =>
+                fetch(`/api/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() }),
+            onSaved: () => {
+                helper.showToast(`${kind === 'video' ? 'Video' : 'Audio'} recording added`);
+                setTimeout(() => window.location.reload(), 600);
+            },
+        });
     });
 });
+
+
+// --- "From your notebook": attach / edit / refresh / detach -------------
+(function () {
+    const status = document.getElementById('diary-status');
+
+    function setDiaryStatus(text, isError) {
+        if (!status) return;
+        status.textContent = text;
+        status.style.color = isError ? 'var(--sindoor)' : '';
+    }
+
+    async function diaryCall(url, method) {
+        const res = await fetch(url, { method, headers: apiHeaders() });
+        if (!res.ok && res.status !== 204) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data?.error?.message || 'Something went wrong');
+        }
+    }
+
+    document.getElementById('diary-attach-btn')?.addEventListener('click', async function () {
+        this.disabled = true;
+        setDiaryStatus('Copying your rambles…');
+        try {
+            await diaryCall(`/api/issues/${issueID}/diary`, 'POST');
+            window.location.reload();
+        } catch (err) {
+            setDiaryStatus(err.message, true);
+            this.disabled = false;
+        }
+    });
+
+    document.getElementById('diary-refresh-btn')?.addEventListener('click', async function () {
+        this.disabled = true;
+        setDiaryStatus('Pulling in new days…');
+        try {
+            await diaryCall(`/api/issues/${issueID}/diary/refresh`, 'POST');
+            window.location.reload();
+        } catch (err) {
+            setDiaryStatus(err.message, true);
+            this.disabled = false;
+        }
+    });
+
+    document.getElementById('diary-detach-btn')?.addEventListener('click', async function () {
+        if (!confirm('Detach your notebook from this issue? The copies below are discarded; your journal is untouched.')) return;
+        this.disabled = true;
+        setDiaryStatus('Detaching…');
+        try {
+            await diaryCall(`/api/issues/${issueID}/diary`, 'DELETE');
+            window.location.reload();
+        } catch (err) {
+            setDiaryStatus(err.message, true);
+            this.disabled = false;
+        }
+    });
+
+    // Per-day autosave of the snapshot copies.
+    const diaryTimers = {};
+    document.querySelectorAll('[data-diary-editor]').forEach(textarea => {
+        const dayEl = textarea.closest('[data-diary-day-id]');
+        const dayID = dayEl.dataset.diaryDayId;
+        const dayStatus = dayEl.querySelector('[data-diary-status]');
+
+        textarea.addEventListener('input', () => {
+            clearTimeout(diaryTimers[dayID]);
+            if (dayStatus) { dayStatus.className = 'save-status'; dayStatus.textContent = ''; }
+            diaryTimers[dayID] = setTimeout(async () => {
+                if (dayStatus) { dayStatus.className = 'save-status saving'; dayStatus.textContent = 'Saving…'; }
+                try {
+                    const res = await fetch(`/api/diary-days/${dayID}/autosave`, {
+                        method: 'PUT',
+                        headers: apiHeaders(),
+                        body: JSON.stringify({ text: textarea.value }),
+                    });
+                    if (!res.ok) throw new Error();
+                    const data = await res.json();
+                    if (data.removed) { dayEl.remove(); return; }
+                    if (dayStatus) { dayStatus.className = 'save-status saved'; dayStatus.textContent = 'Saved'; }
+                } catch {
+                    if (dayStatus) { dayStatus.className = 'save-status error'; dayStatus.textContent = 'Save failed'; }
+                }
+            }, 1500);
+        });
+    });
+
+    // Remove a whole day from the snapshot.
+    document.querySelectorAll('[data-diary-day-remove]').forEach(btn => {
+        btn.addEventListener('click', async function () {
+            const dayEl = this.closest('[data-diary-day-id]');
+            this.disabled = true;
+            try {
+                await diaryCall(`/api/diary-days/${dayEl.dataset.diaryDayId}`, 'DELETE');
+                dayEl.remove();
+            } catch (err) {
+                setDiaryStatus(err.message, true);
+                this.disabled = false;
+            }
+        });
+    });
+
+    // Remove one media block from a snapshot day.
+    document.querySelectorAll('[data-diary-block-remove]').forEach(btn => {
+        btn.addEventListener('click', async function () {
+            this.disabled = true;
+            try {
+                await diaryCall(`/api/diary-blocks/${this.dataset.diaryBlockRemove}`, 'DELETE');
+                const fig = this.closest('[data-block-id]');
+                const dayEl = this.closest('[data-diary-day-id]');
+                fig?.remove();
+                // Server removes a day that ends up empty; mirror it.
+                if (dayEl &&
+                    !dayEl.querySelector('[data-block-id]') &&
+                    !dayEl.querySelector('[data-diary-editor]')?.value.trim()) {
+                    dayEl.remove();
+                }
+            } catch (err) {
+                setDiaryStatus(err.message, true);
+                this.disabled = false;
+            }
+        });
+    });
+})();
 
 </script>
 {{end}}

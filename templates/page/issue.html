@@ -26,9 +26,9 @@
       </header>
       <div class="zari" aria-hidden="true"></div>
 
-      {{$pageCount := len .Questions}}
-      {{if .DumpGroups}}{{$pageCount = add $pageCount 1}}{{end}}
-      {{$dumpIdx := len .Questions}}
+      {{$pageCount := .PageCount}}
+      {{$diaryIdx := .DiaryIdx}}
+      {{$dumpIdx := .DumpIdx}}
 
       {{if .Questions}}
       <div class="published-issue-strip">
@@ -44,6 +44,13 @@
                data-question-target="{{$idx}}"
                aria-label="Go to question {{add $idx 1}}"
                {{if eq $idx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+            {{end}}
+            {{if .DiaryGroups}}
+            <a href="?q={{add $diaryIdx 1}}"
+               class="published-progress-segment {{if lt $diaryIdx $.CurrentQIdx}}is-past{{else if eq $diaryIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+               data-question-target="{{$diaryIdx}}"
+               aria-label="Go to the notebooks"
+               {{if eq $diaryIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
             {{end}}
             {{if .DumpGroups}}
             <a href="?q={{add $dumpIdx 1}}"
@@ -84,7 +91,7 @@
               {{range $.Responses}}
                 {{if eq .Response.QuestionID $q.ID}}
                   {{$hasAny = true}}
-                  <article class="response-article response-block pl-answer {{if $first}}is-first{{end}} {{if and $first (dropCap .Blocks)}}has-dropcap{{end}} {{if and $.User (eq .User.ID $.User.ID)}}is-self{{else}}is-other{{end}}"
+                  <article class="response-article response-block pl-answer {{if $first}}is-first{{end}} {{if and $.User (eq .User.ID $.User.ID)}}is-self{{else}}is-other{{end}}"
                            data-response-id="{{.Response.ID}}"
                            data-user-id="{{.User.ID}}"
                            data-user-name="{{.User.Name}}"
@@ -158,6 +165,84 @@
         </section>
         {{end}}
 
+        {{if .DiaryGroups}}
+        <section class="published-question published-question--diary"
+                 data-question-index="{{$diaryIdx}}"
+                 data-question-title="From the notebooks"
+                 {{if ne $diaryIdx $.CurrentQIdx}}hidden{{end}}>
+          <div class="published-question-inner">
+            <p class="published-question-kicker">Between the issues</p>
+            <h2 class="published-question-title" tabindex="-1">From the notebooks</h2>
+            <div class="ikat pl-notebook-band" role="presentation"></div>
+            <p class="published-notebooks-standfirst">The small things everyone
+            jotted down while the month was still happening — each notebook
+            shared exactly as its owner chose to weave it in.</p>
+
+            {{range $gi, $g := .DiaryGroups}}
+            {{if gt $gi 0}}
+            <div class="ikat ikat--mini pl-notebook-divider" role="presentation"></div>
+            {{end}}
+            <section class="pl-notebook" aria-label="From {{$g.UserName}}'s notebook">
+              <div class="pl-notebook-head">
+                <span class="avatar avatar--sm pl-answer-ava">
+                  {{if $g.UserAvatarURL}}<img src="{{$g.UserAvatarURL}}" alt="">{{else}}{{letterAvatar $g.UserName}}{{end}}
+                </span>
+                <strong class="pl-answer-name">From {{$g.UserName}}'s notebook</strong>
+                <span class="pl-dump-group-rule" aria-hidden="true"></span>
+                <span class="pl-nb-count">{{len $g.Days}} day{{if ne (len $g.Days) 1}}s{{end}}</span>
+              </div>
+
+              {{range $di, $d := $g.Days}}
+              <article class="pl-nb-day">
+                <h3 class="pl-nb-date">{{$d.DiaryDay.Day | dayDisplay}}</h3>
+                <div class="pl-nb-text">
+                {{range $d.Blocks}}
+                  {{if eq .Type "text"}}
+                    {{if .Content}}<p>{{.Content}}</p>{{end}}
+                  {{else if eq .Type "photo"}}
+                    {{if .FilePath}}
+                    <figure class="pl-print" data-lightbox
+                            data-lightbox-src="{{.FilePath | uploadURL}}"
+                            data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
+                      <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                      {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                    </figure>
+                    {{end}}
+                  {{else if eq .Type "audio"}}
+                    {{if .FilePath}}
+                    <figure class="published-media published-media--audio">
+                      <audio controls preload="metadata">
+                        <source src="{{.FilePath | uploadURL}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                      </audio>
+                      <figcaption>Voice note</figcaption>
+                    </figure>
+                    {{end}}
+                  {{else if eq .Type "video"}}
+                    {{if .FilePath}}
+                    <figure class="published-media published-media--video">
+                      <video controls preload="metadata" playsinline>
+                        <source src="{{.FilePath | uploadURL}}" {{if .Content}}type="{{.Content}}"{{end}}>
+                      </video>
+                      {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                    </figure>
+                    {{end}}
+                  {{end}}
+                {{end}}
+                </div>
+
+                <section class="comments-section" aria-label="Comments">
+                  <div class="comments-panel"
+                       data-diary-day-id="{{$d.DiaryDay.ID}}"
+                       data-comment-count="{{index $.DiaryCommentCounts $d.DiaryDay.ID}}"></div>
+                </section>
+              </article>
+              {{end}}
+            </section>
+            {{end}}
+          </div>
+        </section>
+        {{end}}
+
         {{if .DumpGroups}}
         <section class="published-question published-question--dump"
                  data-question-index="{{$dumpIdx}}"
@@ -182,11 +267,16 @@
               {{if .Photos}}
               <div class="pl-collage">
                 {{range .Photos}}
-                <figure class="pl-collage-item" data-lightbox
+                <figure class="pl-collage-item">
+                  <span data-lightbox
                         data-lightbox-src="{{.FilePath | uploadURL}}"
                         data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
-                  <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                    <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                  </span>
                   {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                  <div class="comments-panel pl-collage-comments"
+                       data-dump-item-id="{{.ID}}"
+                       data-comment-count="{{index $.DumpCommentCounts .ID}}"></div>
                 </figure>
                 {{end}}
               </div>
@@ -198,6 +288,9 @@
                 <figure class="pl-collage-video">
                   <video controls preload="metadata" playsinline src="{{.FilePath | uploadURL}}"></video>
                   {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                  <div class="comments-panel pl-collage-comments"
+                       data-dump-item-id="{{.ID}}"
+                       data-comment-count="{{index $.DumpCommentCounts .ID}}"></div>
                 </figure>
                 {{end}}
               </div>
@@ -213,11 +306,22 @@
         {{$isFirst := eq .CurrentQIdx 0}}
         {{$isLast := eq .CurrentQ $pageCount}}
         {{$prevTitle := ""}}
-        {{if not $isFirst}}{{$prevTitle = (index .Questions (sub .CurrentQIdx 1)).Text}}{{end}}
+        {{if not $isFirst}}
+          {{$prevIdx := sub .CurrentQIdx 1}}
+          {{if lt $prevIdx (len .Questions)}}
+            {{$prevTitle = (index .Questions $prevIdx).Text}}
+          {{else if eq $prevIdx $diaryIdx}}
+            {{$prevTitle = "From the notebooks"}}
+          {{else}}
+            {{$prevTitle = "The photo & video dump"}}
+          {{end}}
+        {{end}}
         {{$nextTitle := ""}}
         {{if not $isLast}}
           {{if lt .CurrentQ (len .Questions)}}
             {{$nextTitle = (index .Questions .CurrentQ).Text}}
+          {{else if eq .CurrentQ $diaryIdx}}
+            {{$nextTitle = "From the notebooks"}}
           {{else}}
             {{$nextTitle = "The photo & video dump"}}
           {{end}}
@@ -241,6 +345,13 @@
              data-question-target="{{$idx}}"
              aria-label="Go to question {{add $idx 1}}"
              {{if eq $idx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+          {{end}}
+          {{if .DiaryGroups}}
+          <a href="?q={{add $diaryIdx 1}}"
+             class="published-dot {{if lt $diaryIdx $.CurrentQIdx}}is-past{{else if eq $diaryIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+             data-question-target="{{$diaryIdx}}"
+             aria-label="Go to the notebooks"
+             {{if eq $diaryIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
           {{end}}
           {{if .DumpGroups}}
           <a href="?q={{add $dumpIdx 1}}"
@@ -289,6 +400,10 @@
 
 {{define "scripts"}}
 <script>
+// Who's reading — social.js shows edit affordances on this member's own
+// comments.
+{{if .User}}window.POLUserID = {{.User.ID}};{{end}}
+
 // Suggest-a-question for the upcoming round (card only renders when a
 // pre-created draft exists).
 (function () {

@@ -158,7 +158,11 @@
                 <a href="/admin/members/{{.User.ID}}/submission" style="color:inherit;text-decoration:none;">{{.User.Name}}</a>
                 {{if eq .User.ID $.User.ID}} · you{{end}}{{if eq .User.Role "admin"}} (admin){{end}}
               </div>
-              <div class="pl-member-email">{{.User.Email}}</div>
+              <div class="pl-member-email">{{.User.Email}}
+                {{with index $.RambleCounts .User.ID}}
+                · ✎ {{.}} ramble{{if ne . 1}}s{{end}} since last issue
+                {{end}}
+              </div>
             </div>
             {{if .Responded}}
               <span class="pl-pill pl-pill--submitted">✓ Submitted</span>

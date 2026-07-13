@@ -812,7 +812,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	// (prevents cross-thread injection).
 	if req.ParentID != nil {
 		parent, err := s.store.GetCommentByID(r.Context(), *req.ParentID)
-		if err != nil || parent.ResponseID != responseID {
+		if err != nil || parent.ResponseID == nil || *parent.ResponseID != responseID {
 			writeValidationError(w, map[string]string{
 				"parent_id": "Parent comment not found on this response",
 			})
@@ -831,13 +831,13 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.notifyCommentAsync(r.Context(), responseID, resp, user, req.Body)
+	s.enqueueCommentNotifications(r.Context(), resp.UserID, user.ID, id, req.ParentID)
 
 	created := store.CommentWithUser{
 		Comment: store.Comment{
 			ID:         id,
 			UserID:     user.ID,
-			ResponseID: responseID,
+			ResponseID: &responseID,
 			ParentID:   req.ParentID,
 			Body:       req.Body,
 			CreatedAt:  time.Now(),
@@ -871,7 +871,7 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 
 	// The comment must live in the current Loop — isGroupAdmin only vouches
 	// for the caller's authority here, not in other Loops.
-	if _, ok := s.requireResponseInGroup(w, r, comment.ResponseID); !ok {
+	if _, ok := s.requireCommentInGroup(w, r, comment); !ok {
 		return
 	}
 
@@ -891,35 +891,141 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// notifyCommentAsync kicks off a fire-and-forget comment notification.
-// Loads question text for context, then delegates to SendCommentNotification.
-func (s *Server) notifyCommentAsync(
-	ctx context.Context,
-	responseID int64, resp *store.Response, commenter *store.User, body string,
+// handleEditComment updates the body of the caller's own comment — admins
+// may delete anyone's comment, but editing stays with the author.
+// PATCH /api/comments/{id}
+func (s *Server) handleEditComment(w http.ResponseWriter, r *http.Request) {
+	user := UserFromContext(r.Context())
+
+	id, ok := s.parseIDParam(w, r, "id", "comment ID")
+	if !ok {
+		return
+	}
+
+	comment, err := s.store.GetCommentByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Comment not found")
+		return
+	}
+
+	if _, ok := s.requireCommentInGroup(w, r, comment); !ok {
+		return
+	}
+
+	if comment.UserID != user.ID {
+		writeError(w, http.StatusForbidden, "forbidden",
+			"Cannot edit another user's comment")
+		return
+	}
+
+	var req struct {
+		Body string `json:"body"`
+	}
+
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	req.Body = strings.TrimSpace(req.Body)
+	if req.Body == "" {
+		writeValidationError(w, map[string]string{"body": "Comment body is required"})
+		return
+	}
+
+	if len(req.Body) > maxCommentBytes {
+		writeValidationError(w, map[string]string{
+			"body": fmt.Sprintf("Comment too long (max %d characters)", maxCommentBytes),
+		})
+		return
+	}
+
+	if err := s.store.UpdateCommentBody(r.Context(), id, req.Body); err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to update comment",
+			slog.Int64("comment_id", id),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update comment")
+
+		return
+	}
+
+	updated, err := s.store.GetCommentByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to reload comment")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, commentResponse{
+		CommentWithUser: store.CommentWithUser{
+			Comment:         *updated,
+			AuthorName:      user.Name,
+			AuthorAvatarURL: user.AvatarURL,
+		},
+		BodyHTML: renderCommentBody(updated.Body),
+	})
+}
+
+// requireCommentInGroup resolves a comment's owning issue through whichever
+// target it carries and verifies it belongs to the current Loop.
+func (s *Server) requireCommentInGroup(
+	w http.ResponseWriter, r *http.Request, comment *store.Comment,
+) (*store.Issue, bool) {
+	switch {
+	case comment.ResponseID != nil:
+		return s.requireResponseInGroup(w, r, *comment.ResponseID)
+	case comment.DiaryDayID != nil:
+		return s.requireDiaryDayInGroup(w, r, *comment.DiaryDayID)
+	case comment.DumpItemID != nil:
+		return s.requireDumpItemInGroup(w, r, *comment.DumpItemID)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "Comment not found")
+		return nil, false
+	}
+}
+
+// enqueueCommentNotifications queues digest rows for everyone who should
+// hear about a new comment: the content owner always, and — when the
+// comment is a reply — everyone who wrote in that thread. Other threads on
+// the same piece are other conversations and stay quiet; the commenter
+// never hears about their own words. The daily comment_digest event turns
+// the queue into at most one email per recipient, and failures only cost a
+// digest mention, so they log rather than fail the comment.
+func (s *Server) enqueueCommentNotifications(
+	ctx context.Context, ownerID, commenterID, commentID int64, parentID *int64,
 ) {
-	groupID := currentGroupID(ctx)
-	bgCtx := context.WithoutCancel(ctx)
+	recipients := map[int64]struct{}{ownerID: {}}
 
-	go func() {
-		nCtx, cancel := context.WithTimeout(bgCtx, 45*time.Second)
-		defer cancel()
+	if parentID != nil {
+		// Replies target the thread's top-level comment; walk one hop up in
+		// case a crafted request nested deeper.
+		top := *parentID
+		if parent, err := s.store.GetCommentByID(ctx, top); err == nil &&
+			parent.ParentID != nil {
+			top = *parent.ParentID
+		}
 
-		author, err := s.store.GetUserByID(nCtx, resp.UserID)
+		participants, err := s.store.ListThreadParticipants(ctx, top)
 		if err != nil {
-			s.logger.ErrorContext(nCtx, "Failed to load response author for notification",
-				slog.Int64("user_id", resp.UserID),
+			s.logger.ErrorContext(ctx, "Failed to list thread participants",
+				slog.Int64("comment_id", commentID),
 				slog.String("error", err.Error()))
-			return
 		}
 
-		question, err := s.store.GetQuestionByID(nCtx, resp.QuestionID)
-		questionText := ""
-		if err == nil {
-			questionText = question.Text
+		for _, id := range participants {
+			recipients[id] = struct{}{}
 		}
+	}
 
-		s.SendCommentNotification(nCtx, groupID, author, commenter, questionText, body, responseID)
-	}()
+	delete(recipients, commenterID)
+
+	for id := range recipients {
+		if err := s.store.EnqueueCommentNotification(ctx, id, commentID); err != nil {
+			s.logger.ErrorContext(ctx, "Failed to enqueue comment notification",
+				slog.Int64("comment_id", commentID),
+				slog.Int64("recipient_id", id),
+				slog.String("error", err.Error()))
+		}
+	}
 }
 
 // renderCommentBody runs Markdown through goldmark. On error, returns the

@@ -1,0 +1,314 @@
+{{define "title"}}Ramble — PiecesOfLife{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-ramble">
+
+    <header class="pl-ramble-masthead">
+      <h1 class="pl-ramble-title">Ramble</h1>
+      <p class="pl-ramble-sub">
+        One private page per day, for whatever crossed your mind. Nobody sees
+        a word of it unless you weave it into an issue yourself.
+      </p>
+    </header>
+
+    <div class="ikat pl-ramble-band" aria-hidden="true"></div>
+
+    {{/* ---- today: always an editor -------------------------------- */}}
+    <section class="pl-ramble-today" aria-label="Today's page"
+             data-ramble-today data-server-today="{{.Today}}">
+      <div class="pl-ramble-today-head">
+        <h2 class="pl-nb-date" data-today-label>Today</h2>
+        <span class="save-status" data-today-status></span>
+      </div>
+      <textarea class="pl-ramble-editor" data-today-editor
+                placeholder="What happened today? A thought, a smell, a small victory…"></textarea>
+      <div class="pl-ramble-media" data-today-media></div>
+      <div class="pl-ramble-actions">
+        <input type="file" accept="image/*" data-media-input="photo" multiple hidden>
+        <input type="file" accept="video/*" data-media-input="video" hidden>
+        <input type="file" accept="audio/*" data-media-input="audio" hidden>
+        <button type="button" class="pl-chip-btn" data-media-btn="photo">＋ Photos</button>
+        <button type="button" class="pl-chip-btn" data-media-btn="video">＋ Video</button>
+        <button type="button" class="pl-chip-btn" data-media-btn="audio">＋ Audio</button>
+        <button type="button" class="pl-chip-btn" data-record-btn="audio">● Record audio</button>
+        <button type="button" class="pl-chip-btn" data-record-btn="video">▣ Record video</button>
+        <span class="pl-dump-status" data-media-status role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    {{/* ---- the timeline: past days + issue dividers ---------------- */}}
+    <div data-ramble-timeline>
+      {{range .Entries}}
+      {{if eq .Kind "day"}}
+      <article class="pl-ramble-day" data-ramble-day="{{.Day.Ramble.Day}}">
+        <div class="pl-ramble-day-head">
+          <h3 class="pl-nb-date">{{.DayDisplay}}</h3>
+          <button type="button" class="pl-ramble-edit-btn" data-day-edit>Edit</button>
+        </div>
+        {{range .Day.Blocks}}{{if eq .Type "text"}}
+        <div class="pl-ramble-text" data-day-text>{{.Content}}</div>
+        {{end}}{{end}}
+        <div class="pl-ramble-media">
+          {{range .Day.Blocks}}
+          {{if eq .Type "photo"}}
+          <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+            <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+            <button type="button" class="pl-thumb-remove" data-block-remove="{{.ID}}"
+                    aria-label="Remove this photo" hidden>✕</button>
+          </figure>
+          {{else if eq .Type "video"}}
+          <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+            <video src="{{.FilePath | uploadURL}}" preload="metadata" controls muted playsinline></video>
+            <button type="button" class="pl-thumb-remove" data-block-remove="{{.ID}}"
+                    aria-label="Remove this video" hidden>✕</button>
+          </figure>
+          {{else if eq .Type "audio"}}
+          <figure class="pl-ramble-thumb pl-ramble-thumb--audio" data-block-id="{{.ID}}">
+            <audio controls preload="metadata" src="{{.FilePath | uploadURL}}"></audio>
+            <button type="button" class="pl-thumb-remove" data-block-remove="{{.ID}}"
+                    aria-label="Remove this recording" hidden>✕</button>
+          </figure>
+          {{end}}
+          {{end}}
+        </div>
+      </article>
+      {{else}}
+      <div class="pl-ramble-issue-divider" role="separator">
+        <span class="pl-ramble-issue-label">
+          {{.IssueLabel}} · {{.LoopName}} — published here
+          <small>{{.PublishedDay}}</small>
+        </span>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{if eq .DayCount 0}}
+      <p class="pl-ramble-empty" data-ramble-empty>
+        Nothing here yet — your first ramble is one sentence away.
+      </p>
+      {{end}}
+    </div>
+
+    <p class="pl-diary-note" style="text-align:center;margin-top:44px;">
+      Your journal, your data — <a href="/api/me/ramble/export">export it as JSON</a> anytime.
+    </p>
+
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/recorder.js?v={{assetVersion}}"></script>
+<script>
+(function () {
+    // "Today" is the browser's day, not the server's — the page you opened
+    // is the page you write on.
+    function localDay() {
+        const d = new Date();
+        return d.getFullYear() + '-' +
+            String(d.getMonth() + 1).padStart(2, '0') + '-' +
+            String(d.getDate()).padStart(2, '0');
+    }
+
+    function displayDay(iso) {
+        const [y, m, d] = iso.split('-').map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString('en-GB', {
+            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+        });
+    }
+
+    const todayCard = document.querySelector('[data-ramble-today]');
+    const todayEditor = todayCard.querySelector('[data-today-editor]');
+    const todayStatus = todayCard.querySelector('[data-today-status]');
+    const todayMedia = todayCard.querySelector('[data-today-media]');
+    const today = localDay();
+
+    todayCard.dataset.day = today;
+    todayCard.querySelector('[data-today-label]').textContent =
+        'Today — ' + displayDay(today);
+
+    // If today already has a page (server-rendered in the timeline), fold it
+    // into the editor and hide the timeline copy.
+    const existing = document.querySelector(`[data-ramble-day="${today}"]`);
+    if (existing) {
+        const text = existing.querySelector('[data-day-text]');
+        if (text) todayEditor.value = text.textContent;
+        const media = existing.querySelector('.pl-ramble-media');
+        if (media) {
+            todayMedia.replaceChildren(...media.children);
+            todayMedia.querySelectorAll('.pl-thumb-remove').forEach(b => { b.hidden = false; });
+        }
+        existing.remove();
+    }
+
+    // ---- autosave -------------------------------------------------------
+    const timers = {};
+
+    function setStatus(el, cls, text) {
+        if (!el) return;
+        el.className = 'save-status' + (cls ? ' ' + cls : '');
+        el.textContent = text;
+    }
+
+    async function saveDay(day, text, statusEl) {
+        setStatus(statusEl, 'saving', 'Saving…');
+        try {
+            const res = await fetch(`/api/ramble/${day}/autosave`, {
+                method: 'PUT',
+                headers: apiHeaders(),
+                body: JSON.stringify({ text }),
+            });
+            if (!res.ok) throw new Error();
+            setStatus(statusEl, 'saved', 'Saved');
+        } catch {
+            setStatus(statusEl, 'error', 'Save failed');
+        }
+    }
+
+    function bindEditor(day, textarea, statusEl) {
+        textarea.addEventListener('input', () => {
+            clearTimeout(timers[day]);
+            setStatus(statusEl, '', '');
+            timers[day] = setTimeout(
+                () => saveDay(day, textarea.value, statusEl), 1500);
+        });
+    }
+
+    bindEditor(today, todayEditor, todayStatus);
+
+    // ---- media upload (today card) --------------------------------------
+    todayCard.querySelectorAll('[data-media-btn]').forEach(btn => {
+        const input = todayCard.querySelector(
+            `[data-media-input="${btn.dataset.mediaBtn}"]`);
+        btn.addEventListener('click', () => input?.click());
+        input?.addEventListener('change', async function () {
+            const files = Array.from(this.files || []);
+            this.value = '';
+            if (!files.length) return;
+
+            const status = todayCard.querySelector('[data-media-status]');
+            btn.disabled = true;
+
+            // Flush any pending text first so a fresh page isn't lost when
+            // the upload reload lands.
+            clearTimeout(timers[today]);
+            await saveDay(today, todayEditor.value, todayStatus);
+
+            let uploaded = 0;
+            try {
+                for (let i = 0; i < files.length; i++) {
+                    status.textContent = files.length > 1
+                        ? `Uploading ${i + 1} of ${files.length}…` : 'Uploading…';
+                    const form = new FormData();
+                    form.append('kind', btn.dataset.mediaBtn);
+                    form.append('media', files[i]);
+                    const res = await fetch(`/api/ramble/${today}/media`, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCSRFToken() },
+                        body: form,
+                    });
+                    if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        throw new Error(data?.error?.message || 'Upload failed');
+                    }
+                    uploaded++;
+                }
+                status.textContent = 'Added — reloading…';
+                setTimeout(() => window.location.reload(), 500);
+            } catch (err) {
+                status.textContent = err.message || 'Upload failed';
+                btn.disabled = false;
+                if (uploaded > 0) setTimeout(() => window.location.reload(), 2000);
+            }
+        });
+    });
+
+    // ---- recording (today card): shared dialog from recorder.js ---------
+    todayCard.querySelectorAll('[data-record-btn]').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const kind = this.dataset.recordBtn;
+            const status = todayCard.querySelector('[data-media-status]');
+
+            POLRecorder.record(kind, {
+                toast: msg => { if (status) status.textContent = msg; },
+                upload: async (file) => {
+                    // Flush pending text first so the reload after saving
+                    // doesn't lose a fresh page.
+                    clearTimeout(timers[today]);
+                    await saveDay(today, todayEditor.value, todayStatus);
+
+                    const form = new FormData();
+                    form.append('kind', kind);
+                    form.append('media', file);
+                    const res = await fetch(`/api/ramble/${today}/media`, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-Token': getCSRFToken() },
+                        body: form,
+                    });
+                    if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        throw new Error(data?.error?.message || 'Upload failed');
+                    }
+                    const block = await res.json();
+                    return { id: block.id, url: block.url };
+                },
+                discard: (id) =>
+                    fetch(`/api/ramble/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() }),
+                onSaved: () => {
+                    if (status) status.textContent = 'Recording added — reloading…';
+                    setTimeout(() => window.location.reload(), 500);
+                },
+            });
+        });
+    });
+
+    // ---- past days: edit-in-place ---------------------------------------
+    document.querySelectorAll('[data-day-edit]').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const dayEl = this.closest('[data-ramble-day]');
+            const day = dayEl.dataset.day || dayEl.getAttribute('data-ramble-day');
+            const textEl = dayEl.querySelector('[data-day-text]');
+
+            if (dayEl.dataset.editing === '1') return;
+            dayEl.dataset.editing = '1';
+
+            const textarea = document.createElement('textarea');
+            textarea.className = 'pl-ramble-editor';
+            textarea.value = textEl ? textEl.textContent : '';
+            if (textEl) textEl.replaceWith(textarea);
+            else dayEl.querySelector('.pl-ramble-day-head').after(textarea);
+
+            const status = document.createElement('span');
+            status.className = 'save-status';
+            this.replaceWith(status);
+
+            dayEl.querySelectorAll('.pl-thumb-remove').forEach(b => { b.hidden = false; });
+
+            bindEditor(day, textarea, status);
+            textarea.focus();
+        });
+    });
+
+    // ---- media removal (event-delegated: works in both cards) -----------
+    document.addEventListener('click', async ev => {
+        const btn = ev.target.closest('[data-block-remove]');
+        if (!btn) return;
+
+        const id = btn.dataset.blockRemove;
+        btn.disabled = true;
+        try {
+            const res = await fetch(`/api/ramble/blocks/${id}`, {
+                method: 'DELETE', headers: apiHeaders(),
+            });
+            if (!res.ok) throw new Error();
+            btn.closest('[data-block-id]')?.remove();
+        } catch {
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
+{{end}}

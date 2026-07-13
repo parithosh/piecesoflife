@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/parithosh/piecesoflife/internal/config"
 	"github.com/parithosh/piecesoflife/internal/email"
@@ -304,7 +303,29 @@ func (s *Server) registerRoutes() {
 	// Comment routes.
 	s.mux.Handle("GET /api/responses/{id}/comments", groupMW(s.handleListComments))
 	s.mux.Handle("POST /api/responses/{id}/comments", groupMW(s.handleAddComment))
+	s.mux.Handle("PATCH /api/comments/{id}", groupMW(s.handleEditComment))
 	s.mux.Handle("DELETE /api/comments/{id}", groupMW(s.handleDeleteComment))
+	s.mux.Handle("GET /api/dump/{id}/comments", groupMW(s.handleListDumpComments))
+	s.mux.Handle("POST /api/dump/{id}/comments", groupMW(s.handleAddDumpComment))
+
+	// Ramble — the private journal. Person-scoped: authMW only, no Loop
+	// context required.
+	s.mux.Handle("GET /ramble", authMW(s.handleRamblePage))
+	s.mux.Handle("GET /api/ramble/{day}", authMW(s.handleGetRambleDay))
+	s.mux.Handle("PUT /api/ramble/{day}/autosave", authMW(s.handleRambleAutosave))
+	s.mux.Handle("POST /api/ramble/{day}/media", authMW(s.handleRambleMediaUpload))
+	s.mux.Handle("DELETE /api/ramble/blocks/{id}", authMW(s.handleDeleteRambleBlock))
+	s.mux.Handle("GET /api/me/ramble/export", authMW(s.handleRambleExport))
+
+	// Diary sections — journal snapshots attached to an issue (Loop-scoped).
+	s.mux.Handle("POST /api/issues/{id}/diary", groupMW(s.handleAttachDiary))
+	s.mux.Handle("POST /api/issues/{id}/diary/refresh", groupMW(s.handleRefreshDiary))
+	s.mux.Handle("DELETE /api/issues/{id}/diary", groupMW(s.handleDetachDiary))
+	s.mux.Handle("PUT /api/diary-days/{id}/autosave", groupMW(s.handleDiaryDayAutosave))
+	s.mux.Handle("DELETE /api/diary-days/{id}", groupMW(s.handleDeleteDiaryDay))
+	s.mux.Handle("DELETE /api/diary-blocks/{id}", groupMW(s.handleDeleteDiaryBlock))
+	s.mux.Handle("GET /api/diary-days/{id}/comments", groupMW(s.handleListDiaryComments))
+	s.mux.Handle("POST /api/diary-days/{id}/comments", groupMW(s.handleAddDiaryComment))
 
 	// Albums API.
 	s.mux.Handle("GET /api/albums", groupMW(s.handleListAlbums))
@@ -343,7 +364,7 @@ func (s *Server) loadTemplates() {
 		"join":          strings.Join,
 		"letterAvatar":  letterAvatar,
 		"questionWord":  questionWord,
-		"dropCap":       dropCap,
+		"dayDisplay":    rambleDayDisplay,
 		"jsonMarshal":   jsonMarshal,
 		"categoryLabel": categoryLabel,
 		"dict":          dict,
@@ -804,22 +825,6 @@ func questionWord(n int) string {
 	}
 
 	return strconv.Itoa(n)
-}
-
-// dropCapMinRunes is the shortest leading text block that can carry a
-// magazine-style drop cap without the oversized initial dwarfing the
-// answer (e.g. a bare "hey!").
-const dropCapMinRunes = 100
-
-// dropCap reports whether the first answer on a paginated spread should
-// render a drop cap. It only applies when the leading block is text long
-// enough for the copy to wrap alongside the initial.
-func dropCap(blocks []store.ResponseBlock) bool {
-	if len(blocks) == 0 || blocks[0].Type != "text" || blocks[0].Content == nil {
-		return false
-	}
-
-	return utf8.RuneCountInString(strings.TrimSpace(*blocks[0].Content)) >= dropCapMinRunes
 }
 
 func jsonMarshal(v any) template.JS {
