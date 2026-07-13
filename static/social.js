@@ -108,11 +108,26 @@
         `;
     }
 
+    // closeEditForms removes every open edit composer and unhides the
+    // comment bodies they were covering — one edit at a time, so an
+    // unsaved draft is never silently lost behind another form's save.
+    function closeEditForms() {
+        document.querySelectorAll('.comment-edit-form').forEach(f => {
+            const it = f.closest('.comment-item');
+            it?.querySelector(':scope > .comment-body')?.removeAttribute('hidden');
+            f.remove();
+        });
+    }
+
     function openEditForm(panel, btn) {
         const item = btn.closest('.comment-item');
-        if (!item || item.querySelector(':scope > .comment-edit-form')) return;
+        if (!item) return;
 
+        // Clicking edit on an already-open comment closes its composer.
+        const wasOpen = item.querySelector(':scope > .comment-edit-form');
         removeReplyForm(document);
+        closeEditForms();
+        if (wasOpen) return;
 
         const body = item.querySelector(':scope > .comment-body');
         const form = document.createElement('form');
@@ -202,9 +217,10 @@
         const item = btn.closest('.comment-item');
         if (!item) return;
 
-        // One reply composer at a time; clicking reply again closes it.
+        // One composer at a time; clicking reply again closes it.
         const existing = item.querySelector(':scope > .comment-reply-form');
         removeReplyForm(document);
+        closeEditForms();
         if (existing) return;
 
         const form = document.createElement('form');
@@ -394,10 +410,7 @@
         }
 
         if (ev.target.closest('.comment-edit-cancel')) {
-            const form = ev.target.closest('.comment-edit-form');
-            const item = form?.closest('.comment-item');
-            item?.querySelector(':scope > .comment-body')?.removeAttribute('hidden');
-            form?.remove();
+            closeEditForms();
             return;
         }
 

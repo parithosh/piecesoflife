@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -108,7 +110,21 @@ func (s *Server) handleGetRambleDay(w http.ResponseWriter, r *http.Request) {
 
 	ramble, err := s.store.GetRambleByDay(ctx, user.ID, day)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ramble": nil, "blocks": []any{}})
+		// Only a genuinely absent day may read as empty: the client
+		// autosaves over whatever it was shown, so answering a transient
+		// read failure with an empty page would invite it to clobber the
+		// day's real content.
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusOK, map[string]any{"ramble": nil, "blocks": []any{}})
+			return
+		}
+
+		s.logger.ErrorContext(ctx, "Failed to load ramble day",
+			slog.Int64("user_id", user.ID),
+			slog.String("day", day),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to load the day")
+
 		return
 	}
 

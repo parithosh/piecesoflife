@@ -278,6 +278,14 @@ func (s *Server) buildExportPayload(
 		}
 
 		// Notebook spreads attached to this issue, with their day comments.
+		// Published issues only: until publish a member may still detach
+		// their snapshot, and the export must not carry a spread they can
+		// still take back. (Draft answers export as they always have — the
+		// notebook's privacy promise is deliberately stricter.)
+		if iss.Status != "published" {
+			continue
+		}
+
 		groups, err := s.store.ListDiarySectionsByIssue(ctx, iss.ID)
 		if err != nil {
 			s.logger.WarnContext(ctx, "Export: list diary sections failed",
@@ -451,8 +459,8 @@ Contents
 export.json   Full JSON snapshot of the loop: settings, members,
               notification preferences, issues, questions, responses
               (with their content blocks), comments, and the notebook
-              (diary) spreads members attached to issues. Identical to
-              the payload served by GET /api/admin/export.
+              (diary) spreads members attached to published issues.
+              Identical to the payload served by GET /api/admin/export.
 uploads/      Every uploaded file (photos, audio, video) referenced by
               a response or notebook block, laid out with the same
               relative paths the app stores under its upload directory.

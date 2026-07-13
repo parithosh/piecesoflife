@@ -200,12 +200,14 @@
                   {{if eq .Type "text"}}
                     {{if .Content}}<p>{{.Content}}</p>{{end}}
                   {{else if eq .Type "photo"}}
+                    {{if .FilePath}}
                     <figure class="pl-print" data-lightbox
                             data-lightbox-src="{{.FilePath | uploadURL}}"
                             data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
                       <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
                       {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
                     </figure>
+                    {{end}}
                   {{else if eq .Type "audio"}}
                     {{if .FilePath}}
                     <figure class="published-media published-media--audio">

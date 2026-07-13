@@ -36,6 +36,27 @@ func (s *Store) CreateSchedulerEvent(
 	return nil
 }
 
+// EnsureDailyEvent queues an issue-less daily event (cleanups, comment
+// digest) unless one already exists for that moment. Daily events can't
+// lean on UNIQUE(issue_id, event_type, scheduled_at) — SQLite treats their
+// NULL issue_id as distinct — so dedupe comes from the partial unique index
+// ux_scheduler_events_daily (migration 020) plus INSERT OR IGNORE.
+func (s *Store) EnsureDailyEvent(
+	ctx context.Context, eventType string, scheduledAt time.Time,
+) error {
+	_, err := s.write.ExecContext(ctx,
+		`INSERT OR IGNORE INTO scheduler_events
+		 (issue_id, event_type, scheduled_at)
+		 VALUES (NULL, ?, ?)`,
+		eventType, scheduledAt,
+	)
+	if err != nil {
+		return fmt.Errorf("ensuring daily event %s: %w", eventType, err)
+	}
+
+	return nil
+}
+
 // GetPendingEvents returns all events that haven't fired yet.
 func (s *Store) GetPendingEvents(
 	ctx context.Context,

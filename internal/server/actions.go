@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/parithosh/piecesoflife/internal/auth"
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -870,6 +871,9 @@ func (s *Server) sendCommentDigest(
 		ids = append(ids, p.NotificationID)
 	}
 
+	// A failed preference read deliberately falls through to sending:
+	// missing one mute is recoverable (the email carries its own way out),
+	// silently dropping a wanted digest is not.
 	prefs, err := s.store.GetNotificationPreferences(ctx, recipient.RecipientID)
 	if err == nil && prefs != nil && !prefs.CommentNotify {
 		if err := s.store.DeleteCommentNotifications(ctx, ids); err != nil {
@@ -905,7 +909,14 @@ func (s *Server) sendCommentDigest(
 
 		excerpt := p.Body
 		if len(excerpt) > 240 {
-			excerpt = strings.TrimSpace(excerpt[:240]) + "…"
+			// Cut on a rune boundary — a byte slice mid-character would
+			// put a � in the email.
+			cut := 240
+			for cut > 0 && !utf8.RuneStart(excerpt[cut]) {
+				cut--
+			}
+
+			excerpt = strings.TrimSpace(excerpt[:cut]) + "…"
 		}
 
 		items = append(items, digestItem{
@@ -943,6 +954,7 @@ func (s *Server) sendCommentDigest(
 	body := s.renderEmail("comment_digest.html", map[string]any{
 		"RecipientName": recipient.RecipientName,
 		"Count":         len(items),
+		"AnyOwned":      anyOwned,
 		"Items":         items,
 		"CTA": map[string]any{
 			"URL":   authURL,

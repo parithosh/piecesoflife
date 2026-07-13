@@ -1,24 +1,22 @@
-{{define "email_title"}}{{if eq .Count 1}}A new comment on your piece{{else}}{{.Count}} new comments on your pieces{{end}}{{end}}
+{{define "email_title"}}{{if eq .Count 1}}{{if .AnyOwned}}A new comment on your piece{{else}}A new reply in your thread{{end}}{{else}}{{.Count}} new comments for you{{end}}{{end}}
 
 {{define "email_preheader"}}{{if eq .Count 1}}One new comment{{else}}{{.Count}} new comments{{end}} since your last digest.{{end}}
 
 {{define "email_content"}}
 <h2 class="em-accent" style="margin:0 0 18px;font-family:'Marcellus',Georgia,'Times New Roman',serif;font-weight:400;font-size:22px;letter-spacing:0.3px;color:#7a0f38;">
-  {{if eq .Count 1}}Someone left you a comment{{else}}{{.Count}} new comments for you{{end}}
+  {{if eq .Count 1}}{{if .AnyOwned}}Someone left you a comment{{else}}Someone replied in your thread{{end}}{{else}}{{.Count}} new comments for you{{end}}
 </h2>
 <p style="margin:0 0 16px;">Hi {{.RecipientName}},</p>
 <p class="em-muted" style="margin:0 0 18px;color:#77695a;font-size:14px;">
-  Here's everything your circle said about your pieces since the last
-  digest — one email a day, however chatty it gets.
+  Here's what your circle said since the last digest — on your pieces and
+  in threads you're part of. One email a day, however chatty it gets.
 </p>
 
 {{range .Items}}
 <p class="em-muted" style="margin:18px 0 4px;color:#77695a;font-size:13px;">
   <strong style="color:#3d2a1e;">{{.Commenter}}</strong> · on {{.Context}}
 </p>
-<blockquote class="em-quote" style="margin:6px 0 0;padding:12px 18px;border-left:3px solid #c8962c;border-radius:0 8px 8px 0;background-color:#f8f2e5;">
-  {{.Excerpt}}
-</blockquote>
+<blockquote class="em-quote" style="margin:6px 0 0;padding:12px 18px;border-left:3px solid #c8962c;border-radius:0 8px 8px 0;background-color:#f8f2e5;white-space:pre-wrap;">{{.Excerpt}}</blockquote>
 {{end}}
 
 <div style="height:10px;line-height:10px;">&nbsp;</div>
