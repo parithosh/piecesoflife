@@ -246,6 +246,11 @@
 .pl-chip-btn:hover { background: var(--rani); color: var(--ivory); text-decoration: none; }
 .pl-chip-btn--dashed { border-style: dashed; border-color: var(--zari); color: var(--ink-soft); }
 
+/* filled chip — the explicit Save affordance on the journal */
+.pl-chip-btn--save { color: var(--ivory); background: var(--rani); }
+.pl-chip-btn--save:hover { background: var(--rani-deep); border-color: var(--rani-deep); }
+.pl-chip-btn--save:disabled { opacity: 0.5; cursor: default; }
+
 /* ================================================================== *
  * Shared nav (base.html) — rani bar + medallion + zari rule
  * ================================================================== */
@@ -3676,6 +3681,8 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
     padding-top: 12px;
     border-top: 1px dashed var(--line);
 }
+
+.pl-ramble-actions .pl-chip-btn--save { margin-left: auto; }
 
 .pl-ramble-day {
     margin-top: 38px;

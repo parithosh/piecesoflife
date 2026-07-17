@@ -36,6 +36,7 @@
         <button type="button" class="pl-chip-btn" data-record-btn="audio">● Record audio</button>
         <button type="button" class="pl-chip-btn" data-record-btn="video">▣ Record video</button>
         <span class="pl-dump-status" data-media-status role="status" aria-live="polite"></span>
+        <button type="button" class="pl-chip-btn pl-chip-btn--save" data-save-btn>Save</button>
       </div>
     </section>
 
@@ -146,6 +147,7 @@
 
     // ---- autosave -------------------------------------------------------
     const timers = {};
+    let uploadsInFlight = 0;
 
     function setStatus(el, cls, text) {
         if (!el) return;
@@ -168,6 +170,66 @@
         }
     }
 
+    // Explicit save: flush any pending autosave, wait out in-flight media
+    // uploads, then read the day back and only report "Saved" once the
+    // server copy matches the editor.
+    async function verifiedSave(day, textarea, statusEl) {
+        clearTimeout(timers[day]);
+        setStatus(statusEl, 'saving', 'Saving…');
+
+        while (uploadsInFlight > 0) {
+            setStatus(statusEl, 'saving', 'Waiting for upload…');
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+        setStatus(statusEl, 'saving', 'Saving…');
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const text = textarea.value;
+            try {
+                const put = await fetch(`/api/ramble/${day}/autosave`, {
+                    method: 'PUT',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({ text }),
+                });
+                if (!put.ok) throw new Error();
+
+                const check = await fetch(`/api/ramble/${day}`, {
+                    headers: apiHeaders(),
+                });
+                if (!check.ok) throw new Error();
+                const data = await check.json();
+                const stored = (data.blocks || [])
+                    .find(b => b.type === 'text')?.content || '';
+
+                // The server stores text with trailing spaces/newlines
+                // trimmed; anything else is a save that didn't land.
+                if (stored === text.replace(/[ \n]+$/, '') &&
+                    textarea.value === text) {
+                    setStatus(statusEl, 'saved', 'Saved ✓');
+                    return true;
+                }
+                // The editor moved mid-save — go around with the new text.
+            } catch {
+                setStatus(statusEl, 'error', 'Save failed — try again');
+                return false;
+            }
+        }
+
+        setStatus(statusEl, 'error', 'Could not confirm — try again');
+        return false;
+    }
+
+    function bindSaveButton(btn, day, textarea, statusEl) {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+                await verifiedSave(day, textarea, statusEl);
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
+
     function bindEditor(day, textarea, statusEl) {
         textarea.addEventListener('input', () => {
             clearTimeout(timers[day]);
@@ -178,6 +240,8 @@
     }
 
     bindEditor(today, todayEditor, todayStatus);
+    bindSaveButton(todayCard.querySelector('[data-save-btn]'),
+        today, todayEditor, todayStatus);
 
     // ---- media upload (today card) --------------------------------------
     todayCard.querySelectorAll('[data-media-btn]').forEach(btn => {
@@ -198,6 +262,7 @@
             await saveDay(today, todayEditor.value, todayStatus);
 
             let uploaded = 0;
+            uploadsInFlight++;
             try {
                 for (let i = 0; i < files.length; i++) {
                     status.textContent = files.length > 1
@@ -222,6 +287,8 @@
                 status.textContent = err.message || 'Upload failed';
                 btn.disabled = false;
                 if (uploaded > 0) setTimeout(() => window.location.reload(), 2000);
+            } finally {
+                uploadsInFlight--;
             }
         });
     });
@@ -240,20 +307,25 @@
                     clearTimeout(timers[today]);
                     await saveDay(today, todayEditor.value, todayStatus);
 
-                    const form = new FormData();
-                    form.append('kind', kind);
-                    form.append('media', file);
-                    const res = await fetch(`/api/ramble/${today}/media`, {
-                        method: 'POST',
-                        headers: { 'X-CSRF-Token': getCSRFToken() },
-                        body: form,
-                    });
-                    if (!res.ok) {
-                        const data = await res.json().catch(() => ({}));
-                        throw new Error(data?.error?.message || 'Upload failed');
+                    uploadsInFlight++;
+                    try {
+                        const form = new FormData();
+                        form.append('kind', kind);
+                        form.append('media', file);
+                        const res = await fetch(`/api/ramble/${today}/media`, {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': getCSRFToken() },
+                            body: form,
+                        });
+                        if (!res.ok) {
+                            const data = await res.json().catch(() => ({}));
+                            throw new Error(data?.error?.message || 'Upload failed');
+                        }
+                        const block = await res.json();
+                        return { id: block.id, url: block.url };
+                    } finally {
+                        uploadsInFlight--;
                     }
-                    const block = await res.json();
-                    return { id: block.id, url: block.url };
                 },
                 discard: (id) =>
                     fetch(`/api/ramble/blocks/${id}`, { method: 'DELETE', headers: apiHeaders() }),
@@ -283,11 +355,18 @@
 
             const status = document.createElement('span');
             status.className = 'save-status';
-            this.replaceWith(status);
+
+            const saveBtn = document.createElement('button');
+            saveBtn.type = 'button';
+            saveBtn.className = 'pl-chip-btn pl-chip-btn--save';
+            saveBtn.textContent = 'Save';
+
+            this.replaceWith(status, saveBtn);
 
             dayEl.querySelectorAll('.pl-thumb-remove').forEach(b => { b.hidden = false; });
 
             bindEditor(day, textarea, status);
+            bindSaveButton(saveBtn, day, textarea, status);
             textarea.focus();
         });
     });
