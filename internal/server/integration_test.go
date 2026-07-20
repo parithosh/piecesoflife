@@ -664,7 +664,7 @@ func TestUpcomingDraftLifecycle(t *testing.T) {
 		"draft must not accept answers before it opens")
 
 	// The scheduler fires: the draft opens with the suggestion leading.
-	require.NoError(t, env.srv.CreateNextIssue(ctx, 1))
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1, draft.OpensAt))
 
 	opened, err := env.store.GetIssueByID(ctx, draft.ID)
 	require.NoError(t, err)

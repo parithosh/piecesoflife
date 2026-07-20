@@ -24,7 +24,7 @@ type Actions interface {
 		ctx context.Context, issueID int64, schedulerEventID *int64,
 	) error
 	AutoPublishIssue(ctx context.Context, issueID int64) error
-	CreateNextIssue(ctx context.Context, groupID int64) error
+	CreateNextIssue(ctx context.Context, groupID int64, scheduledAt time.Time) error
 	ReconcileAutoCreate(ctx context.Context) error
 	SendCommentDigests(ctx context.Context) error
 }
@@ -222,7 +222,7 @@ func (s *Scheduler) fireEvent(
 			break
 		}
 
-		err = s.actions.CreateNextIssue(ctx, issue.GroupID)
+		err = s.actions.CreateNextIssue(ctx, issue.GroupID, ev.ScheduledAt)
 
 	case "token_cleanup":
 		var n int64

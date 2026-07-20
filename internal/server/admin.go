@@ -28,6 +28,29 @@ type AdminDashboardData struct {
 	// scheduled to open (from the pending create_next_issue event). Empty
 	// when nothing is queued or an issue is already active.
 	NextIssueOpens string
+	// NextRound feeds the schedule editor: the queued (or cadence-derived)
+	// schedule of the upcoming round. Nil when auto-create is off or there
+	// is nothing to anchor a suggestion on.
+	NextRound *NextRoundView
+	// CurrentCloseDate is the live round's deadline as a loop-timezone
+	// calendar date (YYYY-MM-DD) prefilling the schedule dialog. The Min*
+	// and Max* dates mirror the server's calendar-day validation exactly —
+	// every date the pickers offer must save. MinCloseDate is today until
+	// the 9 PM close hour passes, then tomorrow; MinNextOpenDate is always
+	// tomorrow (rounds open at 9 AM, mostly already past on the same day).
+	// The Max* dates cap the pickers to the server's limits (close within
+	// 90 days, next open within 6 months, next close a window beyond that)
+	// so a mistyped year can't silently park the loop for a year.
+	CurrentCloseDate string
+	MinCloseDate     string
+	MinNextOpenDate  string
+	MaxCloseDate     string
+	MaxNextOpenDate  string
+	MaxNextCloseDate string
+	// MinWindowDays and MaxWindowDays surface the allowed answering window
+	// to the dialog's live preview so its warning matches the server.
+	MinWindowDays int
+	MaxWindowDays int
 	// Questions are the current issue's prompts, editable in place from the
 	// dashboard. QuestionAnswers maps question ID → how many members already
 	// have a response to it, powering the "already answered" warning.
@@ -173,18 +196,48 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		recentEmails = make([]store.EmailLog, 0)
 	}
 
+	nextRound := s.nextRoundView(ctx, settings, currentIssue)
+
+	// The "opens automatically on …" tile reuses the schedule editor's
+	// lookup and label so the two can never disagree about the next round.
 	var nextIssueOpens string
-	if currentIssue == nil {
-		nextIssueOpens = s.nextIssueOpensLabel(ctx, settings)
+	if currentIssue == nil && nextRound != nil && nextRound.Queued {
+		nextIssueOpens = nextRound.OpensLabel
+	}
+
+	loc := s.settingsLocation(ctx, settings)
+
+	var currentCloseDate string
+	if currentIssue != nil && currentIssue.Status == "collecting" {
+		currentCloseDate = currentIssue.Deadline.In(loc).Format(scheduleDateLayout)
+	}
+
+	today := time.Now().In(loc)
+
+	// After the 9 PM close hour, "today" can no longer close — the picker
+	// must advance with the server or it advertises a date that 400s.
+	minClose := today
+	if today.Hour() >= deadlineLocalHour {
+		minClose = today.AddDate(0, 0, 1)
 	}
 
 	data := AdminDashboardData{
-		PageData:        s.newPageData(r),
-		CurrentIssue:    currentIssue,
-		Progress:        progress,
-		PastIssues:      pastIssues,
-		RecentEmails:    recentEmails,
-		NextIssueOpens:  nextIssueOpens,
+		PageData:         s.newPageData(r),
+		CurrentIssue:     currentIssue,
+		Progress:         progress,
+		PastIssues:       pastIssues,
+		RecentEmails:     recentEmails,
+		NextIssueOpens:   nextIssueOpens,
+		NextRound:        nextRound,
+		CurrentCloseDate: currentCloseDate,
+		MinCloseDate:     minClose.Format(scheduleDateLayout),
+		MinNextOpenDate:  today.AddDate(0, 0, 1).Format(scheduleDateLayout),
+		MaxCloseDate:     today.AddDate(0, 0, maxCloseDays).Format(scheduleDateLayout),
+		MaxNextOpenDate:  today.AddDate(0, 0, maxNextOpenDays).Format(scheduleDateLayout),
+		MaxNextCloseDate: today.AddDate(0, 0, maxNextOpenDays+maxSubmissionWindowDays).
+			Format(scheduleDateLayout),
+		MinWindowDays:   minSubmissionWindowDays,
+		MaxWindowDays:   maxSubmissionWindowDays,
 		Questions:       questions,
 		QuestionAnswers: questionAnswers,
 		RambleCounts:    rambleCounts,
@@ -573,9 +626,11 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.SubmissionWindowDays != nil {
-		if *req.SubmissionWindowDays < 3 || *req.SubmissionWindowDays > 21 {
+		if *req.SubmissionWindowDays < minSubmissionWindowDays ||
+			*req.SubmissionWindowDays > maxSubmissionWindowDays {
 			writeValidationError(w, map[string]string{
-				"submission_window_days": "Must be between 3 and 21 days",
+				"submission_window_days": fmt.Sprintf("Must be between %d and %d days",
+					minSubmissionWindowDays, maxSubmissionWindowDays),
 			})
 			return
 		}

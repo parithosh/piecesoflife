@@ -242,17 +242,112 @@ func (s *Store) HasCollectingIssue(ctx context.Context, groupID int64) (bool, er
 	return exists, nil
 }
 
-// UpdateIssueSchedule moves an issue's open time and deadline — used when an
-// admin opens a pre-created draft ahead of schedule.
+// UpdateIssueSchedule moves a draft's open time and deadline, relabeling it
+// with the (month, year) its new open date falls in — used when publish-time
+// queueing, reconciliation, or a late-firing open event re-anchors a stalled
+// draft. Only drafts qualify: a concurrent scheduler tick may have opened
+// the round already, and rewriting a collecting round's schedule would move
+// its deadline out from under members mid-collection. sql.ErrNoRows is
+// returned when the row is gone or no longer a draft.
 func (s *Store) UpdateIssueSchedule(
-	ctx context.Context, id int64, opensAt, deadline time.Time,
+	ctx context.Context, id int64, month, year int, opensAt, deadline time.Time,
 ) error {
-	_, err := s.write.ExecContext(ctx,
-		`UPDATE issues SET opens_at = ?, deadline = ? WHERE id = ?`,
-		opensAt, deadline, id,
+	result, err := s.write.ExecContext(ctx,
+		`UPDATE issues SET month = ?, year = ?, opens_at = ?, deadline = ?
+		 WHERE id = ? AND status = 'draft'`,
+		month, year, opensAt, deadline, id,
 	)
 	if err != nil {
 		return fmt.Errorf("updating issue %d schedule: %w", id, err)
+	}
+
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("checking issue %d schedule update: %w", id, err)
+	} else if n != 1 {
+		return fmt.Errorf("updating issue %d schedule: %w", id, sql.ErrNoRows)
+	}
+
+	return nil
+}
+
+// UpdateDraftIssue changes a draft's title and deadline only while it is
+// still a draft. The scheduler may open the round between an HTTP handler's
+// read and write; the status predicate prevents that race from moving the
+// deadline without also moving the collecting round's lifecycle events.
+func (s *Store) UpdateDraftIssue(
+	ctx context.Context, id int64, title *string, deadline time.Time,
+) error {
+	result, err := s.write.ExecContext(ctx,
+		`UPDATE issues SET title = COALESCE(?, title), deadline = ?
+		 WHERE id = ? AND status = 'draft'`,
+		title, deadline, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating draft issue %d: %w", id, err)
+	}
+
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("checking draft issue %d update: %w", id, err)
+	} else if n != 1 {
+		return fmt.Errorf("updating draft issue %d: %w", id, sql.ErrNoRows)
+	}
+
+	return nil
+}
+
+// OpenDraftEarly atomically consumes every pending next-round event for the
+// group, turns one draft into the collecting round at its new schedule, and
+// installs its reminder/auto-close lifecycle. If the request is canceled or
+// any statement fails, the original draft and queued opening remain intact.
+func (s *Store) OpenDraftEarly(
+	ctx context.Context, groupID, issueID int64,
+	updateTitle bool, title *string, month, year int,
+	opensAt, deadline time.Time, events []SchedulerEventSpec,
+) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning early draft open: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+
+	result, err := tx.ExecContext(ctx,
+		`UPDATE issues SET
+		   title = CASE WHEN ? THEN ? ELSE title END,
+		   month = ?, year = ?, opens_at = ?, deadline = ?, status = 'collecting'
+		 WHERE id = ? AND group_id = ? AND status = 'draft'`,
+		updateTitle, title, month, year, opensAt, deadline, issueID, groupID,
+	)
+	if err != nil {
+		return fmt.Errorf("opening draft %d early: %w", issueID, err)
+	}
+
+	if n, rowsErr := result.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("checking early open of draft %d: %w", issueID, rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("opening draft %d early: %w", issueID, sql.ErrNoRows)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM scheduler_events
+		 WHERE fired_at IS NULL AND event_type = 'create_next_issue'
+		   AND issue_id IN (SELECT id FROM issues WHERE group_id = ?)`,
+		groupID,
+	); err != nil {
+		return fmt.Errorf("consuming queued open for draft %d: %w", issueID, err)
+	}
+
+	for _, ev := range events {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO scheduler_events (issue_id, event_type, scheduled_at)
+			 VALUES (?, ?, ?)`, issueID, ev.EventType, ev.ScheduledAt,
+		); err != nil {
+			return fmt.Errorf("queueing %s for early-opened draft %d: %w",
+				ev.EventType, issueID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing early open of draft %d: %w", issueID, err)
 	}
 
 	return nil

@@ -98,7 +98,7 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	}
 	suggest(draft.ID, 1)
 
-	require.NoError(t, env.srv.CreateNextIssue(ctx, 1), "open the draft")
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1, draft.OpensAt), "open the draft")
 
 	questions, err = env.store.ListQuestionsByIssue(ctx, draft.ID)
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestDefaultQuestionsAndBankFill(t *testing.T) {
 	require.NotNil(t, nextDraft)
 	suggest(nextDraft.ID, 3)
 
-	require.NoError(t, env.srv.CreateNextIssue(ctx, 1), "open round three")
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1, nextDraft.OpensAt), "open round three")
 
 	questions, err = env.store.ListQuestionsByIssue(ctx, nextDraft.ID)
 	require.NoError(t, err)

@@ -256,6 +256,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("POST /api/admin/resend/{logId}", adminMW(s.handleResendEmail))
 	s.mux.Handle("POST /api/admin/send-reminder/{issueId}", adminMW(s.handleSendReminder))
 	s.mux.Handle("GET /api/admin/export", adminMW(s.handleExport))
+	s.mux.Handle("PUT /api/admin/schedule", adminMW(s.handleUpdateSchedule))
 	s.mux.Handle("GET /api/admin/export.zip", adminMW(s.handleExportZip))
 	s.mux.Handle("GET /api/default-questions", adminMW(s.handleListDefaultQuestions))
 	s.mux.Handle("POST /api/default-questions", adminMW(s.handleCreateDefaultQuestion))

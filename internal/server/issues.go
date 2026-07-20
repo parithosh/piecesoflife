@@ -135,13 +135,10 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		windowDays := effectiveWindowDays(settings)
-
 		// Default deadline lands at a friendly evening hour in the loop's
 		// configured timezone rather than a raw N×24h offset.
-		loc := s.settingsLocation(r.Context(), settings)
-		deadline = atLocalHour(
-			opensAt.In(loc).AddDate(0, 0, windowDays), deadlineLocalHour, loc,
+		deadline = defaultDeadline(
+			opensAt, settings, s.settingsLocation(r.Context(), settings),
 		)
 	}
 
@@ -209,33 +206,37 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		s.logger.ErrorContext(r.Context(), "Failed to check for upcoming draft",
 			slog.String("error", dErr.Error()))
 	} else if draft != nil {
-		if req.Title != nil {
-			if uErr := s.store.UpdateIssue(r.Context(), draft.ID, req.Title, nil); uErr != nil {
-				s.logger.WarnContext(r.Context(), "Failed to title early-opened draft",
-					slog.Int64("issue_id", draft.ID),
-					slog.String("error", uErr.Error()))
-			}
-		}
-
 		loc := s.settingsLocation(r.Context(), settings)
-		windowDays := effectiveWindowDays(settings)
-		newDeadline := atLocalHour(now.In(loc).AddDate(0, 0, windowDays), deadlineLocalHour, loc)
+		nowLocal := now.In(loc)
+		newDeadline := defaultDeadline(now, settings, loc)
+		// Relabeling to the open month must not duplicate a (month, year)
+		// the archive already uses — /issues/{year}/{month} can only ever
+		// resolve one edition per label.
+		month, year := s.issueLabel(r.Context(), groupID, draft.ID,
+			int(nowLocal.Month()), nowLocal.Year())
 
-		if uErr := s.store.UpdateIssueSchedule(r.Context(), draft.ID, now, newDeadline); uErr != nil {
-			s.logger.ErrorContext(r.Context(), "Failed to reschedule early-opened draft",
-				slog.Int64("issue_id", draft.ID),
-				slog.String("error", uErr.Error()))
-			writeError(w, http.StatusInternalServerError, "server_error", "Failed to open the upcoming issue")
+		fresh := *draft
+		fresh.Month = month
+		fresh.Year = year
+		fresh.OpensAt = now
+		fresh.Deadline = newDeadline
+		if req.Title != nil {
+			fresh.Title = req.Title
+		}
+		lifecycleEvents, _ := s.issueEventSpecs(
+			r.Context(), settings, draft.ID, newDeadline,
+		)
 
-			return
+		transition := func() error {
+			return s.store.OpenDraftEarly(
+				r.Context(), groupID, draft.ID, req.Title != nil, req.Title,
+				month, year, now, newDeadline, lifecycleEvents,
+			)
 		}
 
-		fresh, fErr := s.store.GetIssueByID(r.Context(), draft.ID)
-		if fErr != nil {
-			fresh = draft
-		}
-
-		if oErr := s.openIssueForCollecting(r.Context(), settings, fresh, req.QuestionCount); oErr != nil {
+		if oErr := s.openIssueForCollectingWithTransition(
+			r.Context(), settings, &fresh, req.QuestionCount, transition, true,
+		); oErr != nil {
 			s.logger.ErrorContext(r.Context(), "Failed to open upcoming draft",
 				slog.Int64("issue_id", draft.ID),
 				slog.String("error", oErr.Error()))
@@ -246,7 +247,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 		opened, oErr := s.store.GetIssueByID(r.Context(), draft.ID)
 		if oErr != nil {
-			opened = fresh
+			opened = &fresh
 		}
 
 		s.logger.InfoContext(r.Context(), "Opened pre-created draft early",
@@ -256,8 +257,13 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The fresh round claims the first free (month, year) at or after the
+	// requested one — every sibling creation path dedupes the same way, and
+	// a duplicate label would make one archive edition unreachable.
+	month, year := s.issueLabel(r.Context(), groupID, 0, req.Month, req.Year)
+
 	issueID, err := s.store.CreateIssue(
-		r.Context(), groupID, req.Title, req.Month, req.Year, opensAt, deadline,
+		r.Context(), groupID, req.Title, month, year, opensAt, deadline,
 	)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to create issue",
@@ -369,17 +375,85 @@ func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 		deadlineTime = &t
 	}
 
-	if _, ok := s.requireIssue(w, r, issueID); !ok {
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
 		return
 	}
 
-	if err := s.store.UpdateIssue(r.Context(), issueID, req.Title, deadlineTime); err != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to update issue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update issue")
+	if deadlineTime != nil {
+		if issue.Status != "collecting" && issue.Status != "draft" {
+			writeError(w, http.StatusConflict, "not_collecting",
+				"Only a collecting or upcoming round's deadline can be changed")
+			return
+		}
 
-		return
+		if !deadlineTime.After(time.Now()) || !deadlineTime.After(issue.OpensAt) {
+			writeValidationError(w, map[string]string{
+				"deadline": "Deadline must be in the future and after the round opened",
+			})
+			return
+		}
+	}
+
+	switch {
+	case deadlineTime != nil && issue.Status == "collecting":
+		if !s.deadlineClearsPinnedRound(
+			w, r, issue.GroupID, *deadlineTime, "deadline",
+		) {
+			return
+		}
+
+		// Title and deadline commit together — a reschedule moves every
+		// member's reminder emails, so it must not land while the response
+		// reports failure on the other half.
+		if err := s.rescheduleIssueDeadline(
+			r.Context(), issue, *deadlineTime, req.Title,
+		); err != nil {
+			if errors.Is(err, store.ErrScheduleOverlap) {
+				writeValidationError(w, map[string]string{
+					"deadline": "The current round must close before the queued next round opens",
+				})
+				return
+			}
+
+			s.logger.ErrorContext(r.Context(), "Failed to reschedule issue",
+				slog.Int64("issue_id", issueID),
+				slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to update issue")
+
+			return
+		}
+	case deadlineTime != nil:
+		// An upcoming draft has no reminder or auto-close events yet — its
+		// deadline (and title) update is one status-guarded statement. The
+		// queued open event tracks the open time, not the close, so no re-pin
+		// is needed; if the scheduler opened it concurrently, fail instead of
+		// moving a collecting deadline without its lifecycle events.
+		if err := s.store.UpdateDraftIssue(
+			r.Context(), issueID, req.Title, *deadlineTime,
+		); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusConflict, "not_draft",
+					"The round opened before the update was saved — reload and try again")
+				return
+			}
+
+			s.logger.ErrorContext(r.Context(), "Failed to update issue",
+				slog.Int64("issue_id", issueID),
+				slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to update issue")
+
+			return
+		}
+	case req.Title != nil:
+		if err := s.store.UpdateIssue(r.Context(), issueID, req.Title, nil); err != nil {
+			s.logger.ErrorContext(r.Context(), "Failed to update issue",
+				slog.Int64("issue_id", issueID),
+				slog.String("error", err.Error()))
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to update issue")
+
+			return
+		}
 	}
 
 	issue, err := s.store.GetIssueByID(r.Context(), issueID)
@@ -523,61 +597,40 @@ func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if issue.Status == "published" {
-		writeError(w, http.StatusConflict, "already_published",
-			"Cannot extend deadline of a published issue")
+	if issue.Status != "collecting" {
+		writeError(w, http.StatusConflict, "not_collecting",
+			"Cannot extend a round that is not collecting answers")
 		return
 	}
 
-	if !newDeadline.After(issue.Deadline) {
+	if !newDeadline.After(time.Now()) || !newDeadline.After(issue.Deadline) {
 		writeValidationError(w, map[string]string{
-			"new_deadline": "New deadline must be later than the current deadline",
+			"new_deadline": "New deadline must be in the future and later than the current deadline",
 		})
 
 		return
 	}
 
-	if err := s.store.UpdateIssue(r.Context(), issueID, nil, &newDeadline); err != nil {
+	if !s.deadlineClearsPinnedRound(
+		w, r, issue.GroupID, newDeadline, "new_deadline",
+	) {
+		return
+	}
+
+	if err := s.rescheduleIssueDeadline(r.Context(), issue, newDeadline, nil); err != nil {
+		if errors.Is(err, store.ErrScheduleOverlap) {
+			writeValidationError(w, map[string]string{
+				"new_deadline": "The current round must close before the queued next round opens",
+			})
+			return
+		}
+
 		s.logger.ErrorContext(r.Context(), "Failed to update issue deadline",
 			slog.Int64("issue_id", issueID),
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to extend deadline")
 
 		return
-	}
-
-	// Replace scheduler events with updated times.
-	if err := s.store.DeleteEventsForIssue(r.Context(), issueID); err != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to delete old scheduler events",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-	}
-
-	extSettings, sErr := s.store.GetSettings(r.Context(), issue.GroupID)
-	if sErr != nil {
-		s.logger.WarnContext(r.Context(), "Failed to load settings for extend — using UTC",
-			slog.String("error", sErr.Error()))
-	}
-
-	// Re-queue reminders and auto-close anchored to the new deadline.
-	remindersQueued, evErr := s.scheduleIssueEvents(r.Context(), extSettings, issueID, newDeadline)
-	if evErr != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to schedule issue events after extend — round will not auto-close; extend again to requeue",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", evErr.Error()))
-	}
-
-	// The extend dialog promises non-responders a heads-up. When the new
-	// deadline is too close for any standard reminder slot, queue an
-	// immediate last-chance reminder — the next scheduler tick sends it.
-	if remindersQueued == 0 {
-		if err := s.store.CreateSchedulerEvent(
-			r.Context(), &issueID, "reminder_2", time.Now(),
-		); err != nil {
-			s.logger.ErrorContext(r.Context(), "Failed to queue immediate reminder after extend",
-				slog.Int64("issue_id", issueID),
-				slog.String("error", err.Error()))
-		}
 	}
 
 	s.logger.InfoContext(r.Context(), "Issue deadline extended",
@@ -596,6 +649,111 @@ func (s *Server) handleExtendDeadline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"issue": updated})
+}
+
+// deadlineClearsPinnedRound applies the shared invariant for every legacy
+// deadline API: a collecting round must close before its queued successor
+// opens. Store failures are reported as server errors, not as "no pin".
+func (s *Server) deadlineClearsPinnedRound(
+	w http.ResponseWriter, r *http.Request, groupID int64,
+	deadline time.Time, field string,
+) bool {
+	pinned, err := s.pinnedRoundOverlappingDeadline(r.Context(), groupID, deadline)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to check pinned next round",
+			slog.Int64("group_id", groupID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error",
+			"Failed to check the next round's schedule")
+
+		return false
+	}
+
+	if pinned != nil {
+		writeValidationError(w, map[string]string{
+			field: "The current round must close before the queued next round opens",
+		})
+
+		return false
+	}
+
+	return true
+}
+
+// rescheduledIssueEventSpecs rebuilds reminders and auto-close around a new
+// deadline. If no standard member reminder has enough lead time, it includes
+// one immediate last-chance reminder — always when the deadline moved
+// earlier (whatever close the last reminder advertised is now wrong, and the
+// round would close under members who think they have more time), and
+// otherwise unless a reminder already fired in the last day (successive
+// extensions must not spam non-responders).
+func (s *Server) rescheduledIssueEventSpecs(
+	ctx context.Context, settings *store.Settings, issueID int64,
+	oldDeadline, newDeadline time.Time,
+) []store.SchedulerEventSpec {
+	events, remindersQueued := s.issueEventSpecs(ctx, settings, issueID, newDeadline)
+	immediate := store.SchedulerEventSpec{
+		EventType: "reminder_2", ScheduledAt: time.Now(),
+	}
+
+	// A prior reminder may have advertised the old, later deadline. Correct
+	// that immediately even when the shortened schedule still has room for a
+	// standard reminder; the later slot remains useful as a final nudge.
+	if newDeadline.Before(oldDeadline) {
+		return append(events, immediate)
+	}
+
+	if remindersQueued != 0 {
+		return events
+	}
+
+	recent, err := s.store.HasRecentFiredReminder(ctx, issueID)
+	switch {
+	case err != nil:
+		s.logger.ErrorContext(ctx, "Failed to check recent reminders — skipping immediate last-chance reminder",
+			slog.Int64("issue_id", issueID),
+			slog.String("error", err.Error()))
+	case recent:
+		s.logger.InfoContext(ctx, "Skipping immediate reminder — one already went out in the last day",
+			slog.Int64("issue_id", issueID))
+	default:
+		events = append(events, immediate)
+	}
+
+	return events
+}
+
+// rescheduleIssueDeadline atomically moves a collecting round's deadline and
+// replaces all of its pending lifecycle events; a non-nil title renames the
+// round in the same transaction.
+func (s *Server) rescheduleIssueDeadline(
+	ctx context.Context, issue *store.Issue, newDeadline time.Time, title *string,
+) error {
+	settings, settingsErr := s.store.GetSettings(ctx, issue.GroupID)
+	if settingsErr != nil {
+		s.logger.WarnContext(ctx, "Failed to load settings for reschedule — using UTC",
+			slog.String("error", settingsErr.Error()))
+	}
+
+	events := s.rescheduledIssueEventSpecs(
+		ctx, settings, issue.ID, issue.Deadline, newDeadline,
+	)
+	_, err := s.store.ApplySchedule(ctx, store.ScheduleUpdate{
+		GroupID:         issue.GroupID,
+		CurrentIssueID:  &issue.ID,
+		CurrentDeadline: &newDeadline,
+		CurrentTitle:    title,
+		CurrentEvents:   events,
+	})
+	if err != nil {
+		return fmt.Errorf("rescheduling issue %d: %w", issue.ID, err)
+	}
+
+	s.logger.InfoContext(ctx, "Issue deadline moved",
+		slog.Int64("issue_id", issue.ID),
+		slog.Time("new_deadline", newDeadline))
+
+	return nil
 }
 
 // handleListQuestions returns all questions for an issue.
