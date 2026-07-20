@@ -21,6 +21,15 @@ const (
 	nextOpenLocalHour = 9
 )
 
+// minSubmissionWindowDays and maxSubmissionWindowDays bound the answering
+// window members get each round. Every validator, date-picker bound, and
+// preview derives from these two numbers so the wizard, settings API,
+// schedule editor, and dialog JS can never disagree about the allowed range.
+const (
+	minSubmissionWindowDays = 3
+	maxSubmissionWindowDays = 21
+)
+
 // emailCTATokenTTL is how long the magic-link tokens embedded in outgoing
 // emails stay valid.
 const emailCTATokenTTL = 30 * 24 * time.Hour
@@ -46,8 +55,45 @@ func (s *Server) scheduleIssueEvents(
 	ctx context.Context, settings *store.Settings, issueID int64,
 	deadline time.Time,
 ) (remindersQueued int, err error) {
+	events, _ := s.issueEventSpecs(ctx, settings, issueID, deadline)
+
+	for _, ev := range events {
+		if createErr := s.store.CreateSchedulerEvent(
+			ctx, &issueID, ev.EventType, ev.ScheduledAt,
+		); createErr != nil {
+			if ev.EventType == "auto_close" {
+				return remindersQueued, fmt.Errorf(
+					"queueing auto_close for issue %d: %w", issueID, createErr)
+			}
+
+			s.logger.ErrorContext(ctx, "Failed to create scheduler event",
+				slog.Int64("issue_id", issueID),
+				slog.String("event_type", ev.EventType),
+				slog.String("error", createErr.Error()))
+
+			continue
+		}
+
+		if strings.HasPrefix(ev.EventType, "reminder") {
+			remindersQueued++
+		}
+	}
+
+	return remindersQueued, nil
+}
+
+// issueEventSpecs calculates a round's pending lifecycle without mutating
+// the store. The schedule editor uses the same calculation inside one
+// transaction with the deadline update; ordinary round opening inserts the
+// returned rows directly through scheduleIssueEvents.
+func (s *Server) issueEventSpecs(
+	ctx context.Context, settings *store.Settings, issueID int64,
+	deadline time.Time,
+) ([]store.SchedulerEventSpec, int) {
 	loc := s.settingsLocation(ctx, settings)
 	now := time.Now()
+	events := make([]store.SchedulerEventSpec, 0, 4)
+	remindersQueued := 0
 
 	for _, ev := range []struct {
 		eventType   string
@@ -67,26 +113,16 @@ func (s *Server) scheduleIssueEvents(
 			continue
 		}
 
-		if createErr := s.store.CreateSchedulerEvent(ctx, &issueID, ev.eventType, ev.scheduledAt); createErr != nil {
-			if ev.eventType == "auto_close" {
-				return remindersQueued, fmt.Errorf(
-					"queueing auto_close for issue %d: %w", issueID, createErr)
-			}
-
-			s.logger.ErrorContext(ctx, "Failed to create scheduler event",
-				slog.Int64("issue_id", issueID),
-				slog.String("event_type", ev.eventType),
-				slog.String("error", createErr.Error()))
-
-			continue
-		}
+		events = append(events, store.SchedulerEventSpec{
+			EventType: ev.eventType, ScheduledAt: ev.scheduledAt,
+		})
 
 		if strings.HasPrefix(ev.eventType, "reminder") {
 			remindersQueued++
 		}
 	}
 
-	return remindersQueued, nil
+	return events, remindersQueued
 }
 
 // mintEmailCTAToken creates an "email_cta" auth token for userID and returns
@@ -133,14 +169,27 @@ func atLocalHour(t time.Time, hour int, loc *time.Location) time.Time {
 }
 
 // effectiveWindowDays returns the configured submission window, falling back
-// to a week when settings hold a nonsensical value (the wizard enforces a
-// 3-day minimum).
+// to a week when settings hold a nonsensical value (the wizard enforces the
+// minimum).
 func effectiveWindowDays(settings *store.Settings) int {
-	if settings.SubmissionWindowDays < 3 {
+	if settings.SubmissionWindowDays < minSubmissionWindowDays {
 		return 7
 	}
 
 	return settings.SubmissionWindowDays
+}
+
+// defaultDeadline derives a round's close from its open: the loop's
+// answering window later, pinned to the friendly local evening hour. The
+// single home of the open→deadline formula — every path that schedules a
+// round derives its close here so the policy can't drift between them.
+func defaultDeadline(
+	open time.Time, settings *store.Settings, loc *time.Location,
+) time.Time {
+	return atLocalHour(
+		open.In(loc).AddDate(0, 0, effectiveWindowDays(settings)),
+		deadlineLocalHour, loc,
+	)
 }
 
 // SendReminderForIssue sends a reminder email to every active member who has
@@ -498,15 +547,39 @@ func (s *Server) AutoPublishIssue(ctx context.Context, issueID int64) error {
 func (s *Server) queueNextIssueEvent(
 	ctx context.Context, settings *store.Settings, lastOpensAt time.Time,
 ) {
-	loc := s.settingsLocation(ctx, settings)
-	nextOpen := nextIssueOpenTime(lastOpensAt, settings.Frequency, time.Now().UTC())
-
-	// Open at a friendly local morning hour rather than whatever UTC
-	// instant the cadence math produced.
-	nextOpen = atLocalHour(nextOpen, nextOpenLocalHour, loc)
-	if nextOpen.Before(time.Now().Add(12 * time.Hour)) {
-		nextOpen = atLocalHour(nextOpen.AddDate(0, 0, 1), nextOpenLocalHour, loc)
+	// An admin may already have pinned the next round from the dashboard's
+	// schedule editor — a second create_next_issue event would open a
+	// duplicate round later, so the pinned schedule wins. Only an event
+	// whose round is still a draft counts: a pending event pointing at an
+	// already-opened round is stale (e.g. the admin started the round
+	// manually before the event fired) and must not block the next cycle.
+	pending, err := s.store.GetPendingNextRoundEvent(ctx, settings.GroupID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to check for queued next round — next round not scheduled",
+			slog.Int64("group_id", settings.GroupID),
+			slog.String("error", err.Error()))
+		return
 	}
+
+	if pending != nil {
+		s.logger.InfoContext(ctx, "Next round already queued — keeping its schedule",
+			slog.Time("scheduled_at", pending.ScheduledAt))
+		return
+	}
+
+	// With no genuine event queued, every remaining pending open event for
+	// this Loop is stale by definition — left alone it would fire later and
+	// open the round queued below off its date.
+	if _, err := s.store.DeletePendingGroupEventsByType(ctx,
+		settings.GroupID, "create_next_issue"); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to clear stale open events — next round not scheduled",
+			slog.Int64("group_id", settings.GroupID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	loc := s.settingsLocation(ctx, settings)
+	nextOpen := cadenceNextOpen(lastOpensAt, settings.Frequency, loc)
 
 	// Ensure the next round exists as a draft first: the scheduler event
 	// references it, and that reference is how the event knows which Loop
@@ -526,14 +599,42 @@ func (s *Server) queueNextIssueEvent(
 
 	if existing != nil {
 		draftID = existing.ID
-	} else {
-		windowDays := effectiveWindowDays(settings)
+		// A draft whose open time is still comfortably ahead carries an
+		// admin-chosen schedule (or survived an earlier queue failure) —
+		// anchor the event to it instead of the cadence math.
+		if existing.OpensAt.After(time.Now().Add(12 * time.Hour)) {
+			nextOpen = existing.OpensAt
+		} else {
+			// The draft's own schedule is stale (its pin was consumed by a
+			// no-op fire, or its open date slipped past). Re-anchor it to
+			// the cadence slot: opened as-is it would carry a deadline
+			// already in the past and auto-close an empty round minutes
+			// after members are told it opened.
+			openLocal := nextOpen.In(loc)
+			deadline := defaultDeadline(nextOpen, settings, loc)
+			month, year := s.issueLabel(ctx, settings.GroupID, existing.ID,
+				int(openLocal.Month()), openLocal.Year())
 
+			if err := s.store.UpdateIssueSchedule(ctx, existing.ID,
+				month, year, nextOpen, deadline); err != nil {
+				s.logger.ErrorContext(ctx, "Failed to re-anchor stale draft — next round not scheduled",
+					slog.Int64("issue_id", existing.ID),
+					slog.String("error", err.Error()))
+				return
+			}
+
+			s.logger.InfoContext(ctx, "Re-anchored stale draft to the cadence slot",
+				slog.Int64("issue_id", existing.ID),
+				slog.Time("opens_at", nextOpen))
+		}
+	} else {
 		openLocal := nextOpen.In(loc)
-		deadline := atLocalHour(openLocal.AddDate(0, 0, windowDays), deadlineLocalHour, loc)
+		deadline := defaultDeadline(nextOpen, settings, loc)
+		month, year := s.issueLabel(ctx, settings.GroupID, 0,
+			int(openLocal.Month()), openLocal.Year())
 
 		draftID, err = s.store.CreateIssue(ctx, settings.GroupID, nil,
-			int(openLocal.Month()), openLocal.Year(), nextOpen, deadline)
+			month, year, nextOpen, deadline)
 		if err != nil {
 			s.logger.ErrorContext(ctx, "Failed to pre-create next draft issue — next round not scheduled",
 				slog.Int64("group_id", settings.GroupID),
@@ -568,6 +669,19 @@ func (s *Server) queueNextIssueEvent(
 func (s *Server) openIssueForCollecting(
 	ctx context.Context, settings *store.Settings, issue *store.Issue,
 	questionCount int,
+) error {
+	return s.openIssueForCollectingWithTransition(
+		ctx, settings, issue, questionCount, nil, false,
+	)
+}
+
+// openIssueForCollectingWithTransition allows the manual "start now" path
+// to atomically reschedule the draft, consume its queued open event, and
+// flip it to collecting. Questions are populated before that transition,
+// so a failed transaction leaves a retryable scheduled draft.
+func (s *Server) openIssueForCollectingWithTransition(
+	ctx context.Context, settings *store.Settings, issue *store.Issue,
+	questionCount int, transition func() error, eventsAlreadyScheduled bool,
 ) error {
 	existing, err := s.store.ListQuestionsByIssue(ctx, issue.ID)
 	if err != nil {
@@ -616,15 +730,24 @@ func (s *Server) openIssueForCollecting(
 		}
 	}
 
-	if err := s.store.SetIssueStatus(ctx, issue.ID, "collecting"); err != nil {
-		return fmt.Errorf("opening issue %d for collecting: %w", issue.ID, err)
+	var openErr error
+	if transition != nil {
+		openErr = transition()
+	} else {
+		openErr = s.store.SetIssueStatus(ctx, issue.ID, "collecting")
 	}
 
-	// Queue reminders and auto-close anchored to the deadline.
-	if _, evErr := s.scheduleIssueEvents(ctx, settings, issue.ID, issue.Deadline); evErr != nil {
-		s.logger.ErrorContext(ctx, "Failed to schedule issue events — round will not auto-close; extend the deadline to requeue",
-			slog.Int64("issue_id", issue.ID),
-			slog.String("error", evErr.Error()))
+	if openErr != nil {
+		return fmt.Errorf("opening issue %d for collecting: %w", issue.ID, openErr)
+	}
+
+	if !eventsAlreadyScheduled {
+		// Queue reminders and auto-close anchored to the deadline.
+		if _, evErr := s.scheduleIssueEvents(ctx, settings, issue.ID, issue.Deadline); evErr != nil {
+			s.logger.ErrorContext(ctx, "Failed to schedule issue events — round will not auto-close; extend the deadline to requeue",
+				slog.Int64("issue_id", issue.ID),
+				slog.String("error", evErr.Error()))
+		}
 	}
 
 	// Send issue-open emails to every active member.
@@ -657,8 +780,7 @@ func (s *Server) nextIssueOpensLabel(
 		return ""
 	}
 
-	ev, err := s.store.GetNextPendingEventForGroup(ctx,
-		"create_next_issue", settings.GroupID)
+	ev, err := s.store.GetPendingNextRoundEvent(ctx, settings.GroupID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "Failed to look up next create_next_issue event",
 			slog.String("error", err.Error()))
@@ -705,25 +827,52 @@ func (s *Server) CreateNextIssue(ctx context.Context, groupID int64) error {
 		return nil
 	}
 
-	if draft, err := s.store.GetNextDraftIssue(ctx, groupID); err != nil {
-		return fmt.Errorf("checking draft issue: %w", err)
-	} else if draft != nil {
-		return s.openIssueForCollecting(ctx, settings, draft, 0)
-	}
-
-	// Fallback: no pre-created draft — build one now and open it.
-	now := time.Now().UTC()
-	windowDays := effectiveWindowDays(settings)
-
 	// All calendar math happens in the loop's timezone: the issue is labeled
 	// with the local month (a 00:30 IST open must not become last month's
 	// issue), and the deadline lands at a friendly local evening hour.
+	now := time.Now().UTC()
 	loc := s.settingsLocation(ctx, settings)
 	nowLocal := now.In(loc)
-	deadline := atLocalHour(nowLocal.AddDate(0, 0, windowDays), deadlineLocalHour, loc)
+
+	if draft, err := s.store.GetNextDraftIssue(ctx, groupID); err != nil {
+		return fmt.Errorf("checking draft issue: %w", err)
+	} else if draft != nil {
+		// A very late fire (server down past the draft's own close) must
+		// not open the round with a deadline already past or imminent —
+		// the next tick would auto-close and publish it empty, minutes
+		// after members are told it opened. Re-anchor to a fresh window
+		// from now first; the same guard queueNextIssueEvent applies at
+		// publish time. An error leaves the event unfired for a retry.
+		if !draft.Deadline.After(now.Add(minReminderLead)) {
+			deadline := defaultDeadline(now, settings, loc)
+			month, year := s.issueLabel(ctx, groupID, draft.ID,
+				int(nowLocal.Month()), nowLocal.Year())
+
+			if err := s.store.UpdateIssueSchedule(ctx, draft.ID,
+				month, year, now, deadline); err != nil {
+				return fmt.Errorf("re-anchoring stale draft %d: %w", draft.ID, err)
+			}
+
+			draft.Month, draft.Year = month, year
+			draft.OpensAt, draft.Deadline = now, deadline
+
+			s.logger.InfoContext(ctx, "Re-anchored stale draft before opening",
+				slog.Int64("issue_id", draft.ID),
+				slog.Time("deadline", deadline))
+		}
+
+		return s.openIssueForCollecting(ctx, settings, draft, 0)
+	}
+
+	// Fallback: no pre-created draft — build one now and open it. The label
+	// walks past (month, year) pairs other editions already claim, or the
+	// archive could no longer address one of them.
+	deadline := defaultDeadline(now, settings, loc)
+	month, year := s.issueLabel(ctx, groupID, 0,
+		int(nowLocal.Month()), nowLocal.Year())
 
 	issueID, err := s.store.CreateIssue(ctx, groupID, nil,
-		int(nowLocal.Month()), nowLocal.Year(), now, deadline,
+		month, year, now, deadline,
 	)
 	if err != nil {
 		return fmt.Errorf("creating issue: %w", err)
@@ -738,8 +887,9 @@ func (s *Server) CreateNextIssue(ctx context.Context, groupID int64) error {
 }
 
 // ReconcileAutoCreate re-queues the next-round event for any Loop whose
-// auto-create cycle has stalled: auto-create on, no active round, and no
-// pending create_next_issue event. queueNextIssueEvent deliberately aborts
+// auto-create cycle has stalled: auto-create on, no collecting round, and no
+// pending create_next_issue event — including a draft whose open event was
+// lost or whose open date slipped past. queueNextIssueEvent deliberately aborts
 // (rather than queue a Loop-less event) when a transient store error hits
 // at publish time — this reconciliation is the retry that makes that abort
 // safe. Runs at scheduler startup and daily; per-Loop failures are logged
@@ -768,13 +918,19 @@ func (s *Server) ReconcileAutoCreate(ctx context.Context) error {
 			continue
 		}
 
-		active, err := s.store.HasActiveIssue(ctx, ov.ID)
-		if err != nil || active {
+		// Only a collecting round means the cycle is alive (its publish
+		// re-queues the next one). HasActiveIssue would also count a
+		// stalled draft — open date passed, no queued event — and skip
+		// forever the exact state queueNextIssueEvent's re-anchor repairs.
+		collecting, err := s.store.HasCollectingIssue(ctx, ov.ID)
+		if err != nil || collecting {
 			continue
 		}
 
-		pending, err := s.store.GetNextPendingEventForGroup(ctx,
-			"create_next_issue", ov.ID)
+		// The same strict draft-joined check queueNextIssueEvent uses: a
+		// stale event pointing at an already-opened round must not blind
+		// the reconciler to a genuinely stalled Loop.
+		pending, err := s.store.GetPendingNextRoundEvent(ctx, ov.ID)
 		if err != nil || pending != nil {
 			continue
 		}
@@ -797,6 +953,22 @@ func (s *Server) ReconcileAutoCreate(ctx context.Context) error {
 	return nil
 }
 
+// cadenceNextOpen derives when the cadence would open the next round after
+// one that opened at lastOpensAt: the frequency slot pinned to the friendly
+// local morning hour, pushed a day when it lands under 12 hours away.
+// Shared by publish-time queueing and the dashboard's schedule suggestion
+// so the two can never drift apart.
+func cadenceNextOpen(lastOpensAt time.Time, frequency string, loc *time.Location) time.Time {
+	next := nextIssueOpenTime(lastOpensAt, frequency, time.Now().UTC())
+	next = atLocalHour(next, nextOpenLocalHour, loc)
+
+	if next.Before(time.Now().Add(12 * time.Hour)) {
+		next = atLocalHour(next.AddDate(0, 0, 1), nextOpenLocalHour, loc)
+	}
+
+	return next
+}
+
 // nextIssueOpenTime calculates when the next issue should open based on the
 // cadence and the current one's open time. Never returns a time in the past:
 // if the cadence slot has already elapsed (e.g. publish ran very late), the
@@ -808,9 +980,9 @@ func nextIssueOpenTime(currentOpen time.Time, frequency string, now time.Time) t
 	case "biweekly":
 		next = currentOpen.AddDate(0, 0, 14)
 	case "quarterly":
-		next = currentOpen.AddDate(0, 3, 0)
+		next = addMonthsClamped(currentOpen, 3)
 	default: // monthly or unknown
-		next = currentOpen.AddDate(0, 1, 0)
+		next = addMonthsClamped(currentOpen, 1)
 	}
 
 	if next.Before(now.Add(24 * time.Hour)) {
@@ -818,6 +990,29 @@ func nextIssueOpenTime(currentOpen time.Time, frequency string, now time.Time) t
 	}
 
 	return next
+}
+
+// addMonthsClamped advances by whole calendar months without Go's AddDate
+// overflow behavior skipping short months (Jan 31 + one month otherwise
+// normalizes into March). The target month's final day is used when needed.
+func addMonthsClamped(t time.Time, months int) time.Time {
+	target := time.Date(
+		t.Year(), t.Month()+time.Month(months), 1,
+		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location(),
+	)
+	lastDay := time.Date(
+		target.Year(), target.Month()+1, 0,
+		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location(),
+	).Day()
+	day := t.Day()
+	if day > lastDay {
+		day = lastDay
+	}
+
+	return time.Date(
+		target.Year(), target.Month(), day,
+		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location(),
+	)
 }
 
 // SendCommentDigests drains the comment-notification queue into at most one

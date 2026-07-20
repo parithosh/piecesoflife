@@ -45,9 +45,7 @@
           {{if eq .CurrentIssue.Status "collecting"}}
           <div class="pl-submitbar-actions">
             <button type="button" class="pl-btn pl-btn--danger"
-                    data-extend-trigger
-                    data-issue-id="{{.CurrentIssue.ID}}"
-                    data-deadline="{{.CurrentIssue.Deadline.Format "2006-01-02T15:04:05Z07:00"}}">⚠ Extend deadline</button>
+                    data-schedule-trigger>⚠ Adjust schedule</button>
             <button type="button" class="pl-btn pl-btn--ghost" onclick="sendReminder({{.CurrentIssue.ID}})">Send reminder</button>
             <button type="button" class="pl-btn pl-btn--gold"
                     data-publish-trigger
@@ -89,6 +87,9 @@
             <p class="pl-eyebrow">Cadence</p>
             <div class="pl-stat-val" style="text-transform:capitalize;">{{.Settings.Frequency}}</div>
             <p class="pl-stat-sub">{{.Settings.SubmissionWindowDays}}-day window</p>
+            {{if .NextRound}}
+            <p class="pl-stat-sub">{{if .NextRound.Queued}}Next opens {{.NextRound.OpensLabel}}{{else}}Next expected {{.NextRound.OpensLabel}}{{end}}</p>
+            {{end}}
           </div>
 
           <div class="pl-stat">
@@ -233,8 +234,11 @@
           themselves after each publish.
         </p>
         {{end}}
-        <div style="margin-top:18px;">
+        <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;">
           <button type="button" class="pl-btn pl-btn--gold" onclick="openCreateIssueDialog()">{{if .NextIssueOpens}}Start it now{{else}}Create new issue{{end}}</button>
+          {{if .NextRound}}
+          <button type="button" class="pl-btn pl-btn--ghost" data-schedule-trigger>Adjust schedule</button>
+          {{end}}
         </div>
       </div>
 
@@ -253,6 +257,62 @@
           <button type="button" class="pl-btn pl-btn--outline" onclick="document.getElementById('create-issue-dialog').close()">Cancel</button>
           <button type="button" id="confirm-create-issue-btn" class="pl-btn pl-btn--gold">Create issue</button>
         </div>
+      </dialog>
+      {{end}}
+
+      {{if or .CurrentCloseDate .NextRound}}
+      <dialog id="schedule-dialog" class="pl-dialog pl-dialog--publish" aria-labelledby="schedule-dialog-title"
+              data-frequency="{{.Settings.Frequency}}"
+              data-min-window="{{.MinWindowDays}}" data-max-window="{{.MaxWindowDays}}">
+        <header>
+          <h3 id="schedule-dialog-title" class="pl-dialog-title" style="margin:0;">Adjust the schedule</h3>
+          <p class="pl-dialog-sub">
+            Rounds open at 9:00&nbsp;AM and close at 9:00&nbsp;PM ({{.Settings.Timezone}} time).
+            Moving dates reschedules everyone's reminder emails.
+          </p>
+        </header>
+        <section>
+          {{if .CurrentCloseDate}}
+          <div class="card card--quiet" style="margin:0 0 var(--space-3);">
+            <p class="step-eyebrow" style="margin:0;color:var(--rani);">This round</p>
+            <label for="schedule-current-close" class="pl-field-label" style="display:block;margin-top:var(--space-2);">Closes and publishes on</label>
+            <input type="date" id="schedule-current-close" class="pl-field"
+                   value="{{.CurrentCloseDate}}" min="{{.MinCloseDate}}" max="{{.MaxCloseDate}}"
+                   data-original="{{.CurrentCloseDate}}" data-issue-id="{{.CurrentIssue.ID}}"
+                   style="margin-top:6px;">
+            <p class="muted mb-0" style="font-size:var(--text-8);margin-top:6px;">
+              ⚠ Changes the deadline for everyone. If the new date is very close,
+              members who haven't answered get an immediate last-chance reminder.
+            </p>
+          </div>
+          {{end}}
+          {{if .NextRound}}
+          <div class="card card--quiet" style="margin:0;">
+            <p class="step-eyebrow" style="margin:0;color:var(--peacock);">Next round</p>
+            <div style="display:flex;gap:var(--space-3);margin-top:var(--space-2);flex-wrap:wrap;">
+              <div style="flex:1;min-width:140px;">
+                <label for="schedule-next-open" class="pl-field-label">Opens on</label>
+                <input type="date" id="schedule-next-open" class="pl-field"
+                       value="{{.NextRound.OpenDate}}" min="{{.MinNextOpenDate}}" max="{{.MaxNextOpenDate}}"
+                       data-original="{{.NextRound.OpenDate}}"{{if .NextRound.NeedsRepin}} data-needs-repin="1"{{end}}
+                       style="margin-top:6px;">
+              </div>
+              <div style="flex:1;min-width:140px;">
+                <label for="schedule-next-close" class="pl-field-label">Closes on</label>
+                <input type="date" id="schedule-next-close" class="pl-field"
+                       value="{{.NextRound.CloseDate}}" min="{{.MinNextOpenDate}}" max="{{.MaxNextCloseDate}}"
+                       data-original="{{.NextRound.CloseDate}}" style="margin-top:6px;">
+              </div>
+            </div>
+            <p id="schedule-preview" class="muted mb-0" style="font-size:var(--text-8);margin-top:var(--space-2);" aria-live="polite"></p>
+          </div>
+          {{end}}
+          <p id="schedule-error" class="alert alert-error" style="margin:var(--space-4) 0 0;display:none;"></p>
+        </section>
+        <footer class="pl-dialog-actions">
+          <button type="button" class="pl-btn pl-btn--outline" data-schedule-cancel>Cancel</button>
+          <button type="button" id="schedule-save-btn" class="pl-btn pl-btn--gold" data-default-label="Save schedule">Save schedule</button>
+        </footer>
       </dialog>
       {{end}}
 
@@ -584,47 +644,129 @@ async function sendReminder(id) {
     else alert('Failed to send reminders.');
 }
 
-// Extend deadline — deliberately scary: it delays the issue for everyone
-// and reschedules the reminder emails.
-document.querySelector('[data-extend-trigger]')?.addEventListener('click', async function () {
-    const issueID = this.dataset.issueId;
-    const current = new Date(this.dataset.deadline);
+// Schedule editor — one place to move the live round's close date and to
+// pin when the next round opens/closes. The server pins hours (9 AM open,
+// 9 PM close, loop timezone) and re-anchors the cadence on the new dates.
+(function scheduleEditor() {
+    const dlg = document.getElementById('schedule-dialog');
+    if (!dlg) return;
 
-    const input = prompt('Extend the deadline by how many days?', '7');
-    if (input === null) return;
+    const curInput   = document.getElementById('schedule-current-close');
+    const openInput  = document.getElementById('schedule-next-open');
+    const closeInput = document.getElementById('schedule-next-close');
+    const preview    = document.getElementById('schedule-preview');
+    const errorEl    = document.getElementById('schedule-error');
+    const saveBtn    = document.getElementById('schedule-save-btn');
 
-    const days = parseInt(input, 10);
-    if (!Number.isFinite(days) || days < 1 || days > 90) {
-        alert('Enter a number of days between 1 and 90.');
-        return;
-    }
+    const DAY = 86400000;
+    // The allowed answering window comes from the server so this warning can
+    // never disagree with the validation that backs it.
+    const minWindow = Number(dlg.dataset.minWindow) || 3;
+    const maxWindow = Number(dlg.dataset.maxWindow) || 21;
+    const windowDays = () => {
+        if (!openInput?.value || !closeInput?.value) return NaN;
+        return Math.round((Date.parse(closeInput.value) - Date.parse(openInput.value)) / DAY);
+    };
 
-    const newDeadline = new Date(current.getTime() + days * 86400000);
-    const scary = `⚠ This delays the issue for EVERYONE.\n\n` +
-        `New deadline: ${newDeadline.toLocaleString('en-GB')}\n` +
-        `Reminder emails will be rescheduled around the new date.\n\nExtend by ${days} day${days === 1 ? '' : 's'}?`;
-    if (!confirm(scary)) return;
-
-    this.disabled = true;
-    this.textContent = 'Extending…';
-    try {
-        const res = await fetch(`/api/issues/${issueID}/extend`, {
-            method: 'POST',
-            headers: apiHeaders(),
-            body: JSON.stringify({ new_deadline: newDeadline.toISOString() }),
-        });
-        if (res.ok) {
-            window.location.reload();
+    function updatePreview() {
+        if (!preview) return;
+        const days = windowDays();
+        if (!Number.isFinite(days)) { preview.textContent = ''; return; }
+        if (days < minWindow || days > maxWindow) {
+            preview.textContent = `⚠ Members need ${minWindow} to ${maxWindow} days to answer.`;
+            preview.style.color = 'var(--sindoor)';
             return;
         }
-        const data = await res.json().catch(() => ({}));
-        alert(data.error?.message || 'Failed to extend the deadline.');
-    } catch {
-        alert('Network error — the deadline was not extended.');
+        preview.style.color = '';
+        // Biweekly cadence advances 14 days at a time, so the day-of-month
+        // drifts every cycle — only monthly/quarterly keep "around the Nth".
+        if (dlg.dataset.frequency === 'biweekly') {
+            preview.textContent = `${days} days to answer — future rounds open every two weeks from this date.`;
+            return;
+        }
+        const openDay = new Date(openInput.value + 'T00:00:00').getDate();
+        preview.textContent = `${days} days to answer — future rounds keep this rhythm ` +
+            `(${dlg.dataset.frequency}, opening around the ${openDay}${ordinal(openDay)}).`;
     }
-    this.disabled = false;
-    this.textContent = '⚠ Extend deadline';
-});
+
+    function ordinal(n) {
+        if (n % 100 >= 11 && n % 100 <= 13) return 'th';
+        return ({1: 'st', 2: 'nd', 3: 'rd'})[n % 10] || 'th';
+    }
+
+    function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.style.display = '';
+    }
+
+    openInput?.addEventListener('input', updatePreview);
+    closeInput?.addEventListener('input', updatePreview);
+
+    document.querySelectorAll('[data-schedule-trigger]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            for (const input of [curInput, openInput, closeInput]) {
+                if (input) input.value = input.dataset.original;
+            }
+            errorEl.style.display = 'none';
+            errorEl.textContent = '';
+            saveBtn.disabled = false;
+            saveBtn.textContent = saveBtn.dataset.defaultLabel;
+            updatePreview();
+            dlg.showModal();
+        });
+    });
+    dlg.querySelector('[data-schedule-cancel]')?.addEventListener('click', () => dlg.close());
+
+    saveBtn?.addEventListener('click', async () => {
+        // A cleared field is a mistake, not a request — this dialog moves
+        // dates but can't unschedule anything. Refuse loudly instead of
+        // silently dropping the edit and closing as if it saved.
+        if (curInput && !curInput.value) {
+            showError('Pick a close date for this round — clearing the field doesn\'t unschedule it.');
+            return;
+        }
+        if ((openInput && !openInput.value) || (closeInput && !closeInput.value)) {
+            showError('Fill in both next-round dates — clearing them doesn\'t unschedule the round.');
+            return;
+        }
+        const body = {};
+        if (curInput && curInput.value !== curInput.dataset.original) {
+            body.current_close_date = curInput.value;
+            body.current_issue_id = Number(curInput.dataset.issueId);
+        }
+        // needs-repin marks a draft whose open event is missing: send its
+        // dates even untouched, so Save re-queues the round — the diff-only
+        // save would otherwise close as if it saved and repair nothing.
+        if (openInput && closeInput &&
+            (openInput.dataset.needsRepin === '1' ||
+             openInput.value !== openInput.dataset.original ||
+             closeInput.value !== closeInput.dataset.original)) {
+            body.next_open_date = openInput.value;
+            body.next_close_date = closeInput.value;
+        }
+        if (Object.keys(body).length === 0) { dlg.close(); return; }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+            const res = await fetch('/api/admin/schedule', {
+                method: 'PUT',
+                headers: apiHeaders(),
+                body: JSON.stringify(body),
+            });
+            if (res.ok) { window.location.reload(); return; }
+            const data = await res.json().catch(() => ({}));
+            const fields = data.error?.fields;
+            const lines = fields ? Object.values(fields) : [];
+            showError([data.error?.message, ...lines].filter(Boolean).join(' — ') ||
+                'Failed to save the schedule.');
+        } catch {
+            showError('Network error — the schedule was not saved.');
+        }
+        saveBtn.disabled = false;
+        saveBtn.textContent = saveBtn.dataset.defaultLabel;
+    });
+})();
 
 // Per-member nudge — reuses the issue reminder, with inline feedback.
 async function nudge(id, btn) {

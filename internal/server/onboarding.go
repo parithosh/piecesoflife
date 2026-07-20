@@ -149,8 +149,11 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		validationErrs["frequency"] = "Must be biweekly, monthly, or quarterly"
 	}
 
-	if req.SubmissionWindowDays < 3 || req.SubmissionWindowDays > 21 {
-		validationErrs["submission_window_days"] = "Must be between 3 and 21 days"
+	if req.SubmissionWindowDays < minSubmissionWindowDays ||
+		req.SubmissionWindowDays > maxSubmissionWindowDays {
+		validationErrs["submission_window_days"] = fmt.Sprintf(
+			"Must be between %d and %d days",
+			minSubmissionWindowDays, maxSubmissionWindowDays)
 	}
 
 	// Zero means "not provided" and keeps the seeded default.
@@ -389,22 +392,16 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Step 7: Replace scheduler events. Delete any pending ones for this
-	// issue and recreate — deadline/window may have changed between attempts,
-	// and the UNIQUE(issue_id, event_type, scheduled_at) constraint would
-	// otherwise make naive re-insertion fail.
-	if err := s.store.DeleteEventsForIssue(ctx, issueID); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to clear scheduler events",
-			slog.Int64("issue_id", issueID),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to reset scheduler")
-		return
-	}
-
-	// A round without its auto_close event never closes or publishes —
-	// that failure aborts the launch so the admin can retry the wizard.
-	if _, err := s.scheduleIssueEvents(ctx, settings, issueID, deadline); err != nil {
+	// Step 7: Replace scheduler events in one transaction — deadline/window
+	// may have changed between attempts, and a previous attempt's round may
+	// already have auto-closed (RequeueIssueEvents re-arms such fired rows
+	// instead of colliding with UNIQUE(issue_id, event_type, scheduled_at)).
+	// A round without its auto_close event never closes or publishes, so
+	// any failure aborts the launch for the admin to retry the wizard.
+	lifecycleEvents, _ := s.issueEventSpecs(ctx, settings, issueID, deadline)
+	if err := s.store.RequeueIssueEvents(ctx, issueID, lifecycleEvents); err != nil {
 		s.logger.ErrorContext(ctx, "Failed to schedule setup issue events",
+			slog.Int64("issue_id", issueID),
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to create scheduler event")
 

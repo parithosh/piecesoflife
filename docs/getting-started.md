@@ -111,7 +111,10 @@ round:
 - **Questions in this round** — edit, reorder, add, or remove questions
   *live*, even mid-round. Editing a question someone already answered gets
   a warning first.
-- **Extend deadline** — pushes the deadline and requeues the reminders.
+- **Adjust schedule** — move the round's close date (either direction) and
+  pin exactly when the next round opens and closes, e.g. "opens the 15th,
+  closes the 25th". Reminders are requeued around the new dates, and future
+  rounds keep the new rhythm.
 - **Publish now** — closes the round early and publishes whatever's in.
 
 Left alone, the round closes itself at the deadline and publishes

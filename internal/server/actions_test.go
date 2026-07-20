@@ -46,6 +46,27 @@ func TestNextIssueOpenTime(t *testing.T) {
 			want:        time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC),
 		},
 		{
+			name:        "monthly clamps January 31 to February instead of skipping it",
+			currentOpen: time.Date(2027, 1, 31, 9, 0, 0, 0, time.UTC),
+			frequency:   "monthly",
+			now:         now,
+			want:        time.Date(2027, 2, 28, 9, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "monthly honors leap day when clamping",
+			currentOpen: time.Date(2028, 1, 31, 9, 0, 0, 0, time.UTC),
+			frequency:   "monthly",
+			now:         now,
+			want:        time.Date(2028, 2, 29, 9, 0, 0, 0, time.UTC),
+		},
+		{
+			name:        "quarterly clamps into a short target month",
+			currentOpen: time.Date(2026, 11, 30, 9, 0, 0, 0, time.UTC),
+			frequency:   "quarterly",
+			now:         now,
+			want:        time.Date(2027, 2, 28, 9, 0, 0, 0, time.UTC),
+		},
+		{
 			name:        "clamps to now+48h when slot already elapsed",
 			currentOpen: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			frequency:   "biweekly",
