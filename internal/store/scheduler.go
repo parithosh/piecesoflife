@@ -290,21 +290,19 @@ func nextAvailableIssueLabel(
 		month := monthIndex%12 + 1
 		year := baseYear + monthIndex/12
 
-		var existingID int64
+		var occupied int
 		err := q.QueryRowContext(ctx,
-			`SELECT id FROM issues
-			 WHERE group_id = ? AND month = ? AND year = ?
-			 ORDER BY created_at DESC, id DESC LIMIT 1`,
-			groupID, month, year,
-		).Scan(&existingID)
+			`SELECT 1 FROM issues
+			 WHERE group_id = ? AND month = ? AND year = ? AND id != ?
+			 LIMIT 1`,
+			groupID, month, year, excludeIssueID,
+		).Scan(&occupied)
 
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return month, year, nil
 		case err != nil:
 			return 0, 0, fmt.Errorf("checking issue label %d-%02d: %w", year, month, err)
-		case existingID == excludeIssueID:
-			return month, year, nil
 		}
 	}
 

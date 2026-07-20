@@ -136,6 +136,30 @@ func TestApplyScheduleRollsBackEventReplacement(t *testing.T) {
 	assert.True(t, foundOldOpen, "failed re-pin restores the original queued opening")
 }
 
+func TestNextAvailableIssueLabelIgnoresOnlyTheRequestedDraft(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	open := time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC)
+	deadline := open.AddDate(0, 0, 7)
+
+	publishedID, err := s.CreateIssue(ctx, 1, nil, 7, 2026, open, deadline)
+	require.NoError(t, err)
+	require.NoError(t, s.SetIssueStatus(ctx, publishedID, "published"))
+
+	// Older releases labeled every biweekly round with its open month, so an
+	// upcoming draft could already collide with a published edition. Because
+	// the draft is newer, the old LIMIT 1 query saw only the excluded row and
+	// incorrectly declared July free.
+	draftID, err := s.CreateIssue(ctx, 1, nil, 7, 2026,
+		open.AddDate(0, 0, 14), deadline.AddDate(0, 0, 14))
+	require.NoError(t, err)
+
+	month, year, err := s.NextAvailableIssueLabel(ctx, 1, draftID, 7, 2026)
+	require.NoError(t, err)
+	assert.Equal(t, 8, month)
+	assert.Equal(t, 2026, year)
+}
+
 // TestRequeueIssueEventsReArmsFiredRows pins the launch wizard's retry
 // contract: replacing an issue's lifecycle must survive a collision with an
 // already-fired row at the same (issue_id, event_type, scheduled_at).

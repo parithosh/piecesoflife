@@ -211,7 +211,7 @@ func TestAdminScheduleEditor(t *testing.T) {
 	// pinned round through a full cycle (open → publish) and the round
 	// after it must inherit the rhythm — same cadence slot derived from
 	// the pinned open, same persisted window. No further admin input.
-	require.NoError(t, env.srv.CreateNextIssue(ctx, 1), "open the pinned round")
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1, final.OpensAt), "open the pinned round")
 
 	pinnedRound, err := env.store.GetActiveIssue(ctx, 1)
 	require.NoError(t, err)
@@ -413,6 +413,54 @@ func TestIssuePatchDraftAndCombined(t *testing.T) {
 		"a published round's deadline must not change: %s", rr.Body.String())
 }
 
+// TestStaleOpenEventCannotOpenRepinnedDraft simulates the scheduler having
+// already fetched an event when the admin moves its draft later. The deleted
+// event's in-memory copy may still run, but it must not defeat the new pin.
+func TestStaleOpenEventCannotOpenRepinnedDraft(t *testing.T) {
+	env, authed, day := newScheduleTestEnv(t)
+	ctx := context.Background()
+
+	createRR := env.do(t, authed(newJSONRequest(http.MethodPost, "/api/issues", `{}`)))
+	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
+
+	current, err := env.store.GetActiveIssue(ctx, 1)
+	require.NoError(t, err)
+
+	rr := env.do(t, authed(newJSONRequest(http.MethodPut, "/api/admin/schedule",
+		fmt.Sprintf(`{"next_open_date": %q, "next_close_date": %q}`, day(10), day(20)))))
+	require.Equal(t, http.StatusOK, rr.Code, "first pin: %s", rr.Body.String())
+
+	draft, err := env.store.GetNextDraftIssue(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, draft)
+	staleEventTime := draft.OpensAt
+
+	pubRR := env.do(t, authed(httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/publish", current.ID), nil)))
+	require.Equal(t, http.StatusOK, pubRR.Code, "publish: %s", pubRR.Body.String())
+
+	rr = env.do(t, authed(newJSONRequest(http.MethodPut, "/api/admin/schedule",
+		fmt.Sprintf(`{"next_open_date": %q, "next_close_date": %q}`, day(12), day(22)))))
+	require.Equal(t, http.StatusOK, rr.Code, "re-pin: %s", rr.Body.String())
+
+	repinned, err := env.store.GetNextDraftIssue(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, repinned)
+	require.True(t, repinned.OpensAt.After(staleEventTime))
+
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1, staleEventTime))
+
+	unchanged, err := env.store.GetIssueByID(ctx, repinned.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "draft", unchanged.Status,
+		"an event for the superseded opening must not open the re-pinned draft")
+
+	pending, err := env.store.GetPendingNextRoundEvent(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, pending, "the replacement opening stays queued")
+	assert.True(t, pending.ScheduledAt.Equal(repinned.OpensAt))
+}
+
 // TestShortenedDeadlineSendsLastChance pins the promise the dialog makes:
 // when the close moves too near for any standard reminder slot, members who
 // haven't answered get an immediate last-chance reminder — even though a
@@ -463,6 +511,45 @@ func TestShortenedDeadlineSendsLastChance(t *testing.T) {
 
 	require.True(t, foundImmediate,
 		"a shortened close must queue an immediate last-chance reminder even after a recent one")
+}
+
+// TestShortenedDeadlineSendsImmediateAlongsideStandardReminder covers a
+// shortening that still leaves room for the ordinary final reminder. Members
+// get an immediate correction to the old date as well as that later nudge.
+func TestShortenedDeadlineSendsImmediateAlongsideStandardReminder(t *testing.T) {
+	env, authed, day := newScheduleTestEnv(t)
+	ctx := context.Background()
+
+	createRR := env.do(t, authed(newJSONRequest(http.MethodPost, "/api/issues", `{}`)))
+	require.Equal(t, http.StatusCreated, createRR.Code, "create: %s", createRR.Body.String())
+
+	issue, err := env.store.GetActiveIssue(ctx, 1)
+	require.NoError(t, err)
+
+	rr := env.do(t, authed(newJSONRequest(http.MethodPut, "/api/admin/schedule",
+		fmt.Sprintf(`{"current_issue_id": %d, "current_close_date": %q}`, issue.ID, day(4)))))
+	require.Equal(t, http.StatusOK, rr.Code, "shorten close: %s", rr.Body.String())
+
+	pending, err := env.store.GetPendingEvents(ctx)
+	require.NoError(t, err)
+
+	foundImmediate := false
+	foundStandard := false
+
+	for _, ev := range pending {
+		if ev.EventType != "reminder_2" || ev.IssueID == nil || *ev.IssueID != issue.ID {
+			continue
+		}
+
+		if ev.ScheduledAt.Before(time.Now().Add(5 * time.Minute)) {
+			foundImmediate = true
+		} else if ev.ScheduledAt.After(time.Now().Add(minReminderLead)) {
+			foundStandard = true
+		}
+	}
+
+	assert.True(t, foundImmediate, "shortening always queues an immediate correction")
+	assert.True(t, foundStandard, "the ordinary final reminder remains queued")
 }
 
 // TestReconcileRepairsStalledLoop pins the reconciler's reach: a Loop whose
@@ -560,7 +647,7 @@ func TestLateOpenReAnchorsStaleDraft(t *testing.T) {
 	require.NoError(t, env.store.UpdateIssueSchedule(ctx, draft.ID,
 		draft.Month, draft.Year, staleOpen, staleOpen.AddDate(0, 0, 7)))
 
-	require.NoError(t, env.srv.CreateNextIssue(ctx, 1))
+	require.NoError(t, env.srv.CreateNextIssue(ctx, 1, staleOpen))
 
 	opened, err := env.store.GetIssueByID(ctx, draft.ID)
 	require.NoError(t, err)

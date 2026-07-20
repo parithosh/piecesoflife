@@ -425,10 +425,19 @@ func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	case deadlineTime != nil:
 		// An upcoming draft has no reminder or auto-close events yet — its
-		// deadline (and title) update is one plain statement. The queued
-		// open event tracks the open time, not the close, so no re-pin is
-		// needed.
-		if err := s.store.UpdateIssue(r.Context(), issueID, req.Title, deadlineTime); err != nil {
+		// deadline (and title) update is one status-guarded statement. The
+		// queued open event tracks the open time, not the close, so no re-pin
+		// is needed; if the scheduler opened it concurrently, fail instead of
+		// moving a collecting deadline without its lifecycle events.
+		if err := s.store.UpdateDraftIssue(
+			r.Context(), issueID, req.Title, *deadlineTime,
+		); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusConflict, "not_draft",
+					"The round opened before the update was saved — reload and try again")
+				return
+			}
+
 			s.logger.ErrorContext(r.Context(), "Failed to update issue",
 				slog.Int64("issue_id", issueID),
 				slog.String("error", err.Error()))
@@ -683,16 +692,19 @@ func (s *Server) rescheduledIssueEventSpecs(
 	oldDeadline, newDeadline time.Time,
 ) []store.SchedulerEventSpec {
 	events, remindersQueued := s.issueEventSpecs(ctx, settings, issueID, newDeadline)
-	if remindersQueued != 0 {
-		return events
-	}
-
 	immediate := store.SchedulerEventSpec{
 		EventType: "reminder_2", ScheduledAt: time.Now(),
 	}
 
+	// A prior reminder may have advertised the old, later deadline. Correct
+	// that immediately even when the shortened schedule still has room for a
+	// standard reminder; the later slot remains useful as a final nudge.
 	if newDeadline.Before(oldDeadline) {
 		return append(events, immediate)
+	}
+
+	if remindersQueued != 0 {
+		return events
 	}
 
 	recent, err := s.store.HasRecentFiredReminder(ctx, issueID)

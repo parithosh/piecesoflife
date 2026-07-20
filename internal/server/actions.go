@@ -806,7 +806,9 @@ func (s *Server) nextIssueOpensLabel(
 // issue is created on the spot. No-op if:
 //   - auto_create_enabled is off (admin turned it off between queue + fire)
 //   - a round is already collecting answers
-func (s *Server) CreateNextIssue(ctx context.Context, groupID int64) error {
+func (s *Server) CreateNextIssue(
+	ctx context.Context, groupID int64, scheduledAt time.Time,
+) error {
 	settings, err := s.store.GetSettings(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("loading settings: %w", err)
@@ -837,6 +839,20 @@ func (s *Server) CreateNextIssue(ctx context.Context, groupID int64) error {
 	if draft, err := s.store.GetNextDraftIssue(ctx, groupID); err != nil {
 		return fmt.Errorf("checking draft issue: %w", err)
 	} else if draft != nil {
+		// The scheduler may have fetched an old event just before an admin
+		// re-pinned this draft to a later date. Deleting that event from the
+		// database cannot revoke the in-memory copy, so compare the event's
+		// expected opening with the draft's current schedule before opening it.
+		// The replacement event remains queued and will open it on the new date.
+		if draft.OpensAt.After(scheduledAt) {
+			s.logger.InfoContext(ctx, "create_next_issue skipped — draft was re-pinned after this event",
+				slog.Int64("issue_id", draft.ID),
+				slog.Time("event_scheduled_at", scheduledAt),
+				slog.Time("current_opens_at", draft.OpensAt))
+
+			return nil
+		}
+
 		// A very late fire (server down past the draft's own close) must
 		// not open the round with a deadline already past or imminent —
 		// the next tick would auto-close and publish it empty, minutes

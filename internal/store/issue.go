@@ -270,6 +270,31 @@ func (s *Store) UpdateIssueSchedule(
 	return nil
 }
 
+// UpdateDraftIssue changes a draft's title and deadline only while it is
+// still a draft. The scheduler may open the round between an HTTP handler's
+// read and write; the status predicate prevents that race from moving the
+// deadline without also moving the collecting round's lifecycle events.
+func (s *Store) UpdateDraftIssue(
+	ctx context.Context, id int64, title *string, deadline time.Time,
+) error {
+	result, err := s.write.ExecContext(ctx,
+		`UPDATE issues SET title = COALESCE(?, title), deadline = ?
+		 WHERE id = ? AND status = 'draft'`,
+		title, deadline, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating draft issue %d: %w", id, err)
+	}
+
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("checking draft issue %d update: %w", id, err)
+	} else if n != 1 {
+		return fmt.Errorf("updating draft issue %d: %w", id, sql.ErrNoRows)
+	}
+
+	return nil
+}
+
 // OpenDraftEarly atomically consumes every pending next-round event for the
 // group, turns one draft into the collecting round at its new schedule, and
 // installs its reminder/auto-close lifecycle. If the request is canceled or
