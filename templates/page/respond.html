@@ -222,9 +222,16 @@
               <button type="button" class="pl-diary-day-remove"
                       data-diary-day-remove>✕ Remove day</button>
             </div>
-            <textarea class="pl-diary-editor" data-diary-editor
-                      placeholder="(No words for this day — only what's below)"
->{{range .Blocks}}{{if eq .Type "text"}}{{.Content}}{{end}}{{end}}</textarea>
+            {{range .Blocks}}{{if eq .Type "text"}}
+            <div class="pl-diary-block" data-diary-text-block="{{.ID}}">
+              <textarea class="pl-diary-editor" data-diary-block-editor
+                        placeholder="(Emptying this removes the thought from the copy)"
+>{{.Content}}</textarea>
+              <button type="button" class="pl-diary-block-remove"
+                      data-diary-block-remove="{{.ID}}"
+                      aria-label="Remove this thought">✕</button>
+            </div>
+            {{end}}{{end}}
             <div class="pl-ramble-media">
               {{range .Blocks}}
               {{if eq .Type "photo"}}
@@ -604,27 +611,33 @@ document.querySelectorAll('.pl-record-btn').forEach(btn => {
         }
     });
 
-    // Per-day autosave of the snapshot copies.
+    // Per-block autosave of the snapshot copies. Trimming a block to nothing
+    // removes it; a day trimmed of everything disappears from the review.
     const diaryTimers = {};
-    document.querySelectorAll('[data-diary-editor]').forEach(textarea => {
+    document.querySelectorAll('[data-diary-block-editor]').forEach(textarea => {
+        const blockEl = textarea.closest('[data-diary-text-block]');
+        const blockID = blockEl.dataset.diaryTextBlock;
         const dayEl = textarea.closest('[data-diary-day-id]');
-        const dayID = dayEl.dataset.diaryDayId;
         const dayStatus = dayEl.querySelector('[data-diary-status]');
 
         textarea.addEventListener('input', () => {
-            clearTimeout(diaryTimers[dayID]);
+            clearTimeout(diaryTimers[blockID]);
             if (dayStatus) { dayStatus.className = 'save-status'; dayStatus.textContent = ''; }
-            diaryTimers[dayID] = setTimeout(async () => {
+            diaryTimers[blockID] = setTimeout(async () => {
                 if (dayStatus) { dayStatus.className = 'save-status saving'; dayStatus.textContent = 'Saving…'; }
                 try {
-                    const res = await fetch(`/api/diary-days/${dayID}/autosave`, {
+                    const res = await fetch(`/api/diary-blocks/${blockID}`, {
                         method: 'PUT',
                         headers: apiHeaders(),
                         body: JSON.stringify({ text: textarea.value }),
                     });
                     if (!res.ok) throw new Error();
                     const data = await res.json();
-                    if (data.removed) { dayEl.remove(); return; }
+                    if (data.removed) {
+                        blockEl.remove();
+                        if (data.day_removed) { dayEl.remove(); }
+                        return;
+                    }
                     if (dayStatus) { dayStatus.className = 'save-status saved'; dayStatus.textContent = 'Saved'; }
                 } catch {
                     if (dayStatus) { dayStatus.className = 'save-status error'; dayStatus.textContent = 'Save failed'; }
@@ -648,19 +661,20 @@ document.querySelectorAll('.pl-record-btn').forEach(btn => {
         });
     });
 
-    // Remove one media block from a snapshot day.
+    // Remove one block (a thought, or a photo/video/recording) from a
+    // snapshot day.
     document.querySelectorAll('[data-diary-block-remove]').forEach(btn => {
         btn.addEventListener('click', async function () {
             this.disabled = true;
             try {
                 await diaryCall(`/api/diary-blocks/${this.dataset.diaryBlockRemove}`, 'DELETE');
-                const fig = this.closest('[data-block-id]');
                 const dayEl = this.closest('[data-diary-day-id]');
-                fig?.remove();
+                (this.closest('[data-block-id]') ||
+                    this.closest('[data-diary-text-block]'))?.remove();
                 // Server removes a day that ends up empty; mirror it.
                 if (dayEl &&
                     !dayEl.querySelector('[data-block-id]') &&
-                    !dayEl.querySelector('[data-diary-editor]')?.value.trim()) {
+                    !dayEl.querySelector('[data-diary-text-block]')) {
                     dayEl.remove();
                 }
             } catch (err) {

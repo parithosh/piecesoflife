@@ -197,6 +197,7 @@
                 <h3 class="pl-nb-date">{{$d.DiaryDay.Day | dayDisplay}}</h3>
                 <div class="pl-nb-text">
                 {{range $d.Blocks}}
+                <div class="pl-nb-block">
                   {{if eq .Type "text"}}
                     {{if .Content}}<p>{{.Content}}</p>{{end}}
                   {{else if eq .Type "photo"}}
@@ -227,14 +228,22 @@
                     </figure>
                     {{end}}
                   {{end}}
+                  <div class="comments-panel pl-nb-block-comments"
+                       data-diary-block-id="{{.ID}}"
+                       data-comment-count="{{index $.DiaryBlockCommentCounts .ID}}"></div>
+                </div>
                 {{end}}
                 </div>
 
-                <section class="comments-section" aria-label="Comments">
+                {{/* Legacy day-level thread — issues published before
+                     per-block comments keep their conversations. */}}
+                {{if gt (index $.DiaryCommentCounts $d.DiaryDay.ID) 0}}
+                <section class="comments-section" aria-label="Comments on this day">
                   <div class="comments-panel"
                        data-diary-day-id="{{$d.DiaryDay.ID}}"
                        data-comment-count="{{index $.DiaryCommentCounts $d.DiaryDay.ID}}"></div>
                 </section>
+                {{end}}
               </article>
               {{end}}
             </section>

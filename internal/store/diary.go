@@ -256,6 +256,27 @@ func (s *Store) GetIssueByDiaryDayID(
 	return iss, nil
 }
 
+// GetIssueByDiaryBlockID resolves the issue that owns a snapshot block — the
+// guard path for block-level endpoints (comments, edits).
+func (s *Store) GetIssueByDiaryBlockID(
+	ctx context.Context, blockID int64,
+) (*Issue, error) {
+	iss, err := scanIssue(s.read.QueryRowContext(ctx,
+		`SELECT i.id, i.group_id, i.title, i.month, i.year, i.status,
+		        i.opens_at, i.deadline, i.published_at, i.created_at
+		 FROM issues i
+		 JOIN diary_sections ds ON ds.issue_id = i.id
+		 JOIN diary_days dd ON dd.section_id = ds.id
+		 JOIN diary_blocks db ON db.diary_day_id = dd.id
+		 WHERE db.id = ?`, blockID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("getting issue for diary block %d: %w", blockID, err)
+	}
+
+	return iss, nil
+}
+
 // ListDiaryDays returns a section's days oldest-first (reading order), each
 // with its blocks.
 func (s *Store) ListDiaryDays(
@@ -384,83 +405,69 @@ func (s *Store) ListDiarySectionsByIssue(
 	return kept, nil
 }
 
-// AutosaveDiaryDay replaces a snapshot day's text blocks. Media blocks are
-// managed via their own delete endpoint and survive untouched. A day left
-// with no blocks is deleted (removed=true) — trimming everything out of a
-// day removes it from the spread.
-func (s *Store) AutosaveDiaryDay(
-	ctx context.Context, dayID int64, blocks []DiaryBlock,
-) (removed bool, err error) {
+// UpdateDiaryBlockText replaces one snapshot text block's content. Empty
+// content deletes the block (trimming a thought out of the review), and a
+// day left with no blocks at all is deleted with it — same contract as
+// UpdateRambleBlockText. Ownership checks live in the handler; a non-text
+// block is refused here as defence in depth.
+func (s *Store) UpdateDiaryBlockText(
+	ctx context.Context, blockID int64, content string,
+) (blockRemoved, dayRemoved bool, err error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("beginning diary day autosave: %w", err)
+		return false, false, fmt.Errorf("beginning diary block update: %w", err)
 	}
 
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM diary_blocks WHERE diary_day_id = ? AND type = 'text'",
-		dayID,
-	); err != nil {
-		return false, fmt.Errorf("deleting existing text blocks: %w", err)
-	}
-
-	var maxSort sql.NullInt64
+	var dayID int64
 	if err := tx.QueryRowContext(ctx,
-		"SELECT MAX(sort_order) FROM diary_blocks WHERE diary_day_id = ?", dayID,
-	).Scan(&maxSort); err != nil {
-		return false, fmt.Errorf("finding max sort order: %w", err)
+		"SELECT diary_day_id FROM diary_blocks WHERE id = ? AND type = 'text'",
+		blockID,
+	).Scan(&dayID); err != nil {
+		return false, false, fmt.Errorf("finding text block %d: %w", blockID, err)
 	}
 
-	nextSort := int64(-1)
-	if maxSort.Valid {
-		nextSort = maxSort.Int64
-	}
-
-	for i, b := range blocks {
-		if b.Type != "" && b.Type != "text" {
-			continue
-		}
-		if b.Content == nil || *b.Content == "" {
-			continue
-		}
-
+	if content == "" {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO diary_blocks (diary_day_id, type, content, sort_order)
-			 VALUES (?, 'text', ?, ?)`,
-			dayID, b.Content, nextSort+1+int64(i),
-		); err != nil {
-			return false, fmt.Errorf("inserting text block %d: %w", i, err)
-		}
-	}
-
-	var remaining int
-	if err := tx.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM diary_blocks WHERE diary_day_id = ?", dayID,
-	).Scan(&remaining); err != nil {
-		return false, fmt.Errorf("counting remaining blocks: %w", err)
-	}
-
-	if remaining == 0 {
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM diary_days WHERE id = ?", dayID); err != nil {
-			return false, fmt.Errorf("removing empty diary day: %w", err)
+			"DELETE FROM diary_blocks WHERE id = ?", blockID); err != nil {
+			return false, false, fmt.Errorf("deleting emptied block %d: %w", blockID, err)
 		}
 
-		removed = true
+		blockRemoved = true
+
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM diary_days WHERE id = ?
+			 AND NOT EXISTS (SELECT 1 FROM diary_blocks WHERE diary_day_id = ?)`,
+			dayID, dayID)
+		if err != nil {
+			return false, false, fmt.Errorf("removing empty diary day: %w", err)
+		}
+
+		if n, err := res.RowsAffected(); err == nil && n > 0 {
+			dayRemoved = true
+		}
 	} else {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE diary_blocks
+			 SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+			content, blockID,
+		); err != nil {
+			return false, false, fmt.Errorf("updating text block %d: %w", blockID, err)
+		}
+
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE diary_days SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 			dayID); err != nil {
-			return false, fmt.Errorf("touching diary day: %w", err)
+			return false, false, fmt.Errorf("touching diary day: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("committing diary day autosave: %w", err)
+		return false, false, fmt.Errorf("committing diary block update: %w", err)
 	}
 
-	return removed, nil
+	return blockRemoved, dayRemoved, nil
 }
 
 // DeleteDiaryDay removes a snapshot day and returns the file paths its media

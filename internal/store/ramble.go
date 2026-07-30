@@ -174,108 +174,69 @@ func (s *Store) ListRambleBlocks(
 	return blocks, nil
 }
 
-// AutosaveRambleDay replaces the text blocks of a user's journal page for
-// one day, creating the page if needed. Media blocks are managed through
-// their own endpoints and survive untouched — same contract as response
-// autosave. A page left with no blocks at all is deleted (empty days are
-// invisible), reported via removed=true.
-func (s *Store) AutosaveRambleDay(
-	ctx context.Context, userID int64, day string, blocks []RambleBlock,
-) (rambleID int64, removed bool, err error) {
+// UpdateRambleBlockText replaces one text block's content. Empty content
+// deletes the block — an emptied-out block is absence, not a blank card —
+// and a day left with no blocks at all is deleted with it (empty days are
+// invisible). Ownership checks live in the handler; a non-text block is
+// refused here as defence in depth.
+func (s *Store) UpdateRambleBlockText(
+	ctx context.Context, blockID int64, content string,
+) (blockRemoved, dayRemoved bool, err error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, false, fmt.Errorf("beginning ramble autosave: %w", err)
+		return false, false, fmt.Errorf("beginning ramble block update: %w", err)
 	}
 
 	defer tx.Rollback()
 
-	err = tx.QueryRowContext(ctx,
-		"SELECT id FROM rambles WHERE user_id = ? AND day = ?", userID, day,
-	).Scan(&rambleID)
-
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		res, insErr := tx.ExecContext(ctx,
-			"INSERT INTO rambles (user_id, day) VALUES (?, ?)", userID, day)
-		if insErr != nil {
-			return 0, false, fmt.Errorf("creating ramble day: %w", insErr)
-		}
-
-		rambleID, insErr = res.LastInsertId()
-		if insErr != nil {
-			return 0, false, fmt.Errorf("getting new ramble id: %w", insErr)
-		}
-	case err != nil:
-		return 0, false, fmt.Errorf("finding ramble day: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM ramble_blocks WHERE ramble_id = ? AND type = 'text'",
-		rambleID,
-	); err != nil {
-		return 0, false, fmt.Errorf("deleting existing text blocks: %w", err)
-	}
-
-	var maxSort sql.NullInt64
+	var rambleID int64
 	if err := tx.QueryRowContext(ctx,
-		"SELECT MAX(sort_order) FROM ramble_blocks WHERE ramble_id = ?", rambleID,
-	).Scan(&maxSort); err != nil {
-		return 0, false, fmt.Errorf("finding max sort order: %w", err)
+		"SELECT ramble_id FROM ramble_blocks WHERE id = ? AND type = 'text'",
+		blockID,
+	).Scan(&rambleID); err != nil {
+		return false, false, fmt.Errorf("finding text block %d: %w", blockID, err)
 	}
 
-	nextSort := int64(-1)
-	if maxSort.Valid {
-		nextSort = maxSort.Int64
-	}
-
-	inserted := 0
-
-	for i, b := range blocks {
-		if b.Type != "" && b.Type != "text" {
-			continue // defence in depth — the handler already rejects these
-		}
-		if b.Content == nil || *b.Content == "" {
-			continue // empty text is absence, not a block
-		}
-
+	if content == "" {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO ramble_blocks (ramble_id, type, content, sort_order)
-			 VALUES (?, 'text', ?, ?)`,
-			rambleID, b.Content, nextSort+1+int64(i),
-		); err != nil {
-			return 0, false, fmt.Errorf("inserting text block %d: %w", i, err)
+			"DELETE FROM ramble_blocks WHERE id = ?", blockID); err != nil {
+			return false, false, fmt.Errorf("deleting emptied block %d: %w", blockID, err)
 		}
 
-		inserted++
-	}
+		blockRemoved = true
 
-	var remaining int
-	if err := tx.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM ramble_blocks WHERE ramble_id = ?", rambleID,
-	).Scan(&remaining); err != nil {
-		return 0, false, fmt.Errorf("counting remaining blocks: %w", err)
-	}
-
-	if remaining == 0 {
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM rambles WHERE id = ?", rambleID); err != nil {
-			return 0, false, fmt.Errorf("removing empty ramble day: %w", err)
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM rambles WHERE id = ?
+			 AND NOT EXISTS (SELECT 1 FROM ramble_blocks WHERE ramble_id = ?)`,
+			rambleID, rambleID)
+		if err != nil {
+			return false, false, fmt.Errorf("removing empty ramble day: %w", err)
 		}
 
-		removed = true
+		if n, err := res.RowsAffected(); err == nil && n > 0 {
+			dayRemoved = true
+		}
 	} else {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE ramble_blocks
+			 SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+			content, blockID,
+		); err != nil {
+			return false, false, fmt.Errorf("updating text block %d: %w", blockID, err)
+		}
+
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE rambles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 			rambleID); err != nil {
-			return 0, false, fmt.Errorf("touching ramble day: %w", err)
+			return false, false, fmt.Errorf("touching ramble day: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, false, fmt.Errorf("committing ramble autosave: %w", err)
+		return false, false, fmt.Errorf("committing ramble block update: %w", err)
 	}
 
-	return rambleID, removed, nil
+	return blockRemoved, dayRemoved, nil
 }
 
 // EnsureRambleDay returns the id of the user's page for a day, creating an

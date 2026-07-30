@@ -3722,6 +3722,51 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
     white-space: pre-wrap;
 }
 
+/* One block per submitted thought; siblings separated by a stitch line so
+ * the seams the issue can later cut along stay quietly visible. */
+.pl-ramble-block + .pl-ramble-block {
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+}
+
+.pl-ramble-block-tools {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+.pl-block-tool {
+    border: 0;
+    background: transparent;
+    padding: 4px 2px;
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.pl-block-tool:hover { color: var(--rani); }
+.pl-block-tool--danger:hover { color: var(--sindoor); }
+
+.pl-ramble-editor--block { min-height: 64px; }
+
+.pl-ramble-compose {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+}
+
+.pl-ramble-compose .pl-ramble-actions {
+    margin-top: 6px;
+    padding-top: 0;
+    border-top: 0;
+}
+
 .pl-ramble-media {
     display: flex;
     flex-wrap: wrap;
@@ -3870,6 +3915,33 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 
 .pl-diary-editor:focus { outline: none; }
 
+/* One editable copy per journal block — trim a thought without touching its
+ * neighbours. The ✕ sits beside the text it would remove. */
+.pl-diary-block {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.pl-diary-block + .pl-diary-block {
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--line);
+}
+
+.pl-diary-block-remove {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    padding: 2px 4px;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.pl-diary-block-remove:hover { color: var(--sindoor); }
+
 .pl-diary-note {
     margin: 10px 0 0;
     font-family: var(--font-ui);
@@ -3901,5 +3973,18 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 
 .pl-collage-item .comment-thread,
 .pl-collage-video .comment-thread {
+    padding-left: 10px;
+}
+
+/* comment threads under each published notebook block — kept quiet so the
+ * spread still reads as prose first, conversation second */
+.pl-nb-block + .pl-nb-block { margin-top: 14px; }
+
+.pl-nb-block-comments {
+    margin: 4px 0 0;
+    text-align: left;
+}
+
+.pl-nb-block-comments .comment-thread {
     padding-left: 10px;
 }

@@ -1280,6 +1280,28 @@ func (s *Server) commentContextLabel(
 
 		return label, issue.GroupID, ownedByRecipient
 
+	case p.DiaryBlockID != nil:
+		issue, err := s.store.GetIssueByDiaryBlockID(ctx, *p.DiaryBlockID)
+		if err != nil {
+			return "a notebook", 0, false
+		}
+
+		label = "a notebook"
+		if block, bErr := s.store.GetDiaryBlockByID(ctx, *p.DiaryBlockID); bErr == nil {
+			if day, dErr := s.store.GetDiaryDayByID(ctx, block.DiaryDayID); dErr == nil {
+				if section, sErr := s.store.GetDiarySectionByID(ctx, day.SectionID); sErr == nil {
+					label = fmt.Sprintf("%s notebook — %s",
+						possessive(section.UserID), rambleDayDisplay(day.Day))
+				}
+			}
+		}
+
+		if name := loopName(issue.GroupID); name != "" {
+			label += " · " + name
+		}
+
+		return label, issue.GroupID, ownedByRecipient
+
 	case p.DumpItemID != nil:
 		issue, err := s.store.GetIssueByDumpItemID(ctx, *p.DumpItemID)
 		if err != nil {

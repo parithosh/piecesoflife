@@ -975,6 +975,8 @@ func (s *Server) requireCommentInGroup(
 		return s.requireResponseInGroup(w, r, *comment.ResponseID)
 	case comment.DiaryDayID != nil:
 		return s.requireDiaryDayInGroup(w, r, *comment.DiaryDayID)
+	case comment.DiaryBlockID != nil:
+		return s.requireDiaryBlockInGroup(w, r, *comment.DiaryBlockID)
 	case comment.DumpItemID != nil:
 		return s.requireDumpItemInGroup(w, r, *comment.DumpItemID)
 	default:
