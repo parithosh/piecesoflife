@@ -21,6 +21,7 @@ type PendingCommentNotification struct {
 	Body           string    `json:"body"`
 	ResponseID     *int64    `json:"response_id"`
 	DiaryDayID     *int64    `json:"diary_day_id"`
+	DiaryBlockID   *int64    `json:"diary_block_id"`
 	DumpItemID     *int64    `json:"dump_item_id"`
 	CreatedAt      time.Time `json:"created_at"`
 }
@@ -85,7 +86,8 @@ func (s *Store) ListPendingCommentNotifications(
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT n.id, n.recipient_id, r.name, r.email,
 		        c.id, u.name, c.body,
-		        c.response_id, c.diary_day_id, c.dump_item_id, c.created_at
+		        c.response_id, c.diary_day_id, c.diary_block_id,
+		        c.dump_item_id, c.created_at
 		 FROM comment_notifications n
 		 JOIN comments c ON c.id = n.comment_id
 		 JOIN users u ON u.id = c.user_id
@@ -104,7 +106,8 @@ func (s *Store) ListPendingCommentNotifications(
 
 		err := rows.Scan(&p.NotificationID, &p.RecipientID, &p.RecipientName,
 			&p.RecipientEmail, &p.CommentID, &p.CommenterName, &p.Body,
-			&p.ResponseID, &p.DiaryDayID, &p.DumpItemID, &p.CreatedAt)
+			&p.ResponseID, &p.DiaryDayID, &p.DiaryBlockID, &p.DumpItemID,
+			&p.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scanning pending notification: %w", err)
 		}

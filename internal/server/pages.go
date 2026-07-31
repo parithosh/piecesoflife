@@ -61,17 +61,20 @@ type IssuePageData struct {
 	// collage closer page. Empty means no dump page is rendered.
 	DumpGroups []DumpGroup
 	// DiaryGroups is the "From the notebooks" spread: one group per member
-	// who wove their rambles in. DiaryCommentCounts maps diary day IDs to
-	// comment counts, DumpCommentCounts dump item IDs to theirs. PageCount
-	// is questions + notebooks page (when any) + dump page (when any);
-	// DiaryIdx/DumpIdx are the 0-based page indices of the extra pages, -1
-	// when absent.
-	DiaryGroups        []store.DiaryGroup
-	DiaryCommentCounts map[int64]int
-	DumpCommentCounts  map[int64]int
-	PageCount          int
-	DiaryIdx           int
-	DumpIdx            int
+	// who wove their rambles in. DiaryBlockCommentCounts maps notebook block
+	// IDs to comment counts (every published block carries its own thread);
+	// DiaryCommentCounts maps diary day IDs to legacy day-level thread
+	// counts — the day panel renders only where old comments already exist.
+	// DumpCommentCounts maps dump item IDs to theirs. PageCount is questions
+	// + notebooks page (when any) + dump page (when any); DiaryIdx/DumpIdx
+	// are the 0-based page indices of the extra pages, -1 when absent.
+	DiaryGroups             []store.DiaryGroup
+	DiaryCommentCounts      map[int64]int
+	DiaryBlockCommentCounts map[int64]int
+	DumpCommentCounts       map[int64]int
+	PageCount               int
+	DiaryIdx                int
+	DumpIdx                 int
 	// NextIssue is the pre-created upcoming round (nil when none). Members
 	// can send it question suggestions until it opens at NextIssueOpens.
 	NextIssue      *store.Issue
@@ -401,6 +404,17 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 
 	diaryCommentCounts := make(map[int64]int, 16)
 
+	// One grouped query covers every block on the spread; blocks without
+	// comments simply have no entry (the template's index yields 0).
+	diaryBlockCommentCounts, err := s.store.CountCommentsByDiaryBlocks(ctx, targetIssue.ID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "Failed to count diary block comments",
+			slog.Int64("issue_id", targetIssue.ID),
+			slog.String("error", err.Error()))
+
+		diaryBlockCommentCounts = make(map[int64]int, 0)
+	}
+
 	for gi := range diaryGroups {
 		for di := range diaryGroups[gi].Days {
 			day := &diaryGroups[gi].Days[di]
@@ -411,6 +425,8 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			// Legacy day-level threads (pre-021); the template only renders
+			// the day panel when this count is non-zero.
 			comments, cErr := s.store.ListCommentsByDiaryDay(ctx, day.DiaryDay.ID)
 			if cErr != nil {
 				s.logger.WarnContext(ctx, "Failed to count diary comments",
@@ -462,25 +478,26 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := IssuePageData{
-		PageData:           s.newPageData(r),
-		Issue:              *targetIssue,
-		Questions:          questions,
-		Responses:          responses,
-		CommentCounts:      commentCounts,
-		PeopleCount:        len(people),
-		AnswerCount:        len(responses),
-		PhotoCount:         photoCount,
-		CurrentQ:           currentQ,
-		CurrentQIdx:        currentQ - 1,
-		DumpGroups:         dumpGroups,
-		DumpCommentCounts:  dumpCommentCounts,
-		DiaryGroups:        diaryGroups,
-		DiaryCommentCounts: diaryCommentCounts,
-		PageCount:          pageCount,
-		DiaryIdx:           diaryIdx,
-		DumpIdx:            dumpIdx,
-		NextIssue:          nextIssue,
-		NextIssueOpens:     nextIssueOpens,
+		PageData:                s.newPageData(r),
+		Issue:                   *targetIssue,
+		Questions:               questions,
+		Responses:               responses,
+		CommentCounts:           commentCounts,
+		PeopleCount:             len(people),
+		AnswerCount:             len(responses),
+		PhotoCount:              photoCount,
+		CurrentQ:                currentQ,
+		CurrentQIdx:             currentQ - 1,
+		DumpGroups:              dumpGroups,
+		DumpCommentCounts:       dumpCommentCounts,
+		DiaryGroups:             diaryGroups,
+		DiaryCommentCounts:      diaryCommentCounts,
+		DiaryBlockCommentCounts: diaryBlockCommentCounts,
+		PageCount:               pageCount,
+		DiaryIdx:                diaryIdx,
+		DumpIdx:                 dumpIdx,
+		NextIssue:               nextIssue,
+		NextIssueOpens:          nextIssueOpens,
 	}
 
 	s.renderPage(w, "issue.html", data)

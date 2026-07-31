@@ -9,21 +9,22 @@
     <header class="pl-ramble-masthead">
       <h1 class="pl-ramble-title">Ramble</h1>
       <p class="pl-ramble-sub">
-        One private page per day, for whatever crossed your mind. Nobody sees
+        One private page per day, written a thought at a time. Nobody sees
         a word of it unless you weave it into an issue yourself.
       </p>
     </header>
 
     <div class="ikat pl-ramble-band" aria-hidden="true"></div>
 
-    {{/* ---- today: always an editor -------------------------------- */}}
+    {{/* ---- today: blocks so far + a composer ------------------------ */}}
     <section class="pl-ramble-today" aria-label="Today's page"
              data-ramble-today data-server-today="{{.Today}}">
       <div class="pl-ramble-today-head">
         <h2 class="pl-nb-date" data-today-label>Today</h2>
-        <span class="save-status" data-today-status></span>
+        <span class="save-status" data-compose-status></span>
       </div>
-      <textarea class="pl-ramble-editor" data-today-editor
+      <div data-day-blocks></div>
+      <textarea class="pl-ramble-editor" data-compose-editor
                 placeholder="What happened today? A thought, a smell, a small victory…"></textarea>
       <div class="pl-ramble-media" data-today-media></div>
       <div class="pl-ramble-actions">
@@ -36,7 +37,7 @@
         <button type="button" class="pl-chip-btn" data-record-btn="audio">● Record audio</button>
         <button type="button" class="pl-chip-btn" data-record-btn="video">▣ Record video</button>
         <span class="pl-dump-status" data-media-status role="status" aria-live="polite"></span>
-        <button type="button" class="pl-chip-btn pl-chip-btn--save" data-save-btn>Save</button>
+        <button type="button" class="pl-chip-btn pl-chip-btn--save" data-compose-add>＋ Add to page</button>
       </div>
     </section>
 
@@ -49,9 +50,19 @@
           <h3 class="pl-nb-date">{{.DayDisplay}}</h3>
           <button type="button" class="pl-ramble-edit-btn" data-day-edit>Edit</button>
         </div>
-        {{range .Day.Blocks}}{{if eq .Type "text"}}
-        <div class="pl-ramble-text" data-day-text>{{.Content}}</div>
-        {{end}}{{end}}
+        <div data-day-blocks>
+          {{range .Day.Blocks}}{{if eq .Type "text"}}
+          <div class="pl-ramble-block" data-text-block-id="{{.ID}}">
+            <div class="pl-ramble-text" data-block-text>{{.Content}}</div>
+            <div class="pl-ramble-block-tools" data-block-tools hidden>
+              <button type="button" class="pl-block-tool" data-block-edit>✎ Edit</button>
+              <button type="button" class="pl-block-tool pl-block-tool--danger"
+                      data-block-delete>✕ Remove</button>
+              <span class="save-status" data-block-status></span>
+            </div>
+          </div>
+          {{end}}{{end}}
+        </div>
         <div class="pl-ramble-media">
           {{range .Day.Blocks}}
           {{if eq .Type "photo"}}
@@ -74,6 +85,15 @@
           </figure>
           {{end}}
           {{end}}
+        </div>
+        <div class="pl-ramble-compose" data-day-compose hidden>
+          <textarea class="pl-ramble-editor pl-ramble-editor--block" data-compose-editor
+                    placeholder="Add another note to this day…"></textarea>
+          <div class="pl-ramble-actions">
+            <span class="save-status" data-compose-status></span>
+            <button type="button" class="pl-chip-btn pl-chip-btn--save"
+                    data-compose-add>＋ Add to page</button>
+          </div>
         </div>
       </article>
       {{else}}
@@ -121,23 +141,213 @@
         });
     }
 
+    function setStatus(el, cls, text) {
+        if (!el) return;
+        el.className = 'save-status' + (cls ? ' ' + cls : '');
+        el.textContent = text;
+    }
+
+    // The server stores block text with trailing spaces/newlines trimmed;
+    // comparisons against a fresh GET must trim the same way.
+    function trimmed(text) {
+        return text.replace(/[ \n]+$/, '');
+    }
+
     const todayCard = document.querySelector('[data-ramble-today]');
-    const todayEditor = todayCard.querySelector('[data-today-editor]');
-    const todayStatus = todayCard.querySelector('[data-today-status]');
-    const todayMedia = todayCard.querySelector('[data-today-media]');
     const today = localDay();
+    let uploadsInFlight = 0;
 
     todayCard.dataset.day = today;
     todayCard.querySelector('[data-today-label]').textContent =
         'Today — ' + displayDay(today);
 
-    // If today already has a page (server-rendered in the timeline), fold it
-    // into the editor and hide the timeline copy.
+    // ---- per-block save machinery ---------------------------------------
+    // Every writer (a composer drafting a new block, or an open block edit)
+    // funnels its saves through one promise chain so a debounced autosave
+    // and an explicit submit can never race each other.
+    function enqueue(st, fn) {
+        st.chain = st.chain.then(fn, fn);
+        return st.chain;
+    }
+
+    // Every live writer registers here (composers for the life of the page,
+    // block edits while open) so keystrokes still inside the autosave
+    // debounce can be flushed before an upload reloads the page.
+    const writers = new Set();
+
+    async function flushWriters() {
+        const flushes = [];
+        writers.forEach(st => {
+            clearTimeout(st.timer);
+            flushes.push(enqueue(st, st.flush));
+        });
+        await Promise.all(flushes);
+    }
+
+    async function fetchDayBlocks(day) {
+        const res = await fetch(`/api/ramble/${day}`, { headers: apiHeaders() });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        return data.blocks || [];
+    }
+
+    function blockCard(block, toolsVisible) {
+        const card = document.createElement('div');
+        card.className = 'pl-ramble-block';
+        card.dataset.textBlockId = block.id;
+
+        const text = document.createElement('div');
+        text.className = 'pl-ramble-text';
+        text.dataset.blockText = '';
+        text.textContent = block.content || '';
+
+        const tools = document.createElement('div');
+        tools.className = 'pl-ramble-block-tools';
+        tools.dataset.blockTools = '';
+        tools.hidden = !toolsVisible;
+        tools.innerHTML =
+            '<button type="button" class="pl-block-tool" data-block-edit>✎ Edit</button>' +
+            '<button type="button" class="pl-block-tool pl-block-tool--danger" data-block-delete>✕ Remove</button>' +
+            '<span class="save-status" data-block-status></span>';
+
+        card.append(text, tools);
+        return card;
+    }
+
+    // A past day whose last block just went away no longer exists on the
+    // server — mirror that. The today card stays put: it is the composer.
+    function cleanupDayEl(dayEl) {
+        if (!dayEl || !dayEl.hasAttribute('data-ramble-day')) return;
+        if (dayEl.querySelector('[data-text-block-id], [data-block-id]')) return;
+        dayEl.remove();
+    }
+
+    // ---- composers: draft a new block, submit it as its own card --------
+    // Autosave keeps the draft on the server from the first pause (nothing
+    // typed here is ever lost); "＋ Add to page" verifies the server copy and
+    // turns the draft into a finished block card, clearing the composer.
+    function makeComposer(day, root, statusEl, dayEl) {
+        const st = {
+            day,
+            dayEl,
+            textarea: root.querySelector('[data-compose-editor]'),
+            statusEl,
+            draftId: null,
+            timer: null,
+            chain: Promise.resolve(),
+        };
+
+        st.flush = () => pushDraft(st);
+        writers.add(st);
+
+        st.textarea.addEventListener('input', () => {
+            clearTimeout(st.timer);
+            setStatus(st.statusEl, '', '');
+            st.timer = setTimeout(() => enqueue(st, () => pushDraft(st)), 1500);
+        });
+
+        const addBtn = root.querySelector('[data-compose-add]');
+        addBtn.addEventListener('click', async () => {
+            addBtn.disabled = true;
+            try {
+                await submitDraft(st);
+            } finally {
+                addBtn.disabled = false;
+            }
+        });
+
+        return st;
+    }
+
+    async function pushDraft(st) {
+        const text = st.textarea.value;
+        try {
+            if (st.draftId === null) {
+                if (!trimmed(text)) return;
+                setStatus(st.statusEl, 'saving', 'Saving…');
+                const res = await fetch(`/api/ramble/${st.day}/blocks`, {
+                    method: 'POST',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({ text }),
+                });
+                if (!res.ok) throw new Error();
+                const block = await res.json();
+                st.draftId = block.id;
+            } else {
+                setStatus(st.statusEl, 'saving', 'Saving…');
+                const res = await fetch(`/api/ramble/blocks/${st.draftId}`, {
+                    method: 'PUT',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({ text }),
+                });
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                if (data.removed) st.draftId = null;
+            }
+            setStatus(st.statusEl, 'saved', 'Saved');
+        } catch {
+            setStatus(st.statusEl, 'error', 'Save failed');
+        }
+    }
+
+    async function submitDraft(st) {
+        clearTimeout(st.timer);
+
+        while (uploadsInFlight > 0) {
+            setStatus(st.statusEl, 'saving', 'Waiting for upload…');
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const text = st.textarea.value;
+            if (!trimmed(text) && st.draftId === null) {
+                setStatus(st.statusEl, '', '');
+                return true;
+            }
+
+            setStatus(st.statusEl, 'saving', 'Saving…');
+            await enqueue(st, () => pushDraft(st));
+
+            try {
+                const blocks = await fetchDayBlocks(st.day);
+                const stored = blocks.find(b => b.id === st.draftId);
+
+                if (st.draftId !== null && stored &&
+                    stored.content === trimmed(text) &&
+                    st.textarea.value === text) {
+                    const blocksEl = (st.dayEl || todayCard)
+                        .querySelector('[data-day-blocks]');
+                    blocksEl.appendChild(blockCard(stored, true));
+                    st.textarea.value = '';
+                    st.draftId = null;
+                    setStatus(st.statusEl, 'saved', 'Added ✓');
+                    return true;
+                }
+                // The editor moved mid-save — go around with the new text.
+            } catch {
+                setStatus(st.statusEl, 'error', 'Save failed — try again');
+                return false;
+            }
+        }
+
+        setStatus(st.statusEl, 'error', 'Could not confirm — try again');
+        return false;
+    }
+
+    makeComposer(
+        today, todayCard, todayCard.querySelector('[data-compose-status]'), null);
+
+    // If today already has a page (server-rendered in the timeline), fold its
+    // blocks and media into the today card and drop the timeline copy.
     const existing = document.querySelector(`[data-ramble-day="${today}"]`);
     if (existing) {
-        const text = existing.querySelector('[data-day-text]');
-        if (text) todayEditor.value = text.textContent;
+        const todayBlocks = todayCard.querySelector('[data-day-blocks]');
+        existing.querySelectorAll('[data-text-block-id]').forEach(b => {
+            b.querySelector('[data-block-tools]').hidden = false;
+            todayBlocks.appendChild(b);
+        });
         const media = existing.querySelector('.pl-ramble-media');
+        const todayMedia = todayCard.querySelector('[data-today-media]');
         if (media) {
             todayMedia.replaceChildren(...media.children);
             todayMedia.querySelectorAll('.pl-thumb-remove').forEach(b => { b.hidden = false; });
@@ -145,103 +355,183 @@
         existing.remove();
     }
 
-    // ---- autosave -------------------------------------------------------
-    const timers = {};
-    let uploadsInFlight = 0;
+    // ---- editing a finished block ---------------------------------------
+    // ✎ swaps the card's text for a textarea with the same autosave debounce;
+    // Save verifies the server copy before folding the card back to prose.
+    // Saving an emptied block removes it — same as the ✕.
+    function beginBlockEdit(card) {
+        if (card.dataset.editing === '1') return;
+        card.dataset.editing = '1';
 
-    function setStatus(el, cls, text) {
-        if (!el) return;
-        el.className = 'save-status' + (cls ? ' ' + cls : '');
-        el.textContent = text;
+        const dayEl = card.closest('[data-ramble-day], [data-ramble-today]');
+        const day = dayEl === todayCard ? today : dayEl.getAttribute('data-ramble-day');
+        const textEl = card.querySelector('[data-block-text]');
+        const statusEl = card.querySelector('[data-block-status]');
+        const editBtn = card.querySelector('[data-block-edit]');
+        const deleteBtn = card.querySelector('[data-block-delete]');
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'pl-ramble-editor pl-ramble-editor--block';
+        textarea.value = textEl.textContent;
+        textEl.replaceWith(textarea);
+
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'pl-chip-btn pl-chip-btn--save';
+        saveBtn.textContent = 'Save';
+        editBtn.hidden = true;
+        deleteBtn.after(saveBtn);
+
+        const st = {
+            id: Number(card.dataset.textBlockId),
+            day,
+            dayEl,
+            card,
+            textarea,
+            statusEl,
+            timer: null,
+            chain: Promise.resolve(),
+        };
+
+        st.flush = () => pushBlock(st, false);
+        writers.add(st);
+
+        textarea.addEventListener('input', () => {
+            clearTimeout(st.timer);
+            setStatus(st.statusEl, '', '');
+            st.timer = setTimeout(() => enqueue(st, () => pushBlock(st, false)), 1500);
+        });
+
+        saveBtn.addEventListener('click', async () => {
+            saveBtn.disabled = true;
+            try {
+                await saveBlockVerified(st, saveBtn, editBtn);
+            } finally {
+                saveBtn.disabled = false;
+            }
+        });
+
+        textarea.focus();
     }
 
-    async function saveDay(day, text, statusEl) {
-        setStatus(statusEl, 'saving', 'Saving…');
+    // pushBlock PUTs the edit. Autosave never sends emptiness — clearing a
+    // block deletes it only on an explicit Save or ✕, not on a pause.
+    async function pushBlock(st, allowEmpty) {
+        const text = st.textarea.value;
+        if (!trimmed(text) && !allowEmpty) {
+            setStatus(st.statusEl, '', '');
+            return null;
+        }
+
         try {
-            const res = await fetch(`/api/ramble/${day}/autosave`, {
+            setStatus(st.statusEl, 'saving', 'Saving…');
+            const res = await fetch(`/api/ramble/blocks/${st.id}`, {
                 method: 'PUT',
                 headers: apiHeaders(),
                 body: JSON.stringify({ text }),
             });
             if (!res.ok) throw new Error();
-            setStatus(statusEl, 'saved', 'Saved');
+            const data = await res.json();
+            setStatus(st.statusEl, 'saved', 'Saved');
+            return data;
         } catch {
-            setStatus(statusEl, 'error', 'Save failed');
+            setStatus(st.statusEl, 'error', 'Save failed');
+            return null;
         }
     }
 
-    // Explicit save: flush any pending autosave, wait out in-flight media
-    // uploads, then read the day back and only report "Saved" once the
-    // server copy matches the editor.
-    async function verifiedSave(day, textarea, statusEl) {
-        clearTimeout(timers[day]);
-        setStatus(statusEl, 'saving', 'Saving…');
-
-        while (uploadsInFlight > 0) {
-            setStatus(statusEl, 'saving', 'Waiting for upload…');
-            await new Promise(resolve => setTimeout(resolve, 300));
-        }
-        setStatus(statusEl, 'saving', 'Saving…');
+    async function saveBlockVerified(st, saveBtn, editBtn) {
+        clearTimeout(st.timer);
 
         for (let attempt = 0; attempt < 3; attempt++) {
-            const text = textarea.value;
+            const text = st.textarea.value;
+            const result = await enqueue(st, () => pushBlock(st, true));
+
+            if (result && result.removed) {
+                writers.delete(st);
+                st.card.remove();
+                cleanupDayEl(st.dayEl);
+                return true;
+            }
+            if (!result) return false;
+
             try {
-                const put = await fetch(`/api/ramble/${day}/autosave`, {
-                    method: 'PUT',
-                    headers: apiHeaders(),
-                    body: JSON.stringify({ text }),
-                });
-                if (!put.ok) throw new Error();
+                const blocks = await fetchDayBlocks(st.day);
+                const stored = blocks.find(b => b.id === st.id);
 
-                const check = await fetch(`/api/ramble/${day}`, {
-                    headers: apiHeaders(),
-                });
-                if (!check.ok) throw new Error();
-                const data = await check.json();
-                const stored = (data.blocks || [])
-                    .find(b => b.type === 'text')?.content || '';
-
-                // The server stores text with trailing spaces/newlines
-                // trimmed; anything else is a save that didn't land.
-                if (stored === text.replace(/[ \n]+$/, '') &&
-                    textarea.value === text) {
-                    setStatus(statusEl, 'saved', 'Saved ✓');
+                if (stored && stored.content === trimmed(text) &&
+                    st.textarea.value === text) {
+                    const textEl = document.createElement('div');
+                    textEl.className = 'pl-ramble-text';
+                    textEl.dataset.blockText = '';
+                    textEl.textContent = stored.content;
+                    st.textarea.replaceWith(textEl);
+                    saveBtn.remove();
+                    editBtn.hidden = false;
+                    st.card.dataset.editing = '';
+                    writers.delete(st);
+                    setStatus(st.statusEl, 'saved', 'Saved ✓');
                     return true;
                 }
-                // The editor moved mid-save — go around with the new text.
             } catch {
-                setStatus(statusEl, 'error', 'Save failed — try again');
+                setStatus(st.statusEl, 'error', 'Save failed — try again');
                 return false;
             }
         }
 
-        setStatus(statusEl, 'error', 'Could not confirm — try again');
+        setStatus(st.statusEl, 'error', 'Could not confirm — try again');
         return false;
     }
 
-    function bindSaveButton(btn, day, textarea, statusEl) {
-        btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            try {
-                await verifiedSave(day, textarea, statusEl);
-            } finally {
-                btn.disabled = false;
+    async function deleteBlock(card, btn) {
+        const dayEl = card.closest('[data-ramble-day], [data-ramble-today]');
+        btn.disabled = true;
+        try {
+            const res = await fetch(`/api/ramble/blocks/${card.dataset.textBlockId}`, {
+                method: 'DELETE', headers: apiHeaders(),
+            });
+            if (!res.ok) throw new Error();
+            writers.forEach(st => { if (st.card === card) writers.delete(st); });
+            card.remove();
+            cleanupDayEl(dayEl);
+        } catch {
+            btn.disabled = false;
+        }
+    }
+
+    document.addEventListener('click', ev => {
+        const editBtn = ev.target.closest('[data-block-edit]');
+        if (editBtn) {
+            beginBlockEdit(editBtn.closest('[data-text-block-id]'));
+            return;
+        }
+
+        const deleteBtn = ev.target.closest('[data-block-delete]');
+        if (deleteBtn) {
+            deleteBlock(deleteBtn.closest('[data-text-block-id]'), deleteBtn);
+        }
+    });
+
+    // ---- past days: reveal block tools + a composer ---------------------
+    document.querySelectorAll('[data-day-edit]').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const dayEl = this.closest('[data-ramble-day]');
+            const editing = dayEl.dataset.editing === '1';
+            dayEl.dataset.editing = editing ? '' : '1';
+            this.textContent = editing ? 'Edit' : 'Done';
+
+            dayEl.querySelectorAll('[data-block-tools]').forEach(t => { t.hidden = editing; });
+            dayEl.querySelectorAll('.pl-thumb-remove').forEach(b => { b.hidden = editing; });
+
+            const compose = dayEl.querySelector('[data-day-compose]');
+            compose.hidden = editing;
+            if (!editing && compose.dataset.ready !== '1') {
+                compose.dataset.ready = '1';
+                makeComposer(dayEl.getAttribute('data-ramble-day'), compose,
+                    compose.querySelector('[data-compose-status]'), dayEl);
             }
         });
-    }
-
-    function bindEditor(day, textarea, statusEl) {
-        textarea.addEventListener('input', () => {
-            clearTimeout(timers[day]);
-            setStatus(statusEl, '', '');
-            timers[day] = setTimeout(
-                () => saveDay(day, textarea.value, statusEl), 1500);
-        });
-    }
-
-    bindEditor(today, todayEditor, todayStatus);
-    bindSaveButton(todayCard.querySelector('[data-save-btn]'),
-        today, todayEditor, todayStatus);
+    });
 
     // ---- media upload (today card) --------------------------------------
     todayCard.querySelectorAll('[data-media-btn]').forEach(btn => {
@@ -256,10 +546,9 @@
             const status = todayCard.querySelector('[data-media-status]');
             btn.disabled = true;
 
-            // Flush any pending text first so a fresh page isn't lost when
-            // the upload reload lands.
-            clearTimeout(timers[today]);
-            await saveDay(today, todayEditor.value, todayStatus);
+            // Flush every writer first — the composers and any open block
+            // edits — so nothing typed is lost when the upload reload lands.
+            await flushWriters();
 
             let uploaded = 0;
             uploadsInFlight++;
@@ -302,10 +591,9 @@
             POLRecorder.record(kind, {
                 toast: msg => { if (status) status.textContent = msg; },
                 upload: async (file) => {
-                    // Flush pending text first so the reload after saving
-                    // doesn't lose a fresh page.
-                    clearTimeout(timers[today]);
-                    await saveDay(today, todayEditor.value, todayStatus);
+                    // Flush every writer first — the composers and any open
+                    // block edits — so the reload after saving loses nothing.
+                    await flushWriters();
 
                     uploadsInFlight++;
                     try {
@@ -337,45 +625,12 @@
         });
     });
 
-    // ---- past days: edit-in-place ---------------------------------------
-    document.querySelectorAll('[data-day-edit]').forEach(btn => {
-        btn.addEventListener('click', function () {
-            const dayEl = this.closest('[data-ramble-day]');
-            const day = dayEl.dataset.day || dayEl.getAttribute('data-ramble-day');
-            const textEl = dayEl.querySelector('[data-day-text]');
-
-            if (dayEl.dataset.editing === '1') return;
-            dayEl.dataset.editing = '1';
-
-            const textarea = document.createElement('textarea');
-            textarea.className = 'pl-ramble-editor';
-            textarea.value = textEl ? textEl.textContent : '';
-            if (textEl) textEl.replaceWith(textarea);
-            else dayEl.querySelector('.pl-ramble-day-head').after(textarea);
-
-            const status = document.createElement('span');
-            status.className = 'save-status';
-
-            const saveBtn = document.createElement('button');
-            saveBtn.type = 'button';
-            saveBtn.className = 'pl-chip-btn pl-chip-btn--save';
-            saveBtn.textContent = 'Save';
-
-            this.replaceWith(status, saveBtn);
-
-            dayEl.querySelectorAll('.pl-thumb-remove').forEach(b => { b.hidden = false; });
-
-            bindEditor(day, textarea, status);
-            bindSaveButton(saveBtn, day, textarea, status);
-            textarea.focus();
-        });
-    });
-
     // ---- media removal (event-delegated: works in both cards) -----------
     document.addEventListener('click', async ev => {
         const btn = ev.target.closest('[data-block-remove]');
         if (!btn) return;
 
+        const dayEl = btn.closest('[data-ramble-day], [data-ramble-today]');
         const id = btn.dataset.blockRemove;
         btn.disabled = true;
         try {
@@ -384,6 +639,7 @@
             });
             if (!res.ok) throw new Error();
             btn.closest('[data-block-id]')?.remove();
+            cleanupDayEl(dayEl);
         } catch {
             btn.disabled = false;
         }

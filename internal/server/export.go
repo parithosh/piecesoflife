@@ -308,10 +308,17 @@ func (s *Server) buildExportPayload(
 					}
 
 					blocks = append(blocks, exportDiaryBlock{DiaryBlock: b, URL: url})
+
+					bcs, cErr := s.store.ListCommentsByDiaryBlock(ctx, b.ID)
+					if cErr == nil {
+						comments = append(comments, bcs...)
+					}
 				}
 
 				days = append(days, exportDiaryDay{DiaryDay: d.DiaryDay, Blocks: blocks})
 
+				// Legacy day-level threads from issues published before
+				// per-block comments.
 				cs, cErr := s.store.ListCommentsByDiaryDay(ctx, d.DiaryDay.ID)
 				if cErr == nil {
 					comments = append(comments, cs...)

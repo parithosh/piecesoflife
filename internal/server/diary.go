@@ -133,52 +133,53 @@ func (s *Server) handleDetachDiary(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDiaryDayAutosave replaces one snapshot day's text. Trimming a day to
-// nothing removes it from the section.
-// PUT /api/diary-days/{id}/autosave
-func (s *Server) handleDiaryDayAutosave(w http.ResponseWriter, r *http.Request) {
+// handleUpdateDiaryBlock replaces one snapshot text block's content. Saving
+// an emptied block trims it from the section, and a day left with nothing is
+// removed from the spread with it.
+// PUT /api/diary-blocks/{id}
+func (s *Server) handleUpdateDiaryBlock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	dayID, ok := s.parseIDParam(w, r, "id", "day ID")
+	blockID, ok := s.parseIDParam(w, r, "id", "block ID")
 	if !ok {
 		return
 	}
 
-	if _, ok := s.loadOwnedDiaryDay(w, r, dayID, true); !ok {
+	text, ok := s.requireRambleBlockText(w, r)
+	if !ok {
 		return
 	}
 
-	var req struct {
-		Text string `json:"text"`
-	}
-
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
-		return
-	}
-
-	if len(req.Text) > maxRambleTextBytes {
-		writeValidationError(w, map[string]string{
-			"text": fmt.Sprintf("A day is capped at %d characters", maxRambleTextBytes),
-		})
-		return
-	}
-
-	blocks := make([]store.DiaryBlock, 0, 1)
-	if text := strings.TrimRight(req.Text, "\n "); text != "" {
-		blocks = append(blocks, store.DiaryBlock{Type: "text", Content: &text})
-	}
-
-	removed, err := s.store.AutosaveDiaryDay(ctx, dayID, blocks)
+	block, err := s.store.GetDiaryBlockByID(ctx, blockID)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to autosave diary day",
-			slog.Int64("day_id", dayID),
+		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		return
+	}
+
+	if _, ok := s.loadOwnedDiaryDay(w, r, block.DiaryDayID, true); !ok {
+		return
+	}
+
+	if block.Type != "text" {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_block_type",
+			"Only text blocks can be edited")
+		return
+	}
+
+	blockRemoved, dayRemoved, err := s.store.UpdateDiaryBlockText(ctx, blockID, text)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to update diary block",
+			slog.Int64("block_id", blockID),
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save")
+
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"removed":     blockRemoved,
+		"day_removed": dayRemoved,
+	})
 }
 
 // handleDeleteDiaryDay drops one day from the caller's snapshot.
@@ -246,7 +247,8 @@ func (s *Server) handleDeleteDiaryBlock(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleListDiaryComments lists comments on a published notebook day.
+// handleListDiaryComments lists comments on a published notebook day —
+// legacy day-level threads from issues published before per-block comments.
 // GET /api/diary-days/{id}/comments
 func (s *Server) handleListDiaryComments(w http.ResponseWriter, r *http.Request) {
 	dayID, ok := s.parseIDParam(w, r, "id", "day ID")
@@ -278,8 +280,10 @@ func (s *Server) handleListDiaryComments(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"comments": out})
 }
 
-// handleAddDiaryComment posts a comment on a notebook day. Any member of the
-// Loop can comment; threads stay one level deep like response comments.
+// handleAddDiaryComment posts a comment on a notebook day. Day-level
+// threads are legacy — the panel only renders where old comments already
+// exist, so this now mostly carries replies in those threads. Any member of
+// the Loop can comment; threads stay one level deep like response comments.
 // POST /api/diary-days/{id}/comments
 func (s *Server) handleAddDiaryComment(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -362,6 +366,130 @@ func (s *Server) handleAddDiaryComment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleListDiaryBlockComments lists comments on a single published
+// notebook block.
+// GET /api/diary-blocks/{id}/comments
+func (s *Server) handleListDiaryBlockComments(w http.ResponseWriter, r *http.Request) {
+	blockID, ok := s.parseIDParam(w, r, "id", "block ID")
+	if !ok {
+		return
+	}
+
+	if _, ok := s.requireDiaryBlockInGroup(w, r, blockID); !ok {
+		return
+	}
+
+	comments, err := s.store.ListCommentsByDiaryBlock(r.Context(), blockID)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to list diary block comments",
+			slog.Int64("block_id", blockID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to list comments")
+
+		return
+	}
+
+	out := make([]commentResponse, 0, len(comments))
+	for _, c := range comments {
+		out = append(out, commentResponse{
+			CommentWithUser: c,
+			BodyHTML:        renderCommentBody(c.Body),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"comments": out})
+}
+
+// handleAddDiaryBlockComment posts a comment on a single published notebook
+// block. Any member of the Loop can comment; threads stay one level deep
+// like response comments.
+// POST /api/diary-blocks/{id}/comments
+func (s *Server) handleAddDiaryBlockComment(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
+	blockID, ok := s.parseIDParam(w, r, "id", "block ID")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Body     string `json:"body"`
+		ParentID *int64 `json:"parent_id"`
+	}
+
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	if _, ok := s.requireDiaryBlockInGroup(w, r, blockID); !ok {
+		return
+	}
+
+	req.Body = strings.TrimSpace(req.Body)
+	if req.Body == "" {
+		writeValidationError(w, map[string]string{"body": "Comment body is required"})
+		return
+	}
+
+	if len(req.Body) > maxCommentBytes {
+		writeValidationError(w, map[string]string{
+			"body": fmt.Sprintf("Comment too long (max %d characters)", maxCommentBytes),
+		})
+
+		return
+	}
+
+	if req.ParentID != nil {
+		parent, err := s.store.GetCommentByID(ctx, *req.ParentID)
+		if err != nil || parent.DiaryBlockID == nil || *parent.DiaryBlockID != blockID {
+			writeValidationError(w, map[string]string{
+				"parent_id": "Parent comment not found on this block",
+			})
+
+			return
+		}
+	}
+
+	id, err := s.store.CreateDiaryBlockComment(ctx, user.ID, blockID, req.ParentID, req.Body)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to create diary block comment",
+			slog.Int64("block_id", blockID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to post comment")
+
+		return
+	}
+
+	// Queue the notebook owner's digest mention.
+	if block, bErr := s.store.GetDiaryBlockByID(ctx, blockID); bErr == nil {
+		if day, dErr := s.store.GetDiaryDayByID(ctx, block.DiaryDayID); dErr == nil {
+			if section, sErr := s.store.GetDiarySectionByID(ctx, day.SectionID); sErr == nil {
+				s.enqueueCommentNotifications(ctx, section.UserID, user.ID, id, req.ParentID)
+			}
+		}
+	}
+
+	created := store.CommentWithUser{
+		Comment: store.Comment{
+			ID:           id,
+			UserID:       user.ID,
+			DiaryBlockID: &blockID,
+			ParentID:     req.ParentID,
+			Body:         req.Body,
+			CreatedAt:    time.Now(),
+		},
+		AuthorName:      user.Name,
+		AuthorAvatarURL: user.AvatarURL,
+	}
+
+	writeJSON(w, http.StatusCreated, commentResponse{
+		CommentWithUser: created,
+		BodyHTML:        renderCommentBody(req.Body),
+	})
+}
+
 // requireDiaryDayInGroup resolves a notebook day's owning issue and verifies
 // it belongs to the current Loop — same ID-walking guard as
 // requireResponseInGroup.
@@ -376,6 +504,25 @@ func (s *Server) requireDiaryDayInGroup(
 
 	if issue.GroupID != currentGroupID(r.Context()) {
 		s.writeNotFound(w, r, "Day not found")
+		return nil, false
+	}
+
+	return issue, true
+}
+
+// requireDiaryBlockInGroup resolves a notebook block's owning issue and
+// verifies it belongs to the current Loop.
+func (s *Server) requireDiaryBlockInGroup(
+	w http.ResponseWriter, r *http.Request, blockID int64,
+) (*store.Issue, bool) {
+	issue, err := s.store.GetIssueByDiaryBlockID(r.Context(), blockID)
+	if err != nil {
+		s.writeNotFound(w, r, "Block not found")
+		return nil, false
+	}
+
+	if issue.GroupID != currentGroupID(r.Context()) {
+		s.writeNotFound(w, r, "Block not found")
 		return nil, false
 	}
 

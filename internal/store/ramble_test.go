@@ -20,66 +20,107 @@ func mustParseTime(t *testing.T, day string) time.Time {
 	return parsed
 }
 
-func TestRambleAutosaveLifecycle(t *testing.T) {
+// seedRambleText creates a journal day holding one text block per given
+// string — the seeding path the create handler uses (CreateRambleTextBlock).
+func seedRambleText(
+	t *testing.T, s *Store, userID int64, day string, texts ...string,
+) int64 {
+	t.Helper()
+	ctx := context.Background()
+
+	for _, txt := range texts {
+		_, err := s.CreateRambleTextBlock(ctx, userID, day, txt)
+		require.NoError(t, err)
+	}
+
+	id, err := s.EnsureRambleDay(ctx, userID, day)
+	require.NoError(t, err)
+
+	return id
+}
+
+func TestRambleBlockLifecycle(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	user := seedUser(t, s, "Meera", "meera@example.com")
 
-	// First save creates the day.
-	id, removed, err := s.AutosaveRambleDay(ctx, user, "2026-06-23",
-		[]RambleBlock{{Type: "text", Content: strPtr("The gulmohar flowered.")}})
-	require.NoError(t, err)
-	assert.False(t, removed)
-	assert.NotZero(t, id)
-
-	// Re-saving replaces the text without duplicating blocks.
-	id2, removed, err := s.AutosaveRambleDay(ctx, user, "2026-06-23",
-		[]RambleBlock{{Type: "text", Content: strPtr("The gulmohar finally flowered.")}})
-	require.NoError(t, err)
-	assert.False(t, removed)
-	assert.Equal(t, id, id2)
+	id := seedRambleText(t, s, user, "2026-06-23", "The gulmohar flowered.")
 
 	blocks, err := s.ListRambleBlocks(ctx, id)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
-	assert.Equal(t, "The gulmohar finally flowered.", *blocks[0].Content)
 
-	// Media blocks survive text autosaves.
-	_, err = s.CreateRambleBlock(ctx, id, "photo", nil, strPtr("/up/2026/06/x.jpg"), nil)
+	// Editing a block replaces its content in place.
+	blockRemoved, dayRemoved, err := s.UpdateRambleBlockText(
+		ctx, blocks[0].ID, "The gulmohar finally flowered.")
 	require.NoError(t, err)
+	assert.False(t, blockRemoved)
+	assert.False(t, dayRemoved)
 
-	_, removed, err = s.AutosaveRambleDay(ctx, user, "2026-06-23",
-		[]RambleBlock{{Type: "text", Content: strPtr("Edited again.")}})
-	require.NoError(t, err)
-	assert.False(t, removed)
-
-	blocks, err = s.ListRambleBlocks(ctx, id)
-	require.NoError(t, err)
-	assert.Len(t, blocks, 2)
-
-	// Clearing the text with media still present keeps the day.
-	_, removed, err = s.AutosaveRambleDay(ctx, user, "2026-06-23", nil)
-	require.NoError(t, err)
-	assert.False(t, removed)
-
-	// Deleting the last media block deletes the now-empty day with it.
 	blocks, err = s.ListRambleBlocks(ctx, id)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
-	require.NoError(t, s.DeleteRambleBlock(ctx, blocks[0].ID))
+	assert.Equal(t, "The gulmohar finally flowered.", *blocks[0].Content)
+
+	// A second thought is its own block, ordered after the first.
+	secondID, err := s.CreateRambleBlock(ctx, id, "text",
+		strPtr("And the crows noticed."), nil, nil)
+	require.NoError(t, err)
+
+	blocks, err = s.ListRambleBlocks(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+	assert.Equal(t, "And the crows noticed.", *blocks[1].Content)
+	assert.Greater(t, blocks[1].SortOrder, blocks[0].SortOrder)
+
+	// Media blocks live in the same sequence.
+	photoID, err := s.CreateRambleBlock(ctx, id, "photo", nil,
+		strPtr("/up/2026/06/x.jpg"), nil)
+	require.NoError(t, err)
+
+	// Only text blocks can be edited.
+	_, _, err = s.UpdateRambleBlockText(ctx, photoID, "sneaky caption")
+	assert.Error(t, err)
+
+	// Emptying a block deletes it; the day survives while siblings remain.
+	blockRemoved, dayRemoved, err = s.UpdateRambleBlockText(ctx, blocks[0].ID, "")
+	require.NoError(t, err)
+	assert.True(t, blockRemoved)
+	assert.False(t, dayRemoved)
+
+	blocks, err = s.ListRambleBlocks(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+
+	// Deleting the remaining text and media empties the day out of existence.
+	blockRemoved, dayRemoved, err = s.UpdateRambleBlockText(ctx, secondID, "")
+	require.NoError(t, err)
+	assert.True(t, blockRemoved)
+	assert.False(t, dayRemoved)
+
+	require.NoError(t, s.DeleteRambleBlock(ctx, photoID))
 
 	_, err = s.GetRambleByDay(ctx, user, "2026-06-23")
 	assert.Error(t, err, "empty day should be invisible")
 
-	// An empty save on a day that never existed stays invisible.
-	_, removed, err = s.AutosaveRambleDay(ctx, user, "2026-06-24", nil)
+	// Emptying the last block removes the day with it.
+	id2 := seedRambleText(t, s, user, "2026-06-24", "a lone thought")
+	blocks, err = s.ListRambleBlocks(ctx, id2)
 	require.NoError(t, err)
-	assert.True(t, removed)
+
+	blockRemoved, dayRemoved, err = s.UpdateRambleBlockText(ctx, blocks[0].ID, "")
+	require.NoError(t, err)
+	assert.True(t, blockRemoved)
+	assert.True(t, dayRemoved)
 
 	days, err := s.ListRambleDays(ctx, user)
 	require.NoError(t, err)
 	assert.Empty(t, days)
+
+	// A vanished block can't be edited.
+	_, _, err = s.UpdateRambleBlockText(ctx, blocks[0].ID, "too late")
+	assert.Error(t, err)
 }
 
 func TestRambleDayListingAndCounts(t *testing.T) {
@@ -90,14 +131,10 @@ func TestRambleDayListingAndCounts(t *testing.T) {
 	other := seedUser(t, s, "Zara", "zara@example.com")
 
 	for _, day := range []string{"2026-06-19", "2026-06-29", "2026-07-08"} {
-		_, _, err := s.AutosaveRambleDay(ctx, user, day,
-			[]RambleBlock{{Type: "text", Content: strPtr("note on " + day)}})
-		require.NoError(t, err)
+		seedRambleText(t, s, user, day, "note on "+day)
 	}
 
-	_, _, err := s.AutosaveRambleDay(ctx, other, "2026-07-01",
-		[]RambleBlock{{Type: "text", Content: strPtr("someone else's note")}})
-	require.NoError(t, err)
+	seedRambleText(t, s, other, "2026-07-01", "someone else's note")
 
 	// Newest first, scoped to the owner, blocks attached.
 	days, err := s.ListRambleDays(ctx, user)
@@ -127,21 +164,16 @@ func TestDiaryAttachSnapshotsJournal(t *testing.T) {
 		mustParseTime(t, "2026-07-01"), mustParseTime(t, "2026-07-08"))
 	require.NoError(t, err)
 
-	_, _, err = s.AutosaveRambleDay(ctx, user, "2026-06-23",
-		[]RambleBlock{{Type: "text", Content: strPtr("gulmohar")}})
-	require.NoError(t, err)
+	// Two separate thoughts on one day stay two separate blocks.
+	seedRambleText(t, s, user, "2026-06-23", "gulmohar", "crows again")
 
-	rambleID, _, err := s.AutosaveRambleDay(ctx, user, "2026-06-27",
-		[]RambleBlock{{Type: "text", Content: strPtr("evening walk")}})
-	require.NoError(t, err)
+	rambleID := seedRambleText(t, s, user, "2026-06-27", "evening walk")
 	_, err = s.CreateRambleBlock(ctx, rambleID, "photo", nil,
 		strPtr("/up/2026/06/sky.jpg"), strPtr("the ninety-second sky"))
 	require.NoError(t, err)
 
 	// A day outside the window stays out of the snapshot.
-	_, _, err = s.AutosaveRambleDay(ctx, user, "2026-05-01",
-		[]RambleBlock{{Type: "text", Content: strPtr("too old")}})
-	require.NoError(t, err)
+	seedRambleText(t, s, user, "2026-05-01", "too old")
 
 	sectionID, copied, err := s.AttachDiarySection(ctx, issueID, user,
 		"2026-06-01", "2026-07-05")
@@ -157,20 +189,34 @@ func TestDiaryAttachSnapshotsJournal(t *testing.T) {
 	require.Len(t, days, 2)
 	assert.Equal(t, "2026-06-23", days[0].DiaryDay.Day)
 	assert.Equal(t, "2026-06-27", days[1].DiaryDay.Day)
+	require.Len(t, days[0].Blocks, 2, "each journal block copies separately")
 	require.Len(t, days[1].Blocks, 2)
 	assert.Equal(t, "the ninety-second sky", *days[1].Blocks[1].Caption)
 
 	// The snapshot is a copy: editing it leaves the journal alone.
-	removed, err := s.AutosaveDiaryDay(ctx, days[0].DiaryDay.ID,
-		[]DiaryBlock{{Type: "text", Content: strPtr("gulmohar, trimmed")}})
+	blockRemoved, dayRemoved, err := s.UpdateDiaryBlockText(
+		ctx, days[0].Blocks[0].ID, "gulmohar, trimmed")
 	require.NoError(t, err)
-	assert.False(t, removed)
+	assert.False(t, blockRemoved)
+	assert.False(t, dayRemoved)
 
 	journal, err := s.GetRambleByDay(ctx, user, "2026-06-23")
 	require.NoError(t, err)
 	blocks, err := s.ListRambleBlocks(ctx, journal.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "gulmohar", *blocks[0].Content)
+
+	// Trimming one snapshot block leaves its siblings in the spread.
+	blockRemoved, dayRemoved, err = s.UpdateDiaryBlockText(
+		ctx, days[0].Blocks[1].ID, "")
+	require.NoError(t, err)
+	assert.True(t, blockRemoved)
+	assert.False(t, dayRemoved)
+
+	days, err = s.ListDiaryDays(ctx, sectionID)
+	require.NoError(t, err)
+	require.Len(t, days[0].Blocks, 1)
+	assert.Equal(t, "gulmohar, trimmed", *days[0].Blocks[0].Content)
 
 	// Shared upload paths are reference-counted across journal + snapshots.
 	refs, err := s.CountUploadsReferencing(ctx, "/up/2026/06/sky.jpg")
@@ -188,9 +234,7 @@ func TestDiaryRefreshSkipsTrimmedDays(t *testing.T) {
 		mustParseTime(t, "2026-07-01"), mustParseTime(t, "2026-07-08"))
 	require.NoError(t, err)
 
-	_, _, err = s.AutosaveRambleDay(ctx, user, "2026-07-01",
-		[]RambleBlock{{Type: "text", Content: strPtr("day one")}})
-	require.NoError(t, err)
+	seedRambleText(t, s, user, "2026-07-01", "day one")
 
 	sectionID, copied, err := s.AttachDiarySection(ctx, issueID, user, "", "2026-07-02")
 	require.NoError(t, err)
@@ -203,12 +247,8 @@ func TestDiaryRefreshSkipsTrimmedDays(t *testing.T) {
 	require.NoError(t, err)
 
 	// …then rambles two more days and pulls in the new ones.
-	_, _, err = s.AutosaveRambleDay(ctx, user, "2026-07-03",
-		[]RambleBlock{{Type: "text", Content: strPtr("day three")}})
-	require.NoError(t, err)
-	_, _, err = s.AutosaveRambleDay(ctx, user, "2026-07-05",
-		[]RambleBlock{{Type: "text", Content: strPtr("day five")}})
-	require.NoError(t, err)
+	seedRambleText(t, s, user, "2026-07-03", "day three")
+	seedRambleText(t, s, user, "2026-07-05", "day five")
 
 	added, err := s.RefreshDiarySection(ctx, sectionID, user, "2026-07-06")
 	require.NoError(t, err)
@@ -242,9 +282,7 @@ func TestDiaryRefreshPullsSameDayPage(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, copied)
 
-	_, _, err = s.AutosaveRambleDay(ctx, user, "2026-07-04",
-		[]RambleBlock{{Type: "text", Content: strPtr("an evening thought")}})
-	require.NoError(t, err)
+	seedRambleText(t, s, user, "2026-07-04", "an evening thought")
 
 	n, err := s.CountPullableRambleDays(ctx, user, sectionID, "2026-07-04")
 	require.NoError(t, err)
@@ -272,9 +310,7 @@ func TestDiarySectionListingAndDetach(t *testing.T) {
 	require.NoError(t, err)
 
 	for user, day := range map[int64]string{meera: "2026-07-02", arun: "2026-07-03"} {
-		_, _, err = s.AutosaveRambleDay(ctx, user, day,
-			[]RambleBlock{{Type: "text", Content: strPtr("note")}})
-		require.NoError(t, err)
+		seedRambleText(t, s, user, day, "note")
 
 		_, _, err = s.AttachDiarySection(ctx, issueID, user, "", "2026-07-05")
 		require.NoError(t, err)
@@ -287,10 +323,12 @@ func TestDiarySectionListingAndDetach(t *testing.T) {
 	assert.Equal(t, "Meera", groups[1].UserName)
 	require.Len(t, groups[0].Days, 1)
 
-	// Trimming a section to zero days hides it from the spread.
-	removed, err := s.AutosaveDiaryDay(ctx, groups[0].Days[0].DiaryDay.ID, nil)
+	// Trimming a section's every block hides it from the spread.
+	blockRemoved, dayRemoved, err := s.UpdateDiaryBlockText(
+		ctx, groups[0].Days[0].Blocks[0].ID, "")
 	require.NoError(t, err)
-	assert.True(t, removed)
+	assert.True(t, blockRemoved)
+	assert.True(t, dayRemoved)
 
 	groups, err = s.ListDiarySectionsByIssue(ctx, issueID)
 	require.NoError(t, err)
@@ -319,9 +357,7 @@ func TestDiaryDayComments(t *testing.T) {
 		mustParseTime(t, "2026-07-01"), mustParseTime(t, "2026-07-08"))
 	require.NoError(t, err)
 
-	_, _, err = s.AutosaveRambleDay(ctx, meera, "2026-07-05",
-		[]RambleBlock{{Type: "text", Content: strPtr("the samosa place changed hands")}})
-	require.NoError(t, err)
+	seedRambleText(t, s, meera, "2026-07-05", "the samosa place changed hands")
 
 	sectionID, _, err := s.AttachDiarySection(ctx, issueID, meera, "", "2026-07-06")
 	require.NoError(t, err)
@@ -330,6 +366,7 @@ func TestDiaryDayComments(t *testing.T) {
 	require.NoError(t, err)
 	dayID := days[0].DiaryDay.ID
 
+	// Legacy day-level threads (pre-021 issues) still work.
 	top, err := s.CreateDiaryComment(ctx, arun, dayID, nil, "new owners or new menu?")
 	require.NoError(t, err)
 	_, err = s.CreateDiaryComment(ctx, meera, dayID, &top, "new owners. the chutney is FINE.")
@@ -341,6 +378,7 @@ func TestDiaryDayComments(t *testing.T) {
 	assert.Equal(t, "Arun", comments[0].AuthorName)
 	require.NotNil(t, comments[0].DiaryDayID)
 	assert.Nil(t, comments[0].ResponseID)
+	assert.Nil(t, comments[0].DiaryBlockID)
 	require.NotNil(t, comments[1].ParentID)
 	assert.Equal(t, top, *comments[1].ParentID)
 
@@ -362,4 +400,75 @@ func TestDiaryDayComments(t *testing.T) {
 	require.Len(t, respComments, 1)
 	require.NotNil(t, respComments[0].ResponseID)
 	assert.Nil(t, respComments[0].DiaryDayID)
+}
+
+func TestDiaryBlockComments(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	meera := seedUser(t, s, "Meera", "meera@example.com")
+	arun := seedUser(t, s, "Arun", "arun@example.com")
+
+	issueID, err := s.CreateIssue(ctx, 1, nil, 7, 2026,
+		mustParseTime(t, "2026-07-01"), mustParseTime(t, "2026-07-08"))
+	require.NoError(t, err)
+
+	seedRambleText(t, s, meera, "2026-07-05",
+		"the samosa place changed hands", "and the mango cart is back")
+
+	sectionID, _, err := s.AttachDiarySection(ctx, issueID, meera, "", "2026-07-06")
+	require.NoError(t, err)
+
+	days, err := s.ListDiaryDays(ctx, sectionID)
+	require.NoError(t, err)
+	require.Len(t, days[0].Blocks, 2)
+
+	first := days[0].Blocks[0].ID
+	second := days[0].Blocks[1].ID
+
+	// A thread lands on one block, not its neighbour and not the day.
+	top, err := s.CreateDiaryBlockComment(ctx, arun, second, nil, "WHICH mango cart?")
+	require.NoError(t, err)
+	_, err = s.CreateDiaryBlockComment(ctx, meera, second, &top, "the good one. obviously.")
+	require.NoError(t, err)
+
+	comments, err := s.ListCommentsByDiaryBlock(ctx, second)
+	require.NoError(t, err)
+	require.Len(t, comments, 2)
+	assert.Equal(t, "Arun", comments[0].AuthorName)
+	require.NotNil(t, comments[0].DiaryBlockID)
+	assert.Equal(t, second, *comments[0].DiaryBlockID)
+	assert.Nil(t, comments[0].DiaryDayID)
+	assert.Nil(t, comments[0].ResponseID)
+	require.NotNil(t, comments[1].ParentID)
+	assert.Equal(t, top, *comments[1].ParentID)
+
+	neighbour, err := s.ListCommentsByDiaryBlock(ctx, first)
+	require.NoError(t, err)
+	assert.Empty(t, neighbour)
+
+	// The issue page counts every block's thread in one grouped query;
+	// blocks without comments are simply absent.
+	counts, err := s.CountCommentsByDiaryBlocks(ctx, issueID)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]int{second: 2}, counts)
+
+	dayComments, err := s.ListCommentsByDiaryDay(ctx, days[0].DiaryDay.ID)
+	require.NoError(t, err)
+	assert.Empty(t, dayComments)
+
+	// The block resolves back to its issue for the Loop guard.
+	issue, err := s.GetIssueByDiaryBlockID(ctx, second)
+	require.NoError(t, err)
+	assert.Equal(t, issueID, issue.ID)
+
+	// Trimming a commented block takes its thread with it (CASCADE).
+	require.NoError(t, s.DeleteDiaryBlock(ctx, second))
+
+	comments, err = s.ListCommentsByDiaryBlock(ctx, second)
+	require.NoError(t, err)
+	assert.Empty(t, comments)
+
+	_, err = s.GetCommentByID(ctx, top)
+	assert.Error(t, err)
 }

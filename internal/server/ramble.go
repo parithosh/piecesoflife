@@ -145,10 +145,11 @@ func (s *Server) handleGetRambleDay(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ramble": ramble, "blocks": out})
 }
 
-// handleRambleAutosave replaces one day's text. An empty save deletes the
-// day when no media remains — empty days are invisible.
-// PUT /api/ramble/{day}/autosave
-func (s *Server) handleRambleAutosave(w http.ResponseWriter, r *http.Request) {
+// handleCreateRambleBlock appends one text block to a day — each submitted
+// thought is its own block, so an issue can later weave them in (and gather
+// comments) one by one. Empty text is refused: absence is not a block.
+// POST /api/ramble/{day}/blocks
+func (s *Server) handleCreateRambleBlock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
 
@@ -157,40 +158,89 @@ func (s *Server) handleRambleAutosave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Text string `json:"text"`
-	}
-
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+	text, ok := s.requireRambleBlockText(w, r)
+	if !ok {
 		return
 	}
 
-	if len(req.Text) > maxRambleTextBytes {
-		writeValidationError(w, map[string]string{
-			"text": fmt.Sprintf("A day's ramble is capped at %d characters", maxRambleTextBytes),
-		})
+	if text == "" {
+		writeValidationError(w, map[string]string{"text": "Nothing to add yet"})
 		return
 	}
 
-	blocks := make([]store.RambleBlock, 0, 1)
-	if text := strings.TrimRight(req.Text, "\n "); text != "" {
-		blocks = append(blocks, store.RambleBlock{Type: "text", Content: &text})
-	}
-
-	rambleID, removed, err := s.store.AutosaveRambleDay(ctx, user.ID, day, blocks)
+	blockID, err := s.store.CreateRambleTextBlock(ctx, user.ID, day, text)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to autosave ramble",
+		s.logger.ErrorContext(ctx, "Failed to create ramble text block",
 			slog.Int64("user_id", user.ID),
 			slog.String("day", day),
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save")
+
+		return
+	}
+
+	block, err := s.store.GetRambleBlockByID(ctx, blockID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to retrieve ramble block",
+			slog.Int64("block_id", blockID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to retrieve block")
+
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, s.rambleBlockJSON(*block))
+}
+
+// handleUpdateRambleBlock replaces one text block's content. Saving an
+// emptied block deletes it, and a day left with nothing is deleted with it —
+// empty days are invisible.
+// PUT /api/ramble/blocks/{id}
+func (s *Server) handleUpdateRambleBlock(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
+	id, ok := s.parseIDParam(w, r, "id", "block ID")
+	if !ok {
+		return
+	}
+
+	text, ok := s.requireRambleBlockText(w, r)
+	if !ok {
+		return
+	}
+
+	block, err := s.store.GetRambleBlockByID(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		return
+	}
+
+	ramble, err := s.store.GetRambleByID(ctx, block.RambleID)
+	if err != nil || ramble.UserID != user.ID {
+		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		return
+	}
+
+	if block.Type != "text" {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_block_type",
+			"Only text blocks can be edited")
+		return
+	}
+
+	blockRemoved, dayRemoved, err := s.store.UpdateRambleBlockText(ctx, id, text)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to update ramble block",
+			slog.Int64("block_id", id),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save")
+
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ramble_id": rambleID,
-		"removed":   removed,
+		"removed":     blockRemoved,
+		"day_removed": dayRemoved,
 	})
 }
 
@@ -384,6 +434,33 @@ func (s *Server) rambleBlockJSON(b store.RambleBlock) rambleBlockResponse {
 	}
 
 	return rambleBlockResponse{RambleBlock: b, URL: url}
+}
+
+// requireRambleBlockText reads a {text} body, trims trailing whitespace the
+// way the editor's save-verification expects, and enforces the per-block
+// cap. Empty text is returned as "" for the caller to interpret — refusal
+// for a create, deletion for an update.
+func (s *Server) requireRambleBlockText(
+	w http.ResponseWriter, r *http.Request,
+) (string, bool) {
+	var req struct {
+		Text string `json:"text"`
+	}
+
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return "", false
+	}
+
+	if len(req.Text) > maxRambleTextBytes {
+		writeValidationError(w, map[string]string{
+			"text": fmt.Sprintf("A block is capped at %d characters", maxRambleTextBytes),
+		})
+
+		return "", false
+	}
+
+	return strings.TrimRight(req.Text, "\n "), true
 }
 
 // requireRambleDayParam validates the {day} path value: shape, parseability,

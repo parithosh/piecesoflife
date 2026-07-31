@@ -8,15 +8,19 @@
         'ul', 'ol', 'li', 'a',
     ]);
 
-    // Panels target either a response or a published notebook (diary) day;
-    // the data attribute decides which comments API the panel talks to.
+    // Panels target a response, a single notebook (diary) block, a legacy
+    // notebook day (issues published before per-block threads), or a dump
+    // item; the data attribute decides which comments API the panel talks to.
     const PANEL_SELECTOR =
-        '.comments-panel[data-response-id], .comments-panel[data-diary-day-id], ' +
-        '.comments-panel[data-dump-item-id]';
+        '.comments-panel[data-response-id], .comments-panel[data-diary-block-id], ' +
+        '.comments-panel[data-diary-day-id], .comments-panel[data-dump-item-id]';
 
     function commentsEndpoint(panel) {
         if (panel.dataset.responseId) {
             return `/api/responses/${panel.dataset.responseId}/comments`;
+        }
+        if (panel.dataset.diaryBlockId) {
+            return `/api/diary-blocks/${panel.dataset.diaryBlockId}/comments`;
         }
         if (panel.dataset.diaryDayId) {
             return `/api/diary-days/${panel.dataset.diaryDayId}/comments`;
