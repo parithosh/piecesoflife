@@ -403,28 +403,26 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	diaryCommentCounts := make(map[int64]int, 16)
-	diaryBlockCommentCounts := make(map[int64]int, 32)
+
+	// One grouped query covers every block on the spread; blocks without
+	// comments simply have no entry (the template's index yields 0).
+	diaryBlockCommentCounts, err := s.store.CountCommentsByDiaryBlocks(ctx, targetIssue.ID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "Failed to count diary block comments",
+			slog.Int64("issue_id", targetIssue.ID),
+			slog.String("error", err.Error()))
+
+		diaryBlockCommentCounts = make(map[int64]int, 0)
+	}
 
 	for gi := range diaryGroups {
 		for di := range diaryGroups[gi].Days {
 			day := &diaryGroups[gi].Days[di]
 
 			for bi := range day.Blocks {
-				block := &day.Blocks[bi]
-
-				if block.Type == "photo" {
+				if day.Blocks[bi].Type == "photo" {
 					photoCount++
 				}
-
-				blockComments, cErr := s.store.ListCommentsByDiaryBlock(ctx, block.ID)
-				if cErr != nil {
-					s.logger.WarnContext(ctx, "Failed to count diary block comments",
-						slog.Int64("block_id", block.ID),
-						slog.String("error", cErr.Error()))
-					continue
-				}
-
-				diaryBlockCommentCounts[block.ID] = len(blockComments)
 			}
 
 			// Legacy day-level threads (pre-021); the template only renders

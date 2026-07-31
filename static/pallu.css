@@ -3929,6 +3929,18 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
     border-top: 1px dashed var(--line);
 }
 
+/* per-block autosave chip — plain text like the rest of this quiet page */
+.pl-diary-block .save-status {
+    flex: 0 0 auto;
+    align-self: center;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.pl-diary-block .save-status.error { color: var(--sindoor); }
+
 .pl-diary-block-remove {
     flex: 0 0 auto;
     border: 0;

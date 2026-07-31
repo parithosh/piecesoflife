@@ -170,6 +170,20 @@
         return st.chain;
     }
 
+    // Every live writer registers here (composers for the life of the page,
+    // block edits while open) so keystrokes still inside the autosave
+    // debounce can be flushed before an upload reloads the page.
+    const writers = new Set();
+
+    async function flushWriters() {
+        const flushes = [];
+        writers.forEach(st => {
+            clearTimeout(st.timer);
+            flushes.push(enqueue(st, st.flush));
+        });
+        await Promise.all(flushes);
+    }
+
     async function fetchDayBlocks(day) {
         const res = await fetch(`/api/ramble/${day}`, { headers: apiHeaders() });
         if (!res.ok) throw new Error();
@@ -222,6 +236,9 @@
             timer: null,
             chain: Promise.resolve(),
         };
+
+        st.flush = () => pushDraft(st);
+        writers.add(st);
 
         st.textarea.addEventListener('input', () => {
             clearTimeout(st.timer);
@@ -317,7 +334,7 @@
         return false;
     }
 
-    const todayComposer = makeComposer(
+    makeComposer(
         today, todayCard, todayCard.querySelector('[data-compose-status]'), null);
 
     // If today already has a page (server-rendered in the timeline), fold its
@@ -376,6 +393,9 @@
             chain: Promise.resolve(),
         };
 
+        st.flush = () => pushBlock(st, false);
+        writers.add(st);
+
         textarea.addEventListener('input', () => {
             clearTimeout(st.timer);
             setStatus(st.statusEl, '', '');
@@ -428,6 +448,7 @@
             const result = await enqueue(st, () => pushBlock(st, true));
 
             if (result && result.removed) {
+                writers.delete(st);
                 st.card.remove();
                 cleanupDayEl(st.dayEl);
                 return true;
@@ -448,6 +469,7 @@
                     saveBtn.remove();
                     editBtn.hidden = false;
                     st.card.dataset.editing = '';
+                    writers.delete(st);
                     setStatus(st.statusEl, 'saved', 'Saved ✓');
                     return true;
                 }
@@ -469,6 +491,7 @@
                 method: 'DELETE', headers: apiHeaders(),
             });
             if (!res.ok) throw new Error();
+            writers.forEach(st => { if (st.card === card) writers.delete(st); });
             card.remove();
             cleanupDayEl(dayEl);
         } catch {
@@ -523,10 +546,9 @@
             const status = todayCard.querySelector('[data-media-status]');
             btn.disabled = true;
 
-            // Flush the composer first so a fresh draft isn't lost when the
-            // upload reload lands.
-            clearTimeout(todayComposer.timer);
-            await enqueue(todayComposer, () => pushDraft(todayComposer));
+            // Flush every writer first — the composers and any open block
+            // edits — so nothing typed is lost when the upload reload lands.
+            await flushWriters();
 
             let uploaded = 0;
             uploadsInFlight++;
@@ -569,10 +591,9 @@
             POLRecorder.record(kind, {
                 toast: msg => { if (status) status.textContent = msg; },
                 upload: async (file) => {
-                    // Flush the composer first so the reload after saving
-                    // doesn't lose a fresh draft.
-                    clearTimeout(todayComposer.timer);
-                    await enqueue(todayComposer, () => pushDraft(todayComposer));
+                    // Flush every writer first — the composers and any open
+                    // block edits — so the reload after saving loses nothing.
+                    await flushWriters();
 
                     uploadsInFlight++;
                     try {

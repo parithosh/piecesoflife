@@ -168,21 +168,11 @@ func (s *Server) handleCreateRambleBlock(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rambleID, err := s.store.EnsureRambleDay(ctx, user.ID, day)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to ensure ramble day",
-			slog.Int64("user_id", user.ID),
-			slog.String("day", day),
-			slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Failed to prepare the day")
-
-		return
-	}
-
-	blockID, err := s.store.CreateRambleBlock(ctx, rambleID, "text", &text, nil, nil)
+	blockID, err := s.store.CreateRambleTextBlock(ctx, user.ID, day, text)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to create ramble text block",
-			slog.Int64("ramble_id", rambleID),
+			slog.Int64("user_id", user.ID),
+			slog.String("day", day),
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save")
 

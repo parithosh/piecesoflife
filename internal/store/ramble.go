@@ -241,7 +241,9 @@ func (s *Store) UpdateRambleBlockText(
 
 // EnsureRambleDay returns the id of the user's page for a day, creating an
 // empty page when none exists — media uploads need a row to attach to
-// before any text has been written.
+// before any text has been written. The conflict-tolerant insert keeps two
+// first saves for the same day (a composer in each tab) from racing the
+// existence check into a UNIQUE violation.
 func (s *Store) EnsureRambleDay(
 	ctx context.Context, userID int64, day string,
 ) (int64, error) {
@@ -258,18 +260,78 @@ func (s *Store) EnsureRambleDay(
 		return 0, fmt.Errorf("finding ramble day: %w", err)
 	}
 
-	res, err := s.write.ExecContext(ctx,
-		"INSERT INTO rambles (user_id, day) VALUES (?, ?)", userID, day)
-	if err != nil {
+	// LastInsertId lies when the conflict path fires, so reselect either way.
+	if _, err := s.write.ExecContext(ctx,
+		`INSERT INTO rambles (user_id, day) VALUES (?, ?)
+		 ON CONFLICT(user_id, day) DO NOTHING`, userID, day); err != nil {
 		return 0, fmt.Errorf("creating ramble day: %w", err)
 	}
 
-	id, err = res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("getting new ramble id: %w", err)
+	if err := s.read.QueryRowContext(ctx,
+		"SELECT id FROM rambles WHERE user_id = ? AND day = ?", userID, day,
+	).Scan(&id); err != nil {
+		return 0, fmt.Errorf("finding created ramble day: %w", err)
 	}
 
 	return id, nil
+}
+
+// CreateRambleTextBlock appends one text block to the user's page for a
+// day, creating the page in the same transaction — a failed block insert
+// can't strand an empty day (empty days are invisible, so none may exist).
+func (s *Store) CreateRambleTextBlock(
+	ctx context.Context, userID int64, day, content string,
+) (int64, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("beginning ramble text block create: %w", err)
+	}
+
+	defer tx.Rollback()
+
+	var rambleID int64
+
+	err = tx.QueryRowContext(ctx,
+		"SELECT id FROM rambles WHERE user_id = ? AND day = ?", userID, day,
+	).Scan(&rambleID)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		res, insErr := tx.ExecContext(ctx,
+			"INSERT INTO rambles (user_id, day) VALUES (?, ?)", userID, day)
+		if insErr != nil {
+			return 0, fmt.Errorf("creating ramble day: %w", insErr)
+		}
+
+		rambleID, insErr = res.LastInsertId()
+		if insErr != nil {
+			return 0, fmt.Errorf("getting new ramble id: %w", insErr)
+		}
+	case err != nil:
+		return 0, fmt.Errorf("finding ramble day: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO ramble_blocks (ramble_id, type, content, sort_order)
+		 VALUES (?, 'text', ?,
+		     (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM ramble_blocks
+		      WHERE ramble_id = ?))`,
+		rambleID, content, rambleID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("creating ramble text block: %w", err)
+	}
+
+	blockID, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting new ramble block id: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing ramble text block create: %w", err)
+	}
+
+	return blockID, nil
 }
 
 // CreateRambleBlock inserts a media block on a journal day, taking the next

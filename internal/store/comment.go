@@ -129,6 +129,50 @@ func (s *Store) ListCommentsByDiaryBlock(
 	return s.listCommentsByTarget(ctx, "diary_block_id", diaryBlockID)
 }
 
+// CountCommentsByDiaryBlocks returns comment counts for every notebook
+// block in an issue's spread, keyed by block ID — one query for the whole
+// page instead of one per block. Blocks without comments are absent from
+// the map.
+func (s *Store) CountCommentsByDiaryBlocks(
+	ctx context.Context, issueID int64,
+) (map[int64]int, error) {
+	rows, err := s.read.QueryContext(ctx,
+		`SELECT c.diary_block_id, COUNT(*)
+		 FROM comments c
+		 JOIN diary_blocks db ON db.id = c.diary_block_id
+		 JOIN diary_days dd ON dd.id = db.diary_day_id
+		 JOIN diary_sections ds ON ds.id = dd.section_id
+		 WHERE ds.issue_id = ?
+		 GROUP BY c.diary_block_id`, issueID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("counting diary block comments: %w", err)
+	}
+
+	defer rows.Close()
+
+	counts := make(map[int64]int, 32)
+
+	for rows.Next() {
+		var (
+			blockID int64
+			n       int
+		)
+
+		if err := rows.Scan(&blockID, &n); err != nil {
+			return nil, fmt.Errorf("scanning diary block comment count: %w", err)
+		}
+
+		counts[blockID] = n
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating diary block comment counts: %w", err)
+	}
+
+	return counts, nil
+}
+
 // ListCommentsByDumpItem returns comments on a dump photo/video with author
 // details, in the same ordering as response comments.
 func (s *Store) ListCommentsByDumpItem(

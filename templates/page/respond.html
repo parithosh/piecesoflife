@@ -218,7 +218,6 @@
           <div class="pl-diary-day" data-diary-day-id="{{.DiaryDay.ID}}">
             <div class="pl-diary-day-head">
               <span class="pl-nb-date">{{.DiaryDay.Day | dayDisplay}}</span>
-              <span class="save-status" data-diary-status></span>
               <button type="button" class="pl-diary-day-remove"
                       data-diary-day-remove>✕ Remove day</button>
             </div>
@@ -227,6 +226,8 @@
               <textarea class="pl-diary-editor" data-diary-block-editor
                         placeholder="(Emptying this removes the thought from the copy)"
 >{{.Content}}</textarea>
+              <span class="save-status" data-diary-block-status
+                    role="status" aria-live="polite"></span>
               <button type="button" class="pl-diary-block-remove"
                       data-diary-block-remove="{{.ID}}"
                       aria-label="Remove this thought">✕</button>
@@ -611,20 +612,22 @@ document.querySelectorAll('.pl-record-btn').forEach(btn => {
         }
     });
 
-    // Per-block autosave of the snapshot copies. Trimming a block to nothing
-    // removes it; a day trimmed of everything disappears from the review.
+    // Per-block autosave of the snapshot copies, each block reporting into
+    // its own status chip so two in-flight saves can't overwrite each
+    // other's message. Trimming a block to nothing removes it; a day
+    // trimmed of everything disappears from the review.
     const diaryTimers = {};
     document.querySelectorAll('[data-diary-block-editor]').forEach(textarea => {
         const blockEl = textarea.closest('[data-diary-text-block]');
         const blockID = blockEl.dataset.diaryTextBlock;
         const dayEl = textarea.closest('[data-diary-day-id]');
-        const dayStatus = dayEl.querySelector('[data-diary-status]');
+        const status = blockEl.querySelector('[data-diary-block-status]');
 
         textarea.addEventListener('input', () => {
             clearTimeout(diaryTimers[blockID]);
-            if (dayStatus) { dayStatus.className = 'save-status'; dayStatus.textContent = ''; }
+            if (status) { status.className = 'save-status'; status.textContent = ''; }
             diaryTimers[blockID] = setTimeout(async () => {
-                if (dayStatus) { dayStatus.className = 'save-status saving'; dayStatus.textContent = 'Saving…'; }
+                if (status) { status.className = 'save-status saving'; status.textContent = 'Saving…'; }
                 try {
                     const res = await fetch(`/api/diary-blocks/${blockID}`, {
                         method: 'PUT',
@@ -638,9 +641,9 @@ document.querySelectorAll('.pl-record-btn').forEach(btn => {
                         if (data.day_removed) { dayEl.remove(); }
                         return;
                     }
-                    if (dayStatus) { dayStatus.className = 'save-status saved'; dayStatus.textContent = 'Saved'; }
+                    if (status) { status.className = 'save-status saved'; status.textContent = 'Saved'; }
                 } catch {
-                    if (dayStatus) { dayStatus.className = 'save-status error'; dayStatus.textContent = 'Save failed'; }
+                    if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
                 }
             }, 1500);
         });

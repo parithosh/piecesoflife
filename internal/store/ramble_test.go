@@ -21,20 +21,20 @@ func mustParseTime(t *testing.T, day string) time.Time {
 }
 
 // seedRambleText creates a journal day holding one text block per given
-// string — the seeding path handlers use (EnsureRambleDay + CreateRambleBlock).
+// string — the seeding path the create handler uses (CreateRambleTextBlock).
 func seedRambleText(
 	t *testing.T, s *Store, userID int64, day string, texts ...string,
 ) int64 {
 	t.Helper()
 	ctx := context.Background()
 
-	id, err := s.EnsureRambleDay(ctx, userID, day)
-	require.NoError(t, err)
-
 	for _, txt := range texts {
-		_, err := s.CreateRambleBlock(ctx, id, "text", strPtr(txt), nil, nil)
+		_, err := s.CreateRambleTextBlock(ctx, userID, day, txt)
 		require.NoError(t, err)
 	}
+
+	id, err := s.EnsureRambleDay(ctx, userID, day)
+	require.NoError(t, err)
 
 	return id
 }
@@ -446,6 +446,12 @@ func TestDiaryBlockComments(t *testing.T) {
 	neighbour, err := s.ListCommentsByDiaryBlock(ctx, first)
 	require.NoError(t, err)
 	assert.Empty(t, neighbour)
+
+	// The issue page counts every block's thread in one grouped query;
+	// blocks without comments are simply absent.
+	counts, err := s.CountCommentsByDiaryBlocks(ctx, issueID)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]int{second: 2}, counts)
 
 	dayComments, err := s.ListCommentsByDiaryDay(ctx, days[0].DiaryDay.ID)
 	require.NoError(t, err)
