@@ -1,6 +1,10 @@
 # Local working files (personal screenshots, design zips, scratch)
 _local/
 
+# Newsletter exports fed to tools/newsletter_pdf_import.py — private
+# content, never commit these
+*-export/
+
 # Runtime data — lives in Docker volumes or wherever DATABASE_PATH/UPLOAD_PATH point
 *.db
 *.db-wal

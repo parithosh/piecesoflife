@@ -98,6 +98,17 @@ Everything chosen in the wizard can be changed later under Admin →
 Settings — including the default questions, which get a full manager with
 reordering and per-question on/off switches.
 
+### Coming from another newsletter platform
+
+If your circle already has a back catalogue exported as one PDF per issue,
+`tools/newsletter_pdf_import.py` back-fills a Loop from it in two passes —
+`extract` turns the PDFs into a reviewable JSON bundle plus the images,
+`load` writes that bundle into the database and `UPLOAD_PATH`. Run it once,
+against a stopped app and a backed-up database; the script's docstring has
+the full invocation. Comment bodies, audio, and video are typically absent
+from such exports and cannot be recovered — videos survive as their poster
+frame.
+
 ## 4. Running a round
 
 The admin dashboard (**Admin** in the nav) is the loom for the current
