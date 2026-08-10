@@ -37,9 +37,26 @@ type Server struct {
 	mux    *http.ServeMux
 	logger *slog.Logger
 
+	// schedulerLastTick reports the scheduler's last completed dispatch
+	// pass; wired from main.go after the scheduler exists. Nil (e.g. in
+	// handler tests) disables the liveness check.
+	schedulerLastTick func() time.Time
+
 	// Embedded filesystems, injected from main.go where go:embed is valid.
 	staticFS    embed.FS
 	templatesFS embed.FS
+}
+
+// schedulerStaleAfter is how long the scheduler may go without completing
+// a dispatch pass (normally every 60s) before /health reports the process
+// unhealthy. The 2026-08-10 wedge sat behind a green healthcheck for 7h
+// because /health only exercised reads.
+const schedulerStaleAfter = 5 * time.Minute
+
+// SetSchedulerHeartbeat wires the scheduler's liveness probe into /health.
+// Must be called before the server starts handling requests.
+func (s *Server) SetSchedulerHeartbeat(lastTick func() time.Time) {
+	s.schedulerLastTick = lastTick
 }
 
 // ErrorResponse is the standard JSON error envelope.
@@ -141,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	var handler http.Handler = s.mux
 
 	// Apply middleware in reverse order (outermost executes first).
+	handler = s.mutationDeadlineMiddleware(handler)
 	handler = s.csrfMiddleware(handler)
 	handler = s.loggingMiddleware(handler)
 	handler = s.securityHeadersMiddleware(handler)
@@ -542,6 +560,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable,
 			"unhealthy", "Database unreachable")
 		return
+	}
+
+	if s.schedulerLastTick != nil {
+		if last := s.schedulerLastTick(); time.Since(last) > schedulerStaleAfter {
+			s.logger.ErrorContext(r.Context(), "Scheduler heartbeat stale",
+				slog.Time("last_tick", last))
+			writeError(w, http.StatusServiceUnavailable,
+				"unhealthy", "Scheduler stalled")
+
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

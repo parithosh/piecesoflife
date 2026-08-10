@@ -200,7 +200,7 @@ func (s *Server) requestMagicLink(ctx context.Context, email string) (magicLinkO
 	}
 
 	if err := s.store.RecordLoginAttempt(ctx, emailHash); err != nil {
-		return magicLinkSent, fmt.Errorf("recording login attempt: %w", err)
+		return magicLinkSent, err // store already wraps with context
 	}
 
 	user, err := s.store.GetUserByEmail(ctx, email)

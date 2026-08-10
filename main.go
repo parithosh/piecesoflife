@@ -98,6 +98,7 @@ func run() error {
 	defer schedCancel()
 
 	sched := scheduler.New(db, srv, logger)
+	srv.SetSchedulerHeartbeat(sched.LastTick)
 	sched.Start(schedCtx)
 
 	httpServer := &http.Server{

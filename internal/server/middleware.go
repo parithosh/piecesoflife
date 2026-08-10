@@ -84,6 +84,30 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// mutationDeadlineTimeout bounds state-changing requests. It matches the
+// http.Server WriteTimeout, so it cannot fail a request that could still
+// deliver a response — its sole effect is turning an unbounded stall (a
+// wedged write pool) into a 500 within the response budget instead of a
+// hang that outlives the 10s graceful-shutdown window.
+const mutationDeadlineTimeout = 30 * time.Second
+
+func (s *Server) mutationDeadlineMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPatch,
+			http.MethodPut, http.MethodDelete:
+			ctx, cancel := context.WithTimeout(
+				r.Context(), mutationDeadlineTimeout,
+			)
+			defer cancel()
+
+			r = r.WithContext(ctx)
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {

@@ -59,8 +59,13 @@ type Store struct {
 func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error) {
 	log := logger.With(slog.String("component", "store"))
 
-	writeDSN := fmt.Sprintf("file:%s?cache=shared&_txlock=immediate", dbPath)
-	readDSN := fmt.Sprintf("file:%s?cache=shared", dbPath)
+	// cache=shared is deliberately absent from both DSNs: shared-cache
+	// table locks fail with SQLITE_LOCKED, which busy_timeout does NOT
+	// cover, and the driver parks in an unbounded unlock_notify wait while
+	// pinning its pool connection (2026-08-10 scheduler wedge). WAL already
+	// gives concurrent readers + one writer without a shared cache.
+	writeDSN := fmt.Sprintf("file:%s?_txlock=immediate", dbPath)
+	readDSN := fmt.Sprintf("file:%s", dbPath)
 
 	writeDB, err := sql.Open("sqlite", writeDSN)
 	if err != nil {

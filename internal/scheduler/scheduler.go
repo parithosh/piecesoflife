@@ -8,6 +8,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -37,6 +38,16 @@ type Scheduler struct {
 
 	tickInterval time.Duration
 
+	// eventTimeout bounds a single event's execution. One stuck event
+	// (a hung store call or email send) must never wedge the loop and
+	// with it every pending event — the 2026-08-10 incident. On expiry
+	// the event logs an ERROR, stays unfired, and retries next tick.
+	eventTimeout time.Duration
+
+	// lastTick is the UnixNano of the last completed dispatch pass,
+	// exposed via LastTick so /health can detect a wedged loop.
+	lastTick atomic.Int64
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -48,7 +59,19 @@ func New(st *store.Store, actions Actions, logger *slog.Logger) *Scheduler {
 		actions:      actions,
 		logger:       logger.With(slog.String("component", "scheduler")),
 		tickInterval: 60 * time.Second,
+		eventTimeout: 2 * time.Minute,
 	}
+}
+
+// LastTick returns when the scheduler last completed a dispatch pass.
+// Valid from Start onward; the zero time before that.
+func (s *Scheduler) LastTick() time.Time {
+	n := s.lastTick.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(0, n)
 }
 
 // Start launches the scheduler goroutine. Safe to call exactly once. On
@@ -57,6 +80,10 @@ func New(st *store.Store, actions Actions, logger *slog.Logger) *Scheduler {
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
+
+	// Seed the heartbeat before the goroutine runs so /health never sees
+	// a zero LastTick between Start and the first dispatch pass.
+	s.lastTick.Store(time.Now().UnixNano())
 
 	s.wg.Add(1)
 	go func() {
@@ -81,6 +108,8 @@ func (s *Scheduler) Start(parent context.Context) {
 		//    EnsureDailyEvent inserts nothing when the event already exists.
 		s.scheduleDailyCleanup(ctx)
 
+		s.lastTick.Store(time.Now().UnixNano())
+
 		ticker := time.NewTicker(s.tickInterval)
 		defer ticker.Stop()
 
@@ -91,6 +120,7 @@ func (s *Scheduler) Start(parent context.Context) {
 				return
 			case <-ticker.C:
 				s.fireOverdueEvents(ctx, false)
+				s.lastTick.Store(time.Now().UnixNano())
 
 				if time.Since(lastReconcile) >= 24*time.Hour {
 					lastReconcile = time.Now()
@@ -150,6 +180,12 @@ func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {
 func (s *Scheduler) fireEvent(
 	ctx context.Context, ev store.SchedulerEvent, wasLate bool,
 ) {
+	// Bound the whole event — handler plus mark-fired. Store pool
+	// acquisition respects context deadlines, so a wedged write surfaces
+	// here as an ERROR after eventTimeout instead of hanging the loop.
+	ctx, cancel := context.WithTimeout(ctx, s.eventTimeout)
+	defer cancel()
+
 	logger := s.logger.With(
 		slog.Int64("event_id", ev.ID),
 		slog.String("event_type", ev.EventType),
@@ -242,6 +278,9 @@ func (s *Scheduler) fireEvent(
 
 	case "comment_digest":
 		err = s.actions.SendCommentDigests(ctx)
+		if err == nil {
+			logger.InfoContext(ctx, "Comment digest complete")
+		}
 
 	default:
 		err = errInvalidEvent("unknown event type: " + ev.EventType)
