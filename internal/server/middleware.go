@@ -420,15 +420,20 @@ func (s *Server) resolveCurrentGroup(
 
 	gc.SessionID = session.ID
 
+	// Best-effort persistence of the resolved Loop, bounded so a wedged
+	// write pool can't hang an otherwise read-only GET.
+	writeCtx, cancel := context.WithTimeout(ctx, mutationDeadlineTimeout)
+	defer cancel()
+
 	if session.GroupID == nil || *session.GroupID != gc.Group.ID {
-		if err := s.store.SetSessionGroup(ctx, session.ID, gc.Group.ID); err != nil {
+		if err := s.store.SetSessionGroup(writeCtx, session.ID, gc.Group.ID); err != nil {
 			s.logger.ErrorContext(ctx, "Failed to persist session group",
 				slog.String("error", err.Error()))
 		}
 	}
 
 	if user.LastGroupID == nil || *user.LastGroupID != gc.Group.ID {
-		if err := s.store.SetLastGroup(ctx, user.ID, gc.Group.ID); err != nil {
+		if err := s.store.SetLastGroup(writeCtx, user.ID, gc.Group.ID); err != nil {
 			s.logger.ErrorContext(ctx, "Failed to persist last group",
 				slog.String("error", err.Error()))
 		}
@@ -501,6 +506,13 @@ func (s *Server) tryGroup(
 func (s *Server) handleAuthParam(
 	w http.ResponseWriter, r *http.Request, rawToken string,
 ) {
+	// Reached from GETs (?auth= email links) but consumes tokens and
+	// mints sessions — bound it like a mutation.
+	ctx, cancel := context.WithTimeout(r.Context(), mutationDeadlineTimeout)
+	defer cancel()
+
+	r = r.WithContext(ctx)
+
 	redirectSansAuth := func() {
 		q := r.URL.Query()
 		q.Del("auth")

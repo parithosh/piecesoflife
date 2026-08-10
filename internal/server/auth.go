@@ -266,6 +266,13 @@ func (s *Server) requestMagicLink(ctx context.Context, email string) (magicLinkO
 // handleVerifyToken processes a magic link token verification.
 // GET /auth/verify
 func (s *Server) handleVerifyToken(w http.ResponseWriter, r *http.Request) {
+	// A GET that writes (consume token, mint session) — give it the same
+	// deadline mutating methods get from mutationDeadlineMiddleware.
+	ctx, cancel := context.WithTimeout(r.Context(), mutationDeadlineTimeout)
+	defer cancel()
+
+	r = r.WithContext(ctx)
+
 	rawToken := r.URL.Query().Get("token")
 	if rawToken == "" {
 		http.Redirect(w, r, "/login?error=invalid", http.StatusSeeOther)

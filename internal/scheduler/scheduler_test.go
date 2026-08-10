@@ -85,8 +85,10 @@ func TestSchedulerSurvivesConcurrentWrites(t *testing.T) {
 	s := New(st, stubActions{}, discardLogger())
 	s.tickInterval = 25 * time.Millisecond
 
-	// Request-path writers: the login flow's write + read pair.
-	stop := make(chan struct{})
+	// Request-path writers: the login flow's write + read pair. They run
+	// on a cancellable context so a wedge (writers parked in pool
+	// acquisition) unblocks on teardown instead of deadlocking the test.
+	writerCtx, cancelWriters := context.WithCancel(context.Background())
 	writeErrs := make(chan error, 8)
 
 	var wg sync.WaitGroup
@@ -97,26 +99,40 @@ func TestSchedulerSurvivesConcurrentWrites(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			for i := 0; ; i++ {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-
+			for i := 0; writerCtx.Err() == nil; i++ {
 				hash := fmt.Sprintf("hash-%d-%d", w, i)
-				if err := st.RecordLoginAttempt(ctx, hash); err != nil {
-					writeErrs <- err
+				if err := st.RecordLoginAttempt(writerCtx, hash); err != nil {
+					if writerCtx.Err() == nil {
+						writeErrs <- err
+					}
+
 					return
 				}
 
-				if _, err := st.CountRecentLoginAttempts(ctx, hash); err != nil {
-					writeErrs <- err
+				if _, err := st.CountRecentLoginAttempts(writerCtx, hash); err != nil {
+					if writerCtx.Err() == nil {
+						writeErrs <- err
+					}
+
 					return
 				}
 			}
 		}()
 	}
+
+	// Deferred so it also runs when require.Eventually fails below —
+	// FailNow unwinds through defers, and the cancelled context frees
+	// any writer still parked in pool acquisition.
+	defer func() {
+		cancelWriters()
+		wg.Wait()
+		s.Stop()
+
+		close(writeErrs)
+		for err := range writeErrs {
+			require.NoError(t, err, "request-path write failed while scheduler ran")
+		}
+	}()
 
 	s.Start(ctx)
 
@@ -129,15 +145,6 @@ func TestSchedulerSurvivesConcurrentWrites(t *testing.T) {
 		return len(overdue) == 0
 	}, 15*time.Second, 20*time.Millisecond,
 		"scheduler wedged: overdue events never drained")
-
-	close(stop)
-	wg.Wait()
-	s.Stop()
-
-	close(writeErrs)
-	for err := range writeErrs {
-		require.NoError(t, err, "request-path write failed while scheduler ran")
-	}
 }
 
 // TestSchedulerStuckEventDoesNotStopLoop verifies the per-event timeout:
