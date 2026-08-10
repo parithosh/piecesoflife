@@ -8,6 +8,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -37,6 +38,18 @@ type Scheduler struct {
 
 	tickInterval time.Duration
 
+	// eventTimeout bounds a single event's execution. One stuck event
+	// (a hung store call or email send) must never wedge the loop and
+	// with it every pending event — the 2026-08-10 incident. On expiry
+	// the event logs an ERROR, stays unfired, and retries next tick.
+	eventTimeout time.Duration
+
+	// lastTick is the UnixNano of the scheduler's last progress — a
+	// completed dispatch pass or an individual event within one — exposed
+	// via LastTick so /health can detect a wedged loop without flagging a
+	// long-but-moving catch-up backlog.
+	lastTick atomic.Int64
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -48,7 +61,19 @@ func New(st *store.Store, actions Actions, logger *slog.Logger) *Scheduler {
 		actions:      actions,
 		logger:       logger.With(slog.String("component", "scheduler")),
 		tickInterval: 60 * time.Second,
+		eventTimeout: 2 * time.Minute,
 	}
+}
+
+// LastTick returns when the scheduler last completed a dispatch pass.
+// Valid from Start onward; the zero time before that.
+func (s *Scheduler) LastTick() time.Time {
+	n := s.lastTick.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(0, n)
 }
 
 // Start launches the scheduler goroutine. Safe to call exactly once. On
@@ -57,6 +82,10 @@ func New(st *store.Store, actions Actions, logger *slog.Logger) *Scheduler {
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
+
+	// Seed the heartbeat before the goroutine runs so /health never sees
+	// a zero LastTick between Start and the first dispatch pass.
+	s.lastTick.Store(time.Now().UnixNano())
 
 	s.wg.Add(1)
 	go func() {
@@ -70,16 +99,15 @@ func (s *Scheduler) Start(parent context.Context) {
 		// 1b. Re-queue any auto-create cycle that stalled (e.g. a transient
 		//     store error at publish time meant no next-round event was
 		//     queued). Repeated daily from the tick loop.
-		if err := s.actions.ReconcileAutoCreate(ctx); err != nil {
-			s.logger.ErrorContext(ctx, "Auto-create reconcile failed",
-				slog.String("error", err.Error()))
-		}
+		s.reconcileAutoCreate(ctx)
 
 		lastReconcile := time.Now()
 
 		// 2. Make sure the daily cleanup events are queued. Idempotent —
 		//    EnsureDailyEvent inserts nothing when the event already exists.
 		s.scheduleDailyCleanup(ctx)
+
+		s.lastTick.Store(time.Now().UnixNano())
 
 		ticker := time.NewTicker(s.tickInterval)
 		defer ticker.Stop()
@@ -91,14 +119,11 @@ func (s *Scheduler) Start(parent context.Context) {
 				return
 			case <-ticker.C:
 				s.fireOverdueEvents(ctx, false)
+				s.lastTick.Store(time.Now().UnixNano())
 
 				if time.Since(lastReconcile) >= 24*time.Hour {
 					lastReconcile = time.Now()
-
-					if err := s.actions.ReconcileAutoCreate(ctx); err != nil {
-						s.logger.ErrorContext(ctx, "Auto-create reconcile failed",
-							slog.String("error", err.Error()))
-					}
+					s.reconcileAutoCreate(ctx)
 				}
 			}
 		}
@@ -114,7 +139,13 @@ func (s *Scheduler) Stop() {
 }
 
 func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {
-	events, err := s.store.GetOverdueEvents(ctx)
+	// Bounded like events — every store call the loop depends on must
+	// surface a wedge as an ERROR instead of stopping the loop.
+	queryCtx, queryCancel := context.WithTimeout(ctx, s.eventTimeout)
+	events, err := s.store.GetOverdueEvents(queryCtx)
+
+	queryCancel()
+
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to query overdue events",
 			slog.String("error", err.Error()))
@@ -137,6 +168,11 @@ func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {
 		}
 
 		s.fireEvent(ctx, ev, wasLate)
+
+		// Heartbeat per event, not just per pass: a catch-up backlog
+		// where each event may use up to eventTimeout must read as
+		// progress in /health, not as a stale scheduler.
+		s.lastTick.Store(time.Now().UnixNano())
 	}
 
 	// Reschedule the daily cleanup trio after a tick so the next day's
@@ -148,8 +184,14 @@ func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {
 }
 
 func (s *Scheduler) fireEvent(
-	ctx context.Context, ev store.SchedulerEvent, wasLate bool,
+	parent context.Context, ev store.SchedulerEvent, wasLate bool,
 ) {
+	// Bound the whole event. Store pool acquisition respects context
+	// deadlines, so a wedged write surfaces here as an ERROR after
+	// eventTimeout instead of hanging the loop.
+	ctx, cancel := context.WithTimeout(parent, s.eventTimeout)
+	defer cancel()
+
 	logger := s.logger.With(
 		slog.Int64("event_id", ev.ID),
 		slog.String("event_type", ev.EventType),
@@ -242,6 +284,9 @@ func (s *Scheduler) fireEvent(
 
 	case "comment_digest":
 		err = s.actions.SendCommentDigests(ctx)
+		if err == nil {
+			logger.InfoContext(ctx, "Comment digest complete")
+		}
 
 	default:
 		err = errInvalidEvent("unknown event type: " + ev.EventType)
@@ -253,7 +298,13 @@ func (s *Scheduler) fireEvent(
 		return
 	}
 
-	if markErr := s.store.MarkEventFired(ctx, ev.ID, wasLate); markErr != nil {
+	// Marking fired gets a fresh allowance from the parent — a slow but
+	// successful handler may have consumed the whole event budget, and it
+	// must not be re-fired for want of deadline headroom.
+	markCtx, markCancel := context.WithTimeout(parent, 15*time.Second)
+	defer markCancel()
+
+	if markErr := s.store.MarkEventFired(markCtx, ev.ID, wasLate); markErr != nil {
 		logger.ErrorContext(ctx, "Failed to mark event fired",
 			slog.String("error", markErr.Error()))
 	}
@@ -264,6 +315,11 @@ func (s *Scheduler) fireEvent(
 // EnsureDailyEvent dedupes via the partial unique index on issue-less
 // events, so repeat calls insert nothing and an error here is a real error.
 func (s *Scheduler) scheduleDailyCleanup(ctx context.Context) {
+	// Bounded like events: EnsureDailyEvent is a write-pool call and a
+	// wedge here must not stop the loop.
+	ctx, cancel := context.WithTimeout(ctx, s.eventTimeout)
+	defer cancel()
+
 	now := time.Now().UTC()
 	nextMidnight := time.Date(
 		now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC,
@@ -278,6 +334,19 @@ func (s *Scheduler) scheduleDailyCleanup(ctx context.Context) {
 				slog.String("error", err.Error()),
 			)
 		}
+	}
+}
+
+// reconcileAutoCreate runs one auto-create reconcile pass under the event
+// timeout — like events, a wedged store call here must surface as an
+// ERROR, not stop the loop.
+func (s *Scheduler) reconcileAutoCreate(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, s.eventTimeout)
+	defer cancel()
+
+	if err := s.actions.ReconcileAutoCreate(ctx); err != nil {
+		s.logger.ErrorContext(ctx, "Auto-create reconcile failed",
+			slog.String("error", err.Error()))
 	}
 }
 

@@ -84,6 +84,30 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// mutationDeadlineTimeout bounds state-changing requests. It matches the
+// http.Server WriteTimeout, so it cannot fail a request that could still
+// deliver a response — its sole effect is turning an unbounded stall (a
+// wedged write pool) into a 500 within the response budget instead of a
+// hang that outlives the 10s graceful-shutdown window.
+const mutationDeadlineTimeout = 30 * time.Second
+
+func (s *Server) mutationDeadlineMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPatch,
+			http.MethodPut, http.MethodDelete:
+			ctx, cancel := context.WithTimeout(
+				r.Context(), mutationDeadlineTimeout,
+			)
+			defer cancel()
+
+			r = r.WithContext(ctx)
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -396,15 +420,20 @@ func (s *Server) resolveCurrentGroup(
 
 	gc.SessionID = session.ID
 
+	// Best-effort persistence of the resolved Loop, bounded so a wedged
+	// write pool can't hang an otherwise read-only GET.
+	writeCtx, cancel := context.WithTimeout(ctx, mutationDeadlineTimeout)
+	defer cancel()
+
 	if session.GroupID == nil || *session.GroupID != gc.Group.ID {
-		if err := s.store.SetSessionGroup(ctx, session.ID, gc.Group.ID); err != nil {
+		if err := s.store.SetSessionGroup(writeCtx, session.ID, gc.Group.ID); err != nil {
 			s.logger.ErrorContext(ctx, "Failed to persist session group",
 				slog.String("error", err.Error()))
 		}
 	}
 
 	if user.LastGroupID == nil || *user.LastGroupID != gc.Group.ID {
-		if err := s.store.SetLastGroup(ctx, user.ID, gc.Group.ID); err != nil {
+		if err := s.store.SetLastGroup(writeCtx, user.ID, gc.Group.ID); err != nil {
 			s.logger.ErrorContext(ctx, "Failed to persist last group",
 				slog.String("error", err.Error()))
 		}
@@ -477,6 +506,13 @@ func (s *Server) tryGroup(
 func (s *Server) handleAuthParam(
 	w http.ResponseWriter, r *http.Request, rawToken string,
 ) {
+	// Reached from GETs (?auth= email links) but consumes tokens and
+	// mints sessions — bound it like a mutation.
+	ctx, cancel := context.WithTimeout(r.Context(), mutationDeadlineTimeout)
+	defer cancel()
+
+	r = r.WithContext(ctx)
+
 	redirectSansAuth := func() {
 		q := r.URL.Query()
 		q.Del("auth")
