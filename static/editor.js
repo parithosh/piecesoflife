@@ -12,6 +12,10 @@
 // for minutes and dying with a generic error.
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 
+// Mirrors maxDumpCaptionRunes on the server (internal/server/dump.go) so an
+// over-long caption is trimmed by the field instead of rejected on save.
+const MAX_DUMP_CAPTION = 500;
+
 function uploadTooLarge(file) {
     if (file.size <= MAX_UPLOAD_BYTES) return null;
     const mb = Math.round(file.size / (1024 * 1024));
@@ -251,25 +255,39 @@ function dumpThumb(item, url) {
     fig.className = 'pl-dump-thumb';
     fig.dataset.dumpId = item.id;
 
+    const media = document.createElement('span');
+    media.className = 'pl-dump-thumb-media';
+    fig.appendChild(media);
+
     if (item.kind === 'video') {
         const video = document.createElement('video');
         video.src = url;
         video.preload = 'metadata';
         video.muted = true;
         video.playsInline = true;
-        fig.appendChild(video);
+        media.appendChild(video);
 
         const kind = document.createElement('span');
         kind.className = 'pl-dump-thumb-kind';
         kind.setAttribute('aria-hidden', 'true');
         kind.textContent = '▶';
-        fig.appendChild(kind);
+        media.appendChild(kind);
     } else {
         const img = document.createElement('img');
         img.src = url;
         img.alt = '';
-        fig.appendChild(img);
+        media.appendChild(img);
     }
+
+    const caption = document.createElement('input');
+    caption.type = 'text';
+    caption.className = 'pl-dump-caption';
+    caption.dataset.dumpCaption = item.id;
+    caption.value = item.caption || '';
+    caption.maxLength = MAX_DUMP_CAPTION;
+    caption.placeholder = 'Caption…';
+    caption.setAttribute('aria-label', `Caption for this ${item.kind}`);
+    fig.appendChild(caption);
 
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -371,6 +389,41 @@ function attachDump() {
         } catch (err) {
             setStatus(err.message, true);
             btn.disabled = false;
+        }
+    });
+
+    // Captions save on blur (the `change` event) — no save button, and no
+    // request per keystroke. Enter just leaves the field.
+    grid.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter' && ev.target.matches('[data-dump-caption]')) {
+            ev.preventDefault();
+            ev.target.blur();
+        }
+    });
+
+    grid.addEventListener('change', async ev => {
+        const input = ev.target.closest('[data-dump-caption]');
+        if (!input) return;
+
+        const caption = input.value.trim();
+        input.disabled = true;
+        try {
+            const res = await fetch(`/api/dump/${input.dataset.dumpCaption}`, {
+                method: 'PATCH',
+                headers: apiHeaders(),
+                body: JSON.stringify({ caption }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(data.error?.message || 'Could not save the caption');
+            }
+            // Render what the server stored, not what was typed — it trims.
+            input.value = data.item?.caption || '';
+            setStatus(input.value ? 'Caption saved ✓' : 'Caption cleared');
+        } catch (err) {
+            setStatus(err.message, true);
+        } finally {
+            input.disabled = false;
         }
     });
 }

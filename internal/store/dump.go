@@ -195,6 +195,20 @@ func (s *Store) CountDumpItemsForUser(
 	return n, nil
 }
 
+// UpdateDumpItemCaption sets (or clears, with nil) a dump item's caption.
+// Ownership and issue-status checks live in the handler.
+func (s *Store) UpdateDumpItemCaption(
+	ctx context.Context, id int64, caption *string,
+) error {
+	if _, err := s.write.ExecContext(ctx,
+		`UPDATE dump_items SET caption = ? WHERE id = ?`, caption, id,
+	); err != nil {
+		return fmt.Errorf("updating dump item %d caption: %w", id, err)
+	}
+
+	return nil
+}
+
 // DeleteDumpItem removes a dump item and reports whether a row was deleted.
 // Ownership and issue-status checks live in the handler.
 func (s *Store) DeleteDumpItem(ctx context.Context, id int64) (bool, error) {

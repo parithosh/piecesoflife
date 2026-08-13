@@ -602,6 +602,105 @@ func TestDumpUploadLifecycle(t *testing.T) {
 		"deletes must close at publish")
 }
 
+// TestDumpCaptionLifecycle covers captioning a dump item: the owner can set,
+// trim, and clear it, strangers can't touch it, over-long text is refused,
+// the caption reaches the published collage, and the window closes at
+// publish like every other dump edit.
+func TestDumpCaptionLifecycle(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	member := env.createUser(t, "Zara", "zara@example.com")
+	other := env.createUser(t, "Anil", "anil@example.com")
+	session := env.sessionCookie(t, member.ID)
+	otherSession := env.sessionCookie(t, other.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	issueID, _ := env.seedIssue(t, "collecting", 6, 2026, 1)
+
+	itemID, err := env.store.CreateDumpItem(ctx, issueID, member.ID, "photo",
+		nil, "/2026/06/beach.jpg", nil)
+	require.NoError(t, err)
+
+	caption := func(sess *http.Cookie, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch,
+			fmt.Sprintf("/api/dump/%d", itemID), strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(sess)
+		req.AddCookie(csrfCookie)
+		req.Header.Set("X-CSRF-Token", csrfHeader)
+
+		return env.do(t, req)
+	}
+
+	// Surrounding whitespace is trimmed on the way in.
+	rr := caption(session, `{"caption":"  low tide, high spirits  "}`)
+	require.Equal(t, http.StatusOK, rr.Code, "caption: %s", rr.Body.String())
+
+	item, err := env.store.GetDumpItemByID(ctx, itemID)
+	require.NoError(t, err)
+	require.NotNil(t, item.Caption)
+	assert.Equal(t, "low tide, high spirits", *item.Caption)
+
+	// Someone else's dump item is off limits.
+	require.Equal(t, http.StatusForbidden, caption(otherSession, `{"caption":"mine now"}`).Code)
+
+	// Over the cap is refused, and the stored caption is untouched.
+	long, err := json.Marshal(map[string]string{
+		"caption": strings.Repeat("é", maxDumpCaptionRunes+1),
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnprocessableEntity, caption(session, string(long)).Code)
+
+	item, err = env.store.GetDumpItemByID(ctx, itemID)
+	require.NoError(t, err)
+	require.NotNil(t, item.Caption)
+	assert.Equal(t, "low tide, high spirits", *item.Caption)
+
+	// The caption rides along to the published collage.
+	require.NoError(t, env.store.PublishIssue(ctx, issueID))
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/issues/2026/6", nil)
+	pageReq.AddCookie(session)
+	page := env.do(t, pageReq)
+	require.Equal(t, http.StatusOK, page.Code)
+	assert.Contains(t, page.Body.String(), "low tide, high spirits")
+
+	// Captions close with the rest of the dump once the issue is out.
+	require.Equal(t, http.StatusConflict, caption(session, `{"caption":"too late"}`).Code)
+}
+
+// TestDumpCaptionClears checks that an empty caption blanks the column
+// rather than storing an empty string — every reader treats NULL as
+// "no caption".
+func TestDumpCaptionClears(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	member := env.createUser(t, "Zara", "zara@example.com")
+	session := env.sessionCookie(t, member.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	issueID, _ := env.seedIssue(t, "collecting", 6, 2026, 1)
+
+	existing := "sunset, badly framed"
+	itemID, err := env.store.CreateDumpItem(ctx, issueID, member.ID, "photo",
+		nil, "/2026/06/sunset.jpg", &existing)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPatch,
+		fmt.Sprintf("/api/dump/%d", itemID), strings.NewReader(`{"caption":"   "}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(session)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfHeader)
+	require.Equal(t, http.StatusOK, env.do(t, req).Code)
+
+	item, err := env.store.GetDumpItemByID(ctx, itemID)
+	require.NoError(t, err)
+	assert.Nil(t, item.Caption)
+}
+
 // TestUpcomingDraftLifecycle covers the pre-created next round: publishing
 // an issue creates a draft that accepts question suggestions (but not
 // answers) until the scheduler opens it, at which point the suggestions

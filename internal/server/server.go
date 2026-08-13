@@ -316,6 +316,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("POST /api/responses/{id}/blocks/reorder", groupMW(s.handleReorderBlocks))
 	s.mux.Handle("POST /api/responses/{id}/blocks/upload", groupMW(s.handleUploadPhoto))
 	s.mux.Handle("POST /api/issues/{id}/dump", groupMW(s.handleDumpUpload))
+	s.mux.Handle("PATCH /api/dump/{id}", groupMW(s.handleDumpCaption))
 	s.mux.Handle("DELETE /api/dump/{id}", groupMW(s.handleDumpDelete))
 	s.mux.Handle("PUT /api/responses/{id}/autosave", groupMW(s.handleAutosave))
 

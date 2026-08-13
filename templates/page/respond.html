@@ -98,9 +98,9 @@
                         {{if .FilePath}}
                         <video controls preload="metadata" playsinline src="{{.FilePath | uploadURL}}"></video>
                         {{end}}
-                        <p class="caption">Video recording</p>
+                        <p class="caption">{{if .Caption}}{{.Caption}}{{else}}Video{{end}}</p>
                         <button type="button" class="block-remove" data-block-remove="{{.ID}}"
-                                aria-label="Remove this recording">✕</button>
+                                aria-label="Remove this video">✕</button>
                       </div>
                       {{else if eq .Type "link"}}
                       <div class="link-block">
@@ -130,8 +130,10 @@
               {{end}}
 
               <div class="pl-q-actions">
-                <input type="file" accept="image/*" class="pl-photo-input" data-question-id="{{$q.ID}}" multiple hidden>
-                <button type="button" class="pl-chip-btn pl-photo-btn" data-question-id="{{$q.ID}}">＋ Photos</button>
+                <input type="file" accept="image/*" class="pl-media-input" data-kind="photo" data-question-id="{{$q.ID}}" multiple hidden>
+                <input type="file" accept="video/*" class="pl-media-input" data-kind="video" data-question-id="{{$q.ID}}" multiple hidden>
+                <button type="button" class="pl-chip-btn pl-media-btn" data-kind="photo" data-question-id="{{$q.ID}}">＋ Photos</button>
+                <button type="button" class="pl-chip-btn pl-media-btn" data-kind="video" data-question-id="{{$q.ID}}">＋ Video</button>
                 <button type="button" class="pl-chip-btn pl-link-btn" data-question-id="{{$q.ID}}">🔗 Link</button>
                 <button type="button" class="pl-chip-btn pl-record-btn" data-kind="audio" data-question-id="{{$q.ID}}">● Audio record</button>
                 <button type="button" class="pl-chip-btn pl-record-btn" data-kind="video" data-question-id="{{$q.ID}}">▣ Video record</button>
@@ -159,12 +161,17 @@
                data-issue-id="{{.Issue.ID}}">
             {{range .DumpItems}}
             <figure class="pl-dump-thumb" data-dump-id="{{.ID}}">
-              {{if eq .Kind "video"}}
-              <video src="{{.FilePath | uploadURL}}" preload="metadata" muted playsinline></video>
-              <span class="pl-dump-thumb-kind" aria-hidden="true">▶</span>
-              {{else}}
-              <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}">
-              {{end}}
+              <span class="pl-dump-thumb-media">
+                {{if eq .Kind "video"}}
+                <video src="{{.FilePath | uploadURL}}" preload="metadata" muted playsinline></video>
+                <span class="pl-dump-thumb-kind" aria-hidden="true">▶</span>
+                {{else}}
+                <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}">
+                {{end}}
+              </span>
+              <input type="text" class="pl-dump-caption" data-dump-caption="{{.ID}}"
+                     value="{{if .Caption}}{{.Caption}}{{end}}" maxlength="500"
+                     placeholder="Caption…" aria-label="Caption for this {{.Kind}}">
               <button type="button" class="pl-dump-remove" data-dump-remove="{{.ID}}"
                       aria-label="Remove from dump">✕</button>
             </figure>
@@ -458,8 +465,13 @@ async function ensureResponse(section) {
     return section.querySelector('.response-area')?.dataset.responseId;
 }
 
-document.querySelectorAll('.pl-photo-btn').forEach(btn => {
-    const input = btn.parentElement.querySelector('.pl-photo-input');
+// Photo and video picks share one flow: upload each file in turn against
+// the (auto-created) response, then reload so the editor re-renders from
+// server state.
+document.querySelectorAll('.pl-media-btn').forEach(btn => {
+    const kind = btn.dataset.kind;
+    const input = btn.parentElement.querySelector(`.pl-media-input[data-kind="${kind}"]`);
+    const noun = kind === 'video' ? 'Video' : 'Photo';
     btn.addEventListener('click', () => input?.click());
     input?.addEventListener('change', async function() {
         const files = Array.from(this.files || []);
@@ -477,18 +489,18 @@ document.querySelectorAll('.pl-photo-btn').forEach(btn => {
                 btn.textContent = files.length > 1
                     ? `⏳ Uploading ${i + 1} of ${files.length}…`
                     : '⏳ Uploading…';
-                await helper.uploadPhoto(rid, files[i]);
+                await helper.uploadMedia(rid, files[i], kind);
                 added++;
             }
             btn.textContent = '✓ Added';
             helper.showToast(added === 1
-                ? 'Photo added — reloading'
-                : `${added} photos added — reloading`);
+                ? `${noun} added — reloading`
+                : `${added} ${noun.toLowerCase()}s added — reloading`);
             setTimeout(() => window.location.reload(), 600);
         } catch (err) {
             helper.showToast(err.message || 'Upload failed');
             if (added > 0) {
-                // Some photos made it up before the failure — resync the
+                // Some files made it up before the failure — resync the
                 // editor so they appear, once the error has been seen.
                 setTimeout(() => window.location.reload(), 2500);
             } else {
