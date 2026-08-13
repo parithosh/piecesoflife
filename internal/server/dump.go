@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/parithosh/piecesoflife/internal/store"
 )
@@ -17,7 +18,35 @@ import (
 const (
 	maxDumpPhotos = 100
 	maxDumpVideos = 100
+	// maxDumpCaptionRunes caps a caption — a line or two under a photo,
+	// not an essay.
+	maxDumpCaptionRunes = 500
 )
+
+// dumpCaptionRequest is the JSON body for PATCH /api/dump/{id}.
+type dumpCaptionRequest struct {
+	Caption string `json:"caption"`
+}
+
+// normalizedDumpCaption trims a submitted caption and enforces the length
+// cap. An empty caption becomes nil so the column stays NULL rather than
+// holding a blank string — every reader treats NULL as "no caption". On
+// rejection it writes the HTTP error itself and returns ok = false.
+func normalizedDumpCaption(w http.ResponseWriter, raw string) (*string, bool) {
+	caption := strings.TrimSpace(raw)
+	if caption == "" {
+		return nil, true
+	}
+
+	if utf8.RuneCountInString(caption) > maxDumpCaptionRunes {
+		writeError(w, http.StatusUnprocessableEntity, "caption_too_long",
+			fmt.Sprintf("Captions are capped at %d characters", maxDumpCaptionRunes))
+
+		return nil, false
+	}
+
+	return &caption, true
+}
 
 // DumpGroup is one member's contribution to the published collage page,
 // photos and videos split so the template can lay them out separately.
@@ -122,9 +151,9 @@ func (s *Server) handleDumpUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var captionPtr *string
-	if caption := strings.TrimSpace(r.FormValue("caption")); caption != "" {
-		captionPtr = &caption
+	captionPtr, ok := normalizedDumpCaption(w, r.FormValue("caption"))
+	if !ok {
+		return
 	}
 
 	var contentPtr *string
@@ -165,23 +194,21 @@ func (s *Server) handleDumpUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDumpDelete removes one of the member's own dump items (admins may
-// remove anyone's). Blocked once the issue is published.
-// DELETE /api/dump/{id}
-func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
+// loadEditableDumpItem resolves a dump item the caller is allowed to change:
+// it must exist, belong to the current Loop, be the caller's own (group
+// admins may touch anyone's), and hang off an issue that hasn't gone out
+// yet. On any failure it writes the HTTP error itself and returns ok=false.
+func (s *Server) loadEditableDumpItem(
+	w http.ResponseWriter, r *http.Request, itemID int64,
+) (*store.DumpItem, bool) {
 	ctx := r.Context()
 	user := UserFromContext(ctx)
-
-	itemID, ok := s.parseIDParam(w, r, "id", "dump item ID")
-	if !ok {
-		return
-	}
 
 	item, err := s.store.GetDumpItemByID(ctx, itemID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "not_found", "Dump item not found")
-			return
+			return nil, false
 		}
 
 		s.logger.ErrorContext(ctx, "Failed to load dump item",
@@ -189,7 +216,7 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
 
-		return
+		return nil, false
 	}
 
 	// The Loop check fails closed (requireIssue 500s on lookup errors and
@@ -197,17 +224,77 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 	// Loops' item IDs yields 404, not 403.
 	issue, ok := s.requireIssue(w, r, item.IssueID)
 	if !ok {
-		return
+		return nil, false
 	}
 
-	if item.UserID != user.ID && !isGroupAdmin(r.Context()) {
+	if item.UserID != user.ID && !isGroupAdmin(ctx) {
 		writeError(w, http.StatusForbidden, "forbidden", "Not your dump item")
-		return
+		return nil, false
 	}
 
 	if issue.Status == "published" {
 		writeError(w, http.StatusConflict, "issue_published",
 			"This issue is already woven & posted — the dump is closed")
+		return nil, false
+	}
+
+	return item, true
+}
+
+// handleDumpCaption sets (or clears, with an empty string) the caption on a
+// dump item — the words under the photo on the collage page.
+// PATCH /api/dump/{id}
+func (s *Server) handleDumpCaption(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	itemID, ok := s.parseIDParam(w, r, "id", "dump item ID")
+	if !ok {
+		return
+	}
+
+	item, ok := s.loadEditableDumpItem(w, r, itemID)
+	if !ok {
+		return
+	}
+
+	var req dumpCaptionRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+
+	caption, ok := normalizedDumpCaption(w, req.Caption)
+	if !ok {
+		return
+	}
+
+	if err := s.store.UpdateDumpItemCaption(ctx, itemID, caption); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to update dump caption",
+			slog.Int64("dump_item_id", itemID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save caption")
+
+		return
+	}
+
+	item.Caption = caption
+
+	writeJSON(w, http.StatusOK, map[string]any{"item": item})
+}
+
+// handleDumpDelete removes one of the member's own dump items (admins may
+// remove anyone's). Blocked once the issue is published.
+// DELETE /api/dump/{id}
+func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	itemID, ok := s.parseIDParam(w, r, "id", "dump item ID")
+	if !ok {
+		return
+	}
+
+	item, ok := s.loadEditableDumpItem(w, r, itemID)
+	if !ok {
 		return
 	}
 

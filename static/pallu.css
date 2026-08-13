@@ -572,14 +572,19 @@ input.pl-field::placeholder,
 .pl-dump-grid.is-empty .pl-dump-empty { display: block; }
 .pl-dump-thumb {
     position: relative;
-    width: 96px;
-    height: 96px;
+    width: 112px;
     margin: 0;
     background: var(--ivory-2);
     border: 1px solid var(--line);
     border-radius: 4px;
     padding: 4px;
     box-sizing: border-box;
+}
+.pl-dump-thumb-media {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
 }
 .pl-dump-thumb img,
 .pl-dump-thumb video {
@@ -589,6 +594,24 @@ input.pl-field::placeholder,
     display: block;
     border-radius: 2px;
 }
+.pl-dump-caption {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 5px;
+    padding: 3px 2px 1px;
+    border: 0;
+    border-top: 1px dashed var(--line);
+    background: none;
+    font: 400 11px/1.35 var(--font-ui);
+    color: var(--ink);
+}
+.pl-dump-caption::placeholder { color: var(--muted); font-style: italic; }
+.pl-dump-caption:focus {
+    outline: none;
+    border-top-color: var(--marigold);
+}
+.pl-dump-caption:disabled { color: var(--muted); }
 .pl-dump-thumb-kind {
     position: absolute;
     inset: 0;

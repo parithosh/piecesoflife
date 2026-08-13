@@ -16,10 +16,11 @@ file.
 
 1. **Questions go out** — your default prompts, picks from a question
    bank, and suggestions members sent in while reading the last issue.
-2. **Everyone answers in private.** Autosaving drafts; photos, link
-   embeds, audio and video recorded straight from the browser; and a
-   free-form **photo & video dump** for everything that didn't fit a
-   question. Reminder emails chase the stragglers so you don't have to.
+2. **Everyone answers in private.** Autosaving drafts; photos and videos
+   from the camera roll, link embeds, audio and video recorded straight
+   from the browser; and a free-form **photo & video dump** — caption
+   anything you drop in — for everything that didn't fit a question.
+   Reminder emails chase the stragglers so you don't have to.
 3. **The issue is published** — at the deadline automatically, or when the
    admin presses the button. Everyone gets an email that signs them
    straight into the reading view. The dump becomes the closing collage.
