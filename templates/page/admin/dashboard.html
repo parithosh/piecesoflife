@@ -308,6 +308,13 @@
           </div>
           {{end}}
           <p id="schedule-error" class="alert alert-error" style="margin:var(--space-4) 0 0;display:none;"></p>
+          <div id="schedule-unsaved" class="alert alert-error" style="margin:var(--space-4) 0 0;display:none;">
+            <p class="mb-0">You changed the schedule but haven't saved it — this round still closes on its current date.</p>
+            <div class="pl-dialog-actions" style="margin-top:var(--space-2);">
+              <button type="button" class="pl-btn pl-btn--outline" data-schedule-discard>Discard changes</button>
+              <button type="button" class="pl-btn pl-btn--gold" data-schedule-keep>Keep editing</button>
+            </div>
+          </div>
         </section>
         <footer class="pl-dialog-actions">
           <button type="button" class="pl-btn pl-btn--outline" data-schedule-cancel>Cancel</button>
@@ -656,6 +663,7 @@ async function sendReminder(id) {
     const closeInput = document.getElementById('schedule-next-close');
     const preview    = document.getElementById('schedule-preview');
     const errorEl    = document.getElementById('schedule-error');
+    const unsavedEl  = document.getElementById('schedule-unsaved');
     const saveBtn    = document.getElementById('schedule-save-btn');
 
     const DAY = 86400000;
@@ -699,23 +707,57 @@ async function sendReminder(id) {
         errorEl.style.display = '';
     }
 
+    const inputs = [curInput, openInput, closeInput].filter(Boolean);
+    const isDirty = () => inputs.some((i) => i.value !== i.dataset.original);
+
+    function resetInputs() {
+        for (const input of inputs) input.value = input.dataset.original;
+    }
+
+    function hideUnsaved() { unsavedEl.style.display = 'none'; }
+
+    // Closing the dialog with a typed-but-unsaved date is how a schedule
+    // change gets lost silently: the inputs are reset on the next open, the
+    // round keeps its old deadline, and it auto-closes on the date the admin
+    // thought they had moved. Refuse the exit and make the choice explicit.
+    function guardClose(ev) {
+        if (!isDirty()) return false;
+        ev.preventDefault();
+        unsavedEl.style.display = '';
+        // The dialog body scrolls, so a warning appended below the fold
+        // would repeat the failure it exists to prevent.
+        unsavedEl.scrollIntoView({block: 'nearest'});
+        return true;
+    }
+
     openInput?.addEventListener('input', updatePreview);
     closeInput?.addEventListener('input', updatePreview);
 
     document.querySelectorAll('[data-schedule-trigger]').forEach((btn) => {
         btn.addEventListener('click', () => {
-            for (const input of [curInput, openInput, closeInput]) {
-                if (input) input.value = input.dataset.original;
-            }
+            resetInputs();
             errorEl.style.display = 'none';
             errorEl.textContent = '';
+            hideUnsaved();
             saveBtn.disabled = false;
             saveBtn.textContent = saveBtn.dataset.defaultLabel;
             updatePreview();
             dlg.showModal();
         });
     });
-    dlg.querySelector('[data-schedule-cancel]')?.addEventListener('click', () => dlg.close());
+
+    dlg.querySelector('[data-schedule-cancel]')?.addEventListener('click', (ev) => {
+        if (!guardClose(ev)) dlg.close();
+    });
+    // Esc fires the dialog's own cancel event, which closes it by default.
+    dlg.addEventListener('cancel', guardClose);
+    dlg.querySelector('[data-schedule-discard]')?.addEventListener('click', () => {
+        resetInputs();
+        hideUnsaved();
+        updatePreview();
+        dlg.close();
+    });
+    dlg.querySelector('[data-schedule-keep]')?.addEventListener('click', hideUnsaved);
 
     saveBtn?.addEventListener('click', async () => {
         // A cleared field is a mistake, not a request — this dialog moves
