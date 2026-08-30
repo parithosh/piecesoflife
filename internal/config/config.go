@@ -17,12 +17,6 @@ type Config struct {
 	// Database
 	DatabasePath string
 
-	// AllowDBRollback downgrades the startup rollback guard from a hard
-	// failure to a warning. Set it only when deliberately running an older
-	// database in a data directory that has already seen a newer one —
-	// restoring a backup on purpose, for instance.
-	AllowDBRollback bool
-
 	// Uploads
 	UploadPath string
 
@@ -67,9 +61,8 @@ func Load() (*Config, error) {
 		LogLevel:  getEnvDefault("LOG_LEVEL", "info"),
 		LogFormat: getEnvDefault("LOG_FORMAT", "json"),
 
-		DatabasePath:    os.Getenv("DATABASE_PATH"),
-		AllowDBRollback: os.Getenv("ALLOW_DB_ROLLBACK") == "true",
-		UploadPath:      os.Getenv("UPLOAD_PATH"),
+		DatabasePath: os.Getenv("DATABASE_PATH"),
+		UploadPath:   os.Getenv("UPLOAD_PATH"),
 
 		EmailProvider: getEnvDefault("EMAIL_PROVIDER", "smtp"),
 		FromEmail:     os.Getenv("FROM_EMAIL"),

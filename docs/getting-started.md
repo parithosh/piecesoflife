@@ -54,7 +54,6 @@ Point your reverse proxy at the app port, and open your `BASE_URL`.
 | `PORT` | | `8080` | Listen port |
 | `DEV_MODE` | | `false` | Dev conveniences; **never in production** |
 | `DATABASE_PATH` | ✳ | — | SQLite file path |
-| `ALLOW_DB_ROLLBACK` | | `false` | Permit booting a database older than its data directory — see [Backups & moving servers](#backups--moving-servers) |
 | `UPLOAD_PATH` | ✳ | — | Media uploads directory |
 | `ADMIN_EMAIL` | ✳ | — | First admin account, seeded on boot |
 | `SESSION_SECRET` | ✳ | — | Signs CSRF cookies; long random string |
@@ -84,18 +83,18 @@ responses` on source and destination.
 
 Two safety nets run automatically.
 
-**Rollback guard.** On every boot the app writes a `piecesoflife.db.state`
-sidecar recording two high-water marks: the number of applied migrations, and
-a boot counter kept inside the database's SQLite header. If the database it
-is handed reports a lower value for either, it **refuses to start** — the
-fingerprint of a restore from a stale snapshot. The boot counter is what
-catches a rollback to a snapshot on the *same* schema, which a migration
-count alone cannot see. Two limits worth knowing: the marks are established
-on the first boot and enforced from the second, and the sidecar must travel
-with the database — copy the whole data directory, not just the `.db`, or the
-guard silently re-baselines on the new host. Set `ALLOW_DB_ROLLBACK=true` when
-you are deliberately running an older database. None of this substitutes for
-the row-count check above.
+**Rollback guard.** Every boot bumps a counter in the database's SQLite
+header and records it in a `piecesoflife.db.state` sidecar. A database
+reporting a lower counter than the sidecar is older than the data directory
+it landed in — the fingerprint of a stale-snapshot restore — and the app
+**refuses to start**. Because the counter lives inside the database file, it
+catches a rollback even when the schema is unchanged, which is the case that
+loses data with no other symptom. Two limits worth knowing: the mark is
+established on the first boot and enforced from the second, and the sidecar
+must travel with the database — copy the whole data directory, not just the
+`.db`, or the guard re-baselines on the new host. To run an older database
+deliberately, delete the sidecar; the error message names its path. None of
+this substitutes for the row-count check above.
 
 **Upload reconciliation.** Every boot, and daily thereafter, the app compares
 the uploads directory against the rows referencing it and logs an `Upload

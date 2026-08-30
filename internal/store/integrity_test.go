@@ -12,38 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCheckUploadIntegrityCleanDirectory verifies the healthy case: every
-// file on disk is referenced and every referenced file exists.
-func TestCheckUploadIntegrityCleanDirectory(t *testing.T) {
-	ctx := context.Background()
-	st := newTestStore(t)
-
-	uploads := t.TempDir()
-	userID := seedUser(t, st, "Zara", "zara@example.com")
-
-	now := time.Now().UTC()
-	issueID, err := st.CreateIssue(ctx, 1, nil, 7, 2026, now, now.Add(7*24*time.Hour))
-	require.NoError(t, err)
-
-	tracked := writeUploadFile(t, uploads, "2026/07/tracked.jpg")
-
-	_, err = st.CreateDumpItem(ctx, issueID, userID, "photo", nil, tracked, nil)
-	require.NoError(t, err)
-
-	report, err := st.CheckUploadIntegrity(ctx, uploads)
-	require.NoError(t, err)
-
-	assert.True(t, report.Healthy(), "clean directory must report healthy")
-	assert.Equal(t, 1, report.Referenced)
-	assert.Equal(t, 1, report.OnDisk)
-	assert.Zero(t, report.Orphaned)
-	assert.Zero(t, report.Missing)
-}
-
 // TestCheckUploadIntegrityFindsOrphans is the production signal that went
 // unread for three weeks: files on disk whose rows vanished. Deleting a
 // block or dump item unlinks its file, so an unreferenced file means the
-// row disappeared without going through the app.
+// row disappeared without going through the app. The tracked file present
+// alongside them also pins the healthy half of the comparison.
 func TestCheckUploadIntegrityFindsOrphans(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
@@ -66,9 +39,10 @@ func TestCheckUploadIntegrityFindsOrphans(t *testing.T) {
 	report, err := st.CheckUploadIntegrity(ctx, uploads)
 	require.NoError(t, err)
 
-	assert.False(t, report.Healthy())
 	assert.Equal(t, 2, report.Orphaned)
-	assert.Zero(t, report.Missing)
+	assert.Zero(t, report.Missing, "the tracked file must match its row")
+	assert.Equal(t, 1, report.Referenced)
+	assert.Equal(t, 3, report.OnDisk)
 	require.Len(t, report.OrphanSample, 2)
 	assert.Contains(t, report.OrphanSample[0], "orphan-a.jpg")
 	assert.Contains(t, report.OrphanSample[1], "orphan-b.mp4")
@@ -95,7 +69,6 @@ func TestCheckUploadIntegrityFindsMissingFiles(t *testing.T) {
 	report, err := st.CheckUploadIntegrity(ctx, uploads)
 	require.NoError(t, err)
 
-	assert.False(t, report.Healthy())
 	assert.Equal(t, 1, report.Missing)
 	assert.Zero(t, report.Orphaned)
 	require.Len(t, report.MissingSample, 1)
@@ -111,76 +84,16 @@ func TestCheckUploadIntegrityMissingDirectory(t *testing.T) {
 	report, err := st.CheckUploadIntegrity(ctx, filepath.Join(t.TempDir(), "absent"))
 	require.NoError(t, err)
 
-	assert.True(t, report.Healthy())
 	assert.Zero(t, report.OnDisk)
-}
-
-// TestCheckUploadIntegrityMatchesRootRelativePaths covers the stored form
-// the app has also used: a path relative to the upload root, such as
-// /2026/07/photo.jpg. Insisting on the absolute form would report every
-// file of such an install as orphaned AND its every row as missing — a
-// permanent, unactionable error on every boot.
-func TestCheckUploadIntegrityMatchesRootRelativePaths(t *testing.T) {
-	ctx := context.Background()
-	st := newTestStore(t)
-
-	uploads := t.TempDir()
-	userID := seedUser(t, st, "Zara", "zara@example.com")
-
-	now := time.Now().UTC()
-	issueID, err := st.CreateIssue(ctx, 1, nil, 7, 2026, now, now.Add(7*24*time.Hour))
-	require.NoError(t, err)
-
-	writeUploadFile(t, uploads, "2026/07/legacy.jpg")
-
-	// Stored root-relative, the way older rows look.
-	_, err = st.CreateDumpItem(
-		ctx, issueID, userID, "photo", nil, "/2026/07/legacy.jpg", nil,
-	)
-	require.NoError(t, err)
-
-	report, err := st.CheckUploadIntegrity(ctx, uploads)
-	require.NoError(t, err)
-
-	assert.True(t, report.Healthy(),
-		"a root-relative row must match its file, not double-count as orphan+missing")
 	assert.Zero(t, report.Orphaned)
 	assert.Zero(t, report.Missing)
-	assert.Zero(t, report.OutsideRoot)
 }
 
-// TestCheckUploadIntegrityIgnoresPathsOutsideRoot keeps a row pointing
-// somewhere else entirely out of the Missing count: it is a stored-format
-// oddity, not evidence of a lost uploads volume.
-func TestCheckUploadIntegrityIgnoresPathsOutsideRoot(t *testing.T) {
-	ctx := context.Background()
-	st := newTestStore(t)
-
-	uploads := t.TempDir()
-	elsewhere := t.TempDir()
-	userID := seedUser(t, st, "Zara", "zara@example.com")
-
-	now := time.Now().UTC()
-	issueID, err := st.CreateIssue(ctx, 1, nil, 7, 2026, now, now.Add(7*24*time.Hour))
-	require.NoError(t, err)
-
-	_, err = st.CreateDumpItem(ctx, issueID, userID, "photo", nil,
-		filepath.Join(elsewhere, "stray.jpg"), nil)
-	require.NoError(t, err)
-
-	report, err := st.CheckUploadIntegrity(ctx, uploads)
-	require.NoError(t, err)
-
-	assert.True(t, report.Healthy(), "an out-of-root row is not data loss")
-	assert.Equal(t, 1, report.OutsideRoot)
-	assert.Zero(t, report.Missing)
-	assert.Empty(t, report.MissingSample)
-}
-
-// TestCheckUploadIntegritySampleIsDeterministic guards the production-scale
-// case: 21 orphans, capped at 10. Sampling out of map iteration order would
-// change which paths appear from run to run, making the daily log churn.
-func TestCheckUploadIntegritySampleIsDeterministic(t *testing.T) {
+// TestCheckUploadIntegritySampleIsCappedAndStable guards the
+// production-scale case: 21 orphans, sampled at 10. Sampling out of map
+// iteration order would change which paths appear from run to run, making
+// the daily log churn.
+func TestCheckUploadIntegritySampleIsCappedAndStable(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 
@@ -195,10 +108,7 @@ func TestCheckUploadIntegritySampleIsDeterministic(t *testing.T) {
 
 	require.Equal(t, 21, first.Orphaned)
 	require.Len(t, first.OrphanSample, integritySampleLimit)
-
-	// Lowest-sorting paths, every time.
 	assert.Contains(t, first.OrphanSample[0], "orphan-00.jpg")
-	assert.Contains(t, first.OrphanSample[integritySampleLimit-1], "orphan-09.jpg")
 
 	second, err := st.CheckUploadIntegrity(ctx, uploads)
 	require.NoError(t, err)

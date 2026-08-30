@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,26 +13,27 @@ import (
 
 // recordingActions counts the member-visible actions a dispatch performed,
 // so a test can assert an email was never sent rather than merely that no
-// error occurred.
+// error occurred. Plain ints: every test here drives fireOverdueEvents
+// synchronously, with no scheduler goroutine in play.
 type recordingActions struct {
 	stubActions
 
-	reminders atomic.Int32
-	publishes atomic.Int32
-	creates   atomic.Int32
-	summaries atomic.Int32
+	reminders int
+	publishes int
+	creates   int
+	summaries int
 }
 
 func (r *recordingActions) SendReminderForIssue(
 	context.Context, int64, bool, *int64,
 ) error {
-	r.reminders.Add(1)
+	r.reminders++
 
 	return nil
 }
 
 func (r *recordingActions) AutoPublishIssue(context.Context, int64) error {
-	r.publishes.Add(1)
+	r.publishes++
 
 	return nil
 }
@@ -41,7 +41,7 @@ func (r *recordingActions) AutoPublishIssue(context.Context, int64) error {
 func (r *recordingActions) CreateNextIssue(
 	context.Context, int64, time.Time,
 ) error {
-	r.creates.Add(1)
+	r.creates++
 
 	return nil
 }
@@ -49,13 +49,13 @@ func (r *recordingActions) CreateNextIssue(
 func (r *recordingActions) SendAdminSummaryForIssue(
 	context.Context, int64, *int64,
 ) error {
-	r.summaries.Add(1)
+	r.summaries++
 
 	return nil
 }
 
-// newStaleEventFixture returns a scheduler over a fresh store plus a
-// collecting issue whose deadline sits in the future.
+// newStaleEventFixture returns a scheduler over a fresh store plus a draft
+// issue whose deadline sits a day in the future.
 func newStaleEventFixture(
 	t *testing.T, actions Actions,
 ) (*Scheduler, *store.Store, int64) {
@@ -76,9 +76,22 @@ func newStaleEventFixture(
 	return New(st, actions, discardLogger()), st, issueID
 }
 
-// setCollecting moves an issue into the open state its scheduled events
-// assume. CreateIssue leaves a draft.
+// setCollecting opens the draft into the state its scheduled events assume,
+// keeping its existing window.
 func setCollecting(t *testing.T, st *store.Store, issueID int64) {
+	t.Helper()
+
+	issue, err := st.GetIssueByID(context.Background(), issueID)
+	require.NoError(t, err)
+
+	setCollectingWithDeadline(t, st, issueID, issue.Deadline)
+}
+
+// setCollectingWithDeadline opens the draft with an explicit deadline, so a
+// test can put the round's close in the past while it is still collecting.
+func setCollectingWithDeadline(
+	t *testing.T, st *store.Store, issueID int64, deadline time.Time,
+) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -88,20 +101,19 @@ func setCollecting(t *testing.T, st *store.Store, issueID int64) {
 
 	require.NoError(t, st.OpenDraftEarly(
 		ctx, issue.GroupID, issueID, false, nil,
-		issue.Month, issue.Year, issue.OpensAt, issue.Deadline, nil,
+		issue.Month, issue.Year, issue.OpensAt, deadline, nil,
 	))
 }
 
 // TestReminderSkippedWhenIssueNoLongerCollecting is the confusing-email bug:
-// members were asked to fill in a round they had already completed. The
-// semantic guard catches it regardless of how late the event is — here the
-// event is only a minute overdue.
+// members were asked to fill in a round they had already completed. State
+// decides it, so the guard catches it however small the delay — here one
+// minute, which no lateness ceiling would ever reject.
 func TestReminderSkippedWhenIssueNoLongerCollecting(t *testing.T) {
 	ctx := context.Background()
 	actions := &recordingActions{}
 	sched, st, issueID := newStaleEventFixture(t, actions)
 
-	// Round already published — a reminder for it is nonsense.
 	require.NoError(t, st.PublishIssue(ctx, issueID))
 
 	require.NoError(t, st.CreateSchedulerEvent(
@@ -110,7 +122,7 @@ func TestReminderSkippedWhenIssueNoLongerCollecting(t *testing.T) {
 
 	sched.fireOverdueEvents(ctx, false)
 
-	assert.Zero(t, actions.reminders.Load(),
+	assert.Zero(t, actions.reminders,
 		"no reminder may be sent for a published round")
 
 	// Skipped, not left pending: it must never retry.
@@ -119,34 +131,15 @@ func TestReminderSkippedWhenIssueNoLongerCollecting(t *testing.T) {
 	assert.Empty(t, remaining, "skipped event must be marked fired")
 }
 
-// TestAutoCloseSkippedWhenAlreadyPublished guards the second half of the
-// cascade: the stale auto_close that republished July and mailed everyone.
-func TestAutoCloseSkippedWhenAlreadyPublished(t *testing.T) {
+// TestReminderSkippedAfterDeadline is the branch that actually blocked the
+// 2026-08-05 reminders: the round was still marked collecting in the stale
+// database, but its deadline had passed weeks earlier.
+func TestReminderSkippedAfterDeadline(t *testing.T) {
 	ctx := context.Background()
 	actions := &recordingActions{}
 	sched, st, issueID := newStaleEventFixture(t, actions)
 
-	require.NoError(t, st.PublishIssue(ctx, issueID))
-
-	require.NoError(t, st.CreateSchedulerEvent(
-		ctx, &issueID, "auto_close", time.Now().UTC().Add(-time.Minute),
-	))
-
-	sched.fireOverdueEvents(ctx, false)
-
-	assert.Zero(t, actions.publishes.Load(),
-		"an already-published round must not be published again")
-}
-
-// TestReminderSkippedBeyondStalenessCeiling covers the backstop: the round
-// is still legitimately collecting, but the event is weeks late — the
-// fingerprint of a restored database replaying history.
-func TestReminderSkippedBeyondStalenessCeiling(t *testing.T) {
-	ctx := context.Background()
-	actions := &recordingActions{}
-	sched, st, issueID := newStaleEventFixture(t, actions)
-
-	setCollecting(t, st, issueID)
+	setCollectingWithDeadline(t, st, issueID, time.Now().UTC().Add(-48*time.Hour))
 
 	require.NoError(t, st.CreateSchedulerEvent(
 		ctx, &issueID, "reminder_1", time.Now().UTC().Add(-23*24*time.Hour),
@@ -154,13 +147,33 @@ func TestReminderSkippedBeyondStalenessCeiling(t *testing.T) {
 
 	sched.fireOverdueEvents(ctx, true)
 
-	assert.Zero(t, actions.reminders.Load(),
-		"a 23-day-late reminder must not reach members")
+	assert.Zero(t, actions.reminders,
+		"a reminder for a round whose deadline has passed must not be sent")
 }
 
-// TestReminderFiresWhenMerelyDelayed is the guard against over-blocking: a
-// short outage must still catch up, which is the whole point of persisting
-// events.
+// TestReminderFiresWhenVeryLateButRoundStillOpen guards against
+// over-blocking, which is why reminders are exempt from the lateness
+// ceiling: a reminder queued at least minReminderLead (12h) ahead can be
+// days late and still have most of the answering window left.
+func TestReminderFiresWhenVeryLateButRoundStillOpen(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	setCollectingWithDeadline(t, st, issueID, time.Now().UTC().Add(72*time.Hour))
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "reminder_1", time.Now().UTC().Add(-49*time.Hour),
+	))
+
+	sched.fireOverdueEvents(ctx, true)
+
+	assert.Equal(t, 1, actions.reminders,
+		"the round is open with days to go, so the reminder is still useful")
+}
+
+// TestReminderFiresWhenMerelyDelayed is the ordinary restart catch-up that
+// persisting events exists for.
 func TestReminderFiresWhenMerelyDelayed(t *testing.T) {
 	ctx := context.Background()
 	actions := &recordingActions{}
@@ -174,12 +187,130 @@ func TestReminderFiresWhenMerelyDelayed(t *testing.T) {
 
 	sched.fireOverdueEvents(ctx, true)
 
-	assert.Equal(t, int32(1), actions.reminders.Load(),
+	assert.Equal(t, 1, actions.reminders,
 		"a 20-minute-late reminder is a normal restart catch-up")
 }
 
+// TestAutoCloseSkippedWhenAlreadyPublished covers the state half of the
+// auto_close policy.
+func TestAutoCloseSkippedWhenAlreadyPublished(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	require.NoError(t, st.PublishIssue(ctx, issueID))
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "auto_close", time.Now().UTC().Add(-time.Minute),
+	))
+
+	sched.fireOverdueEvents(ctx, false)
+
+	assert.Zero(t, actions.publishes,
+		"an already-published round must not be published again")
+}
+
+// TestAutoCloseSkippedBeyondCeiling is why the lateness ceiling still
+// exists. This is the 2026-08-05 auto_close exactly: a restored database
+// still says "collecting", so state alone cannot reject it, and firing it
+// published July with one member's answers.
+func TestAutoCloseSkippedBeyondCeiling(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	setCollecting(t, st, issueID)
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "auto_close", time.Now().UTC().Add(-16*24*time.Hour),
+	))
+
+	sched.fireOverdueEvents(ctx, true)
+
+	assert.Zero(t, actions.publishes,
+		"a 16-day-late close is a replay, not a catch-up")
+}
+
+// TestAutoCloseFiresAtItsDeadline pins the other side of that ceiling: a
+// round closing on schedule must still close.
+func TestAutoCloseFiresAtItsDeadline(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	setCollecting(t, st, issueID)
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "auto_close", time.Now().UTC().Add(-time.Minute),
+	))
+
+	sched.fireOverdueEvents(ctx, false)
+
+	assert.Equal(t, 1, actions.publishes, "a round due to close must close")
+}
+
+// TestCreateNextIssueFiresWhenVeryLateOnDraft is why create_next_issue is
+// exempt from the ceiling. CreateNextIssue deliberately re-anchors an
+// overdue draft to a fresh answering window (see
+// TestLateOpenReAnchorsStaleDraft), so a week-late opening is work to do,
+// not a replay to discard — skipping it would leave the Loop with no open
+// round at all.
+func TestCreateNextIssueFiresWhenVeryLateOnDraft(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "create_next_issue", time.Now().UTC().Add(-7*24*time.Hour),
+	))
+
+	sched.fireOverdueEvents(ctx, true)
+
+	assert.Equal(t, 1, actions.creates,
+		"a late opening must still open the round, however long the outage")
+}
+
+// TestCreateNextIssueSkippedWhenAlreadyOpened is its state check: anything
+// but a draft means the round is already open.
+func TestCreateNextIssueSkippedWhenAlreadyOpened(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	setCollecting(t, st, issueID)
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "create_next_issue", time.Now().UTC().Add(-time.Minute),
+	))
+
+	sched.fireOverdueEvents(ctx, false)
+
+	assert.Zero(t, actions.creates,
+		"a round that is already collecting must not be opened again")
+}
+
+// TestAdminSummaryFiresAfterDeadlineWhileCollecting pins the deliberate
+// asymmetry with reminders: the admin still wants the round's numbers while
+// it is closing, so admin_summary has no deadline test.
+func TestAdminSummaryFiresAfterDeadlineWhileCollecting(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	setCollectingWithDeadline(t, st, issueID, time.Now().UTC().Add(-time.Hour))
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "admin_summary", time.Now().UTC().Add(-time.Minute),
+	))
+
+	sched.fireOverdueEvents(ctx, false)
+
+	assert.Equal(t, 1, actions.summaries,
+		"admin summary must still reach the admin of a collecting round")
+}
+
 // TestCleanupEventStillCatchesUpWhenVeryLate keeps maintenance events out of
-// the ceiling: they are idempotent and touch nobody's inbox.
+// the gate entirely: they are idempotent and touch nobody's inbox.
 func TestCleanupEventStillCatchesUpWhenVeryLate(t *testing.T) {
 	ctx := context.Background()
 	sched, st, _ := newStaleEventFixture(t, stubActions{})
@@ -198,12 +329,11 @@ func TestCleanupEventStillCatchesUpWhenVeryLate(t *testing.T) {
 // TestUnreadableIssueIsNotSkipped is the guard against the gate eating work
 // it could not verify. Skipping marks an event fired and consumes it
 // forever, so a failed issue lookup must not be grounds for it — not even
-// past the staleness ceiling, where the temporal backstop would otherwise
-// fire blind on an event that might be perfectly legitimate.
+// past the staleness ceiling.
 //
 // A dangling issue_id cannot be inserted (foreign keys forbid it), so the
-// unreadable case is produced the way it actually occurs in production: the
-// store call fails.
+// unreadable case is produced the way it actually occurs: the store call
+// fails.
 func TestUnreadableIssueIsNotSkipped(t *testing.T) {
 	sched, _, issueID := newStaleEventFixture(t, &recordingActions{})
 
@@ -213,7 +343,7 @@ func TestUnreadableIssueIsNotSkipped(t *testing.T) {
 	ev := store.SchedulerEvent{
 		ID:          1,
 		IssueID:     &issueID,
-		EventType:   "reminder_1",
+		EventType:   "auto_close",
 		ScheduledAt: time.Now().UTC().Add(-30 * 24 * time.Hour),
 	}
 
@@ -222,45 +352,4 @@ func TestUnreadableIssueIsNotSkipped(t *testing.T) {
 	assert.False(t, skip,
 		"an event we could not revalidate must not be skipped, however late")
 	assert.Empty(t, reason)
-}
-
-// TestCreateNextIssueSkippedWhenAlreadyOpened covers the fifth gated event
-// type: the event opens a pre-created draft, so anything else means the
-// round is already open and reopening it would rewind a live round.
-func TestCreateNextIssueSkippedWhenAlreadyOpened(t *testing.T) {
-	ctx := context.Background()
-	actions := &recordingActions{}
-	sched, st, issueID := newStaleEventFixture(t, actions)
-
-	setCollecting(t, st, issueID)
-
-	require.NoError(t, st.CreateSchedulerEvent(
-		ctx, &issueID, "create_next_issue", time.Now().UTC().Add(-time.Minute),
-	))
-
-	sched.fireOverdueEvents(ctx, false)
-
-	assert.Zero(t, actions.creates.Load(),
-		"a round that is already collecting must not be opened again")
-}
-
-// TestAdminSummaryFiresAfterDeadlineWhileCollecting pins the deliberate
-// asymmetry: admin_summary is scheduled at the same hour as reminder_2 but
-// deliberately has no deadline test, because the admin still wants the
-// round's numbers while it is closing.
-func TestAdminSummaryFiresAfterDeadlineWhileCollecting(t *testing.T) {
-	ctx := context.Background()
-	actions := &recordingActions{}
-	sched, st, issueID := newStaleEventFixture(t, actions)
-
-	setCollecting(t, st, issueID)
-
-	require.NoError(t, st.CreateSchedulerEvent(
-		ctx, &issueID, "admin_summary", time.Now().UTC().Add(-time.Minute),
-	))
-
-	sched.fireOverdueEvents(ctx, false)
-
-	assert.Equal(t, int32(1), actions.summaries.Load(),
-		"admin summary must still reach the admin of a collecting round")
 }

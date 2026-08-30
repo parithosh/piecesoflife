@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,82 +13,27 @@ import (
 )
 
 // dataDirStateSuffix names the sidecar file written next to the database on
-// every boot. It records the database's high-water marks OUTSIDE the
+// every boot. It records the database's high-water mark OUTSIDE the
 // database, which is the whole point: a marker stored in the database
 // itself is restored — and therefore rewound — along with it.
 const dataDirStateSuffix = ".state"
 
 // dataDirState is the sidecar payload.
 //
-// Two independent marks, because they catch different rollbacks:
+// Generation is the whole mechanism: a boot counter kept in the SQLite
+// header via PRAGMA user_version, so it rides along inside the database
+// file and a restored snapshot carries the value it had when it was taken.
+// Anything older than the data directory it lands in therefore reports a
+// lower number.
 //
-//   - AppliedCount catches a database rewound across a schema upgrade (the
-//     2026-08-05 incident: a pre-016 file handed to a post-021 data
-//     directory).
-//   - Generation catches a rewind that lands on the SAME schema, which the
-//     count cannot see at all. It is a boot counter kept in the SQLite
-//     header via PRAGMA user_version, so it rides along inside the file and
-//     a stale snapshot carries a stale value.
-//
-// SchemaVersion and UpdatedAt exist to make the file readable by a human
-// staring at a broken deploy at 2am.
+// SchemaVersion and AppliedCount are context for a human staring at a
+// broken deploy at 2am. They are not compared: any snapshot old enough to
+// have fewer migrations is also old enough to have a lower generation.
 type dataDirState struct {
+	Generation    int       `json:"generation"`
 	SchemaVersion int       `json:"schema_version"`
 	AppliedCount  int       `json:"applied_count"`
-	Generation    int       `json:"generation"`
 	UpdatedAt     time.Time `json:"updated_at"`
-}
-
-// rollbackKind names which high-water mark regressed, so the error message
-// can say something specific.
-type rollbackKind string
-
-const (
-	rollbackSchema     rollbackKind = "applied migrations"
-	rollbackGeneration rollbackKind = "boot generation"
-)
-
-// ErrDatabaseRolledBack reports a database file older than the data
-// directory it sits in — the fingerprint of a restore from a stale
-// snapshot. Callers should refuse to start rather than migrate it forward:
-// doing so replays the schema on top of old data and silently strands
-// every row written since the snapshot.
-type ErrDatabaseRolledBack struct {
-	Kind             rollbackKind
-	DatabaseValue    int
-	SidecarValue     int
-	SidecarUpdatedAt time.Time
-	StatePath        string
-}
-
-func (e *ErrDatabaseRolledBack) Error() string {
-	return fmt.Sprintf(
-		"database reports %s = %d but this data directory last saw %d (%s): "+
-			"the database file is older than the data directory, which usually means it "+
-			"was restored from a stale snapshot or copied without its -wal sibling. "+
-			"Continuing would strand every row written since then. "+
-			"Restore the correct database, or set ALLOW_DB_ROLLBACK=true to proceed "+
-			"deliberately (state file: %s)",
-		e.Kind, e.DatabaseValue, e.SidecarValue,
-		e.SidecarUpdatedAt.UTC().Format(time.RFC3339), e.StatePath,
-	)
-}
-
-// ErrDatabaseTooNew reports a database carrying migrations this binary does
-// not know about — an app downgrade against an already-upgraded database.
-// The mirror of ErrDatabaseRolledBack, and just as unsafe to run.
-type ErrDatabaseTooNew struct {
-	DatabaseVersion int
-	BinaryVersion   int
-}
-
-func (e *ErrDatabaseTooNew) Error() string {
-	return fmt.Sprintf(
-		"database schema version %d is newer than this binary's highest migration %d: "+
-			"the database was upgraded by a later release. Deploy that release, or "+
-			"restore a database matching this one",
-		e.DatabaseVersion, e.BinaryVersion,
-	)
 }
 
 // statePath returns the sidecar path for this database.
@@ -97,10 +41,10 @@ func (s *Store) statePath() string {
 	return s.dbPath + dataDirStateSuffix
 }
 
-// MigrationState reports how many migrations the open database has applied
-// and the highest version among them. A database with no schema_migrations
-// table at all is brand new, reported as (0, 0).
-func (s *Store) MigrationState(ctx context.Context) (count, maxVersion int, err error) {
+// migrationState reports how many migrations the open database has applied
+// and the highest version among them, for the sidecar's benefit. A database
+// with no schema_migrations table at all is brand new, reported as (0, 0).
+func (s *Store) migrationState(ctx context.Context) (count, maxVersion int, err error) {
 	var maybeMax sql.NullInt64
 
 	err = s.read.QueryRowContext(ctx,
@@ -150,63 +94,28 @@ func (s *Store) setDataGeneration(ctx context.Context, generation int) error {
 	return nil
 }
 
-// highestEmbeddedMigration returns the newest migration version compiled
-// into this binary.
-func highestEmbeddedMigration() (int, error) {
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
-	if err != nil {
-		return 0, fmt.Errorf("reading migrations directory: %w", err)
-	}
-
-	highest := 0
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-
-		version, err := extractVersion(entry.Name())
-		if err != nil {
-			return 0, fmt.Errorf("parsing migration filename %s: %w", entry.Name(), err)
-		}
-
-		if version > highest {
-			highest = version
-		}
-	}
-
-	return highest, nil
-}
-
-// VerifyDataDirectory checks the open database against the sidecar marker
-// left by previous runs, and against the migrations this binary carries.
+// VerifyDataDirectory refuses to continue when the open database is older
+// than the data directory it sits in.
 //
-// It catches the failure mode that silently destroyed a month of writes in
-// production: a data directory whose uploads and sidecar had moved on,
-// handed a database file rewound to an earlier state. Migrations happily
-// replay on such a file, so nothing downstream notices.
+// That is the failure mode which silently destroyed a month of writes in
+// production: a data directory whose uploads had moved on, handed a
+// database file rewound to an earlier state. Migrations happily replay on
+// such a file, so nothing downstream notices.
 //
 // A missing sidecar is not an error — it is how every pre-existing install
-// and every genuinely fresh database looks. The marks are established on
-// the first run and enforced from the second onward. The sidecar must
-// travel with the database: copy the data directory, not just the .db, or
-// the guard re-baselines on the new host.
+// and every genuinely fresh database looks. The mark is established on the
+// first run and enforced from the second onward. The sidecar must travel
+// with the database: copy the data directory, not just the .db, or the
+// guard re-baselines on the new host.
 //
-// allowRollback downgrades a detected rollback to a loud warning, for the
-// operator who really is restoring an older database on purpose.
-func (s *Store) VerifyDataDirectory(ctx context.Context, allowRollback bool) error {
-	appliedCount, dbVersion, err := s.MigrationState(ctx)
+// Deleting the sidecar is the escape hatch for an operator who really is
+// restoring an older database. It is deliberately one-shot: unlike an
+// environment variable it cannot be left switched on, and the next boot
+// re-arms the guard.
+func (s *Store) VerifyDataDirectory(ctx context.Context) error {
+	prev, err := s.readDataDirState()
 	if err != nil {
 		return err
-	}
-
-	binaryVersion, err := highestEmbeddedMigration()
-	if err != nil {
-		return err
-	}
-
-	if dbVersion > binaryVersion {
-		return &ErrDatabaseTooNew{DatabaseVersion: dbVersion, BinaryVersion: binaryVersion}
 	}
 
 	generation, err := s.DataGeneration(ctx)
@@ -214,55 +123,28 @@ func (s *Store) VerifyDataDirectory(ctx context.Context, allowRollback bool) err
 		return err
 	}
 
-	prev, err := s.readDataDirState()
-	if err != nil {
-		return err
-	}
-
 	if prev == nil {
 		s.logger.InfoContext(ctx, "No data directory state file yet, establishing baseline",
 			slog.String("state_file", s.statePath()),
-			slog.Int("applied_migrations", appliedCount),
 			slog.Int("generation", generation),
 		)
 
 		return nil
 	}
 
-	// Schema regression first: it names the more specific problem, and it
-	// is the one an operator can act on by deploying a matching release.
-	var rollback *ErrDatabaseRolledBack
-
-	switch {
-	case appliedCount < prev.AppliedCount:
-		rollback = &ErrDatabaseRolledBack{
-			Kind:          rollbackSchema,
-			DatabaseValue: appliedCount,
-			SidecarValue:  prev.AppliedCount,
-		}
-	case generation < prev.Generation:
-		rollback = &ErrDatabaseRolledBack{
-			Kind:          rollbackGeneration,
-			DatabaseValue: generation,
-			SidecarValue:  prev.Generation,
-		}
-	default:
+	if generation >= prev.Generation {
 		return nil
 	}
 
-	rollback.SidecarUpdatedAt = prev.UpdatedAt
-	rollback.StatePath = s.statePath()
-
-	if !allowRollback {
-		return rollback
-	}
-
-	s.logger.WarnContext(ctx,
-		"Database rollback detected but ALLOW_DB_ROLLBACK is set, continuing",
-		slog.String("detail", rollback.Error()),
+	return fmt.Errorf(
+		"database is at boot generation %d but this data directory last saw %d (%s): "+
+			"the database file is older than the data directory, which usually means it "+
+			"was restored from a stale snapshot or copied without its -wal sibling. "+
+			"Continuing would strand every row written since then. Restore the correct "+
+			"database, or delete %s to accept this one",
+		generation, prev.Generation,
+		prev.UpdatedAt.UTC().Format(time.RFC3339), s.statePath(),
 	)
-
-	return nil
 }
 
 // RecordDataDirectoryState advances the boot generation and writes the
@@ -274,38 +156,26 @@ func (s *Store) VerifyDataDirectory(ctx context.Context, allowRollback bool) err
 // between the two leaves the database ahead of the sidecar, which is not a
 // rollback and so fails in the harmless direction.
 func (s *Store) RecordDataDirectoryState(ctx context.Context) error {
-	appliedCount, dbVersion, err := s.MigrationState(ctx)
+	appliedCount, dbVersion, err := s.migrationState(ctx)
 	if err != nil {
 		return err
 	}
 
-	dbGeneration, err := s.DataGeneration(ctx)
+	generation, err := s.DataGeneration(ctx)
 	if err != nil {
 		return err
 	}
 
-	prev, err := s.readDataDirState()
-	if err != nil {
-		return err
-	}
+	generation++
 
-	// Monotonic across both marks: an allowed rollback must not be able to
-	// hand the next boot a lower generation than the directory has seen.
-	next := dbGeneration
-	if prev != nil && prev.Generation > next {
-		next = prev.Generation
-	}
-
-	next++
-
-	if err := s.setDataGeneration(ctx, next); err != nil {
+	if err := s.setDataGeneration(ctx, generation); err != nil {
 		return err
 	}
 
 	payload, err := json.MarshalIndent(dataDirState{
+		Generation:    generation,
 		SchemaVersion: dbVersion,
 		AppliedCount:  appliedCount,
-		Generation:    next,
 		UpdatedAt:     time.Now().UTC(),
 	}, "", "  ")
 	if err != nil {
@@ -317,24 +187,21 @@ func (s *Store) RecordDataDirectoryState(ctx context.Context) error {
 	}
 
 	s.logger.InfoContext(ctx, "Recorded data directory state",
+		slog.Int("generation", generation),
 		slog.Int("applied_migrations", appliedCount),
 		slog.Int("schema_version", dbVersion),
-		slog.Int("generation", next),
 	)
 
 	return nil
 }
 
-// writeStateFile installs payload at statePath atomically and durably:
-// write, fsync, rename, then fsync the directory so the rename itself
-// survives a host crash. Without the directory sync a crash right after a
-// migration can lose the new sidecar entirely, and the next boot would
-// accept a stale database and re-baseline.
+// writeStateFile installs payload at statePath by write-sync-rename, so a
+// crash can never leave a half-written sidecar that fails to parse and
+// blocks the next boot for no reason.
 func (s *Store) writeStateFile(payload []byte) error {
 	path := s.statePath()
-	dir := filepath.Dir(path)
 
-	tmp, err := os.CreateTemp(dir, ".state-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".state-*")
 	if err != nil {
 		return fmt.Errorf("creating temp state file: %w", err)
 	}
@@ -374,26 +241,6 @@ func (s *Store) writeStateFile(payload []byte) error {
 		os.Remove(tmpName)
 
 		return fmt.Errorf("installing state file: %w", err)
-	}
-
-	return syncDir(dir)
-}
-
-// syncDir fsyncs a directory so a rename inside it is durable.
-func syncDir(dir string) error {
-	handle, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("opening state directory %s: %w", dir, err)
-	}
-
-	if err := handle.Sync(); err != nil {
-		handle.Close()
-
-		return fmt.Errorf("syncing state directory %s: %w", dir, err)
-	}
-
-	if err := handle.Close(); err != nil {
-		return fmt.Errorf("closing state directory %s: %w", dir, err)
 	}
 
 	return nil

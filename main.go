@@ -68,7 +68,7 @@ func run() error {
 	// forward replays the schema on old data and strands everything
 	// written since. This is what silently lost a month of answers on
 	// 2026-08-05, so it fails closed.
-	if err := db.VerifyDataDirectory(ctx, cfg.AllowDBRollback); err != nil {
+	if err := db.VerifyDataDirectory(ctx); err != nil {
 		return fmt.Errorf("verifying data directory: %w", err)
 	}
 

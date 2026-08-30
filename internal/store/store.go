@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -82,16 +83,6 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 
 	readDB.SetMaxOpenConns(4)
 
-	// Recycle read connections. An *idle* pooled connection holds no WAL
-	// read snapshot — SQLite ends the snapshot when the statement or
-	// transaction does — so this is not what bounds WAL growth; the
-	// explicit Checkpoint below is. What recycling does buy is a ceiling on
-	// a connection that leaked an open read transaction, which would
-	// otherwise pin the oldest snapshot for the process's lifetime and
-	// block every checkpoint behind it.
-	readDB.SetConnMaxIdleTime(2 * time.Minute)
-	readDB.SetConnMaxLifetime(1 * time.Hour)
-
 	if err := writeDB.PingContext(ctx); err != nil {
 		writeDB.Close()
 		readDB.Close()
@@ -116,25 +107,11 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 	}, nil
 }
 
-// Close checkpoints the WAL, then closes both connection pools. The
-// checkpoint matters beyond tidiness: it collapses the -wal back into the
-// main database file, so an operator who copies the bare .db afterwards
-// gets a complete database instead of silently losing every uncheckpointed
-// transaction.
+// Close closes both connection pools. SQLite checkpoints the WAL itself
+// when the last connection to the database closes, so the -wal collapses
+// into the main file here without an explicit pass.
 func (s *Store) Close() error {
 	var errs []error
-
-	// Best effort, and deliberately before the pools shut: a blocked or
-	// failed checkpoint must not prevent shutdown. Generous timeout — a
-	// large WAL takes real time to fold into the main file, and giving up
-	// early is exactly what leaves a bare .db copy incomplete.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := s.Checkpoint(ctx); err != nil {
-		s.logger.WarnContext(ctx, "WAL checkpoint on shutdown did not complete",
-			slog.String("error", err.Error()))
-	}
-
-	cancel()
 
 	if err := s.write.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("closing write db: %w", err))
@@ -153,27 +130,17 @@ func (s *Store) Close() error {
 
 // ErrCheckpointBusy reports that a checkpoint could not reclaim the whole
 // WAL because a reader still held an older snapshot. Distinct from a failed
-// pragma: the database is fine, but the -wal still holds frames, so a bare
-// copy of the .db is NOT complete.
-type ErrCheckpointBusy struct {
-	LogFrames          int
-	CheckpointedFrames int
-}
-
-func (e *ErrCheckpointBusy) Error() string {
-	return fmt.Sprintf(
-		"wal checkpoint blocked by an open reader: %d of %d frames reclaimed",
-		e.CheckpointedFrames, e.LogFrames,
-	)
-}
+// pragma: the database is fine, but the -wal still holds frames.
+var ErrCheckpointBusy = errors.New("wal checkpoint blocked by an open reader")
 
 // Checkpoint runs a TRUNCATE WAL checkpoint: flush every WAL frame into the
-// main database and reset the -wal file to zero length.
+// main database and reset the -wal file to zero length. Left to itself
+// SQLite only checkpoints passively, yielding to readers, which is how a
+// 7.9MB database grew a 99MB -wal in production.
 //
-// A nil return is the caller's proof that the WAL is empty and the bare .db
-// is a complete copy. SQLite signals incomplete work by setting the
-// pragma's first column rather than failing, so that case comes back as
-// ErrCheckpointBusy instead of being flattened into success.
+// A nil return means the WAL is empty. SQLite signals incomplete work by
+// setting the pragma's first column rather than failing, so that case comes
+// back as ErrCheckpointBusy instead of being flattened into success.
 func (s *Store) Checkpoint(ctx context.Context) error {
 	var busy, logFrames, checkpointed int
 
@@ -184,10 +151,7 @@ func (s *Store) Checkpoint(ctx context.Context) error {
 	}
 
 	if busy != 0 {
-		return &ErrCheckpointBusy{
-			LogFrames:          logFrames,
-			CheckpointedFrames: checkpointed,
-		}
+		return ErrCheckpointBusy
 	}
 
 	s.logger.DebugContext(ctx, "WAL checkpoint complete",

@@ -140,8 +140,6 @@ func (s *Scheduler) Start(parent context.Context) {
 		//    diagnostic.
 		s.checkUploadIntegrity(ctx)
 
-		s.lastTick.Store(time.Now().UnixNano())
-
 		ticker := time.NewTicker(s.tickInterval)
 		defer ticker.Stop()
 
@@ -196,20 +194,13 @@ func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {
 			return
 		}
 
-		// Lateness is a property of the event, not of how we found it. It
-		// used to be scoped to the startup pass, which meant an event that
-		// went stale while the app was running recorded was_late = false —
-		// inconsistent now that the skip gate judges the same delay on
-		// every pass.
-		delay := time.Since(ev.ScheduledAt)
-		wasLate := delay > 5*time.Minute
+		wasLate := startup && time.Since(ev.ScheduledAt) > 5*time.Minute
 
 		if wasLate {
 			s.logger.InfoContext(ctx, "Firing late event",
 				slog.String("event_type", ev.EventType),
 				slog.Time("scheduled_at", ev.ScheduledAt),
-				slog.Duration("delay", delay),
-				slog.Bool("startup", startup),
+				slog.Duration("delay", time.Since(ev.ScheduledAt)),
 			)
 		}
 
@@ -423,32 +414,43 @@ func (s *Scheduler) reconcileAutoCreate(ctx context.Context) {
 	}
 }
 
-// memberVisibleEvents are the event types that email members or change what
-// they see. Only these are subject to the staleness ceiling; the cleanup
-// and digest events are idempotent maintenance and always safe to catch up.
-var memberVisibleEvents = map[string]struct{}{
-	"reminder_1":        {},
-	"reminder_2":        {},
-	"admin_summary":     {},
-	"auto_close":        {},
-	"create_next_issue": {},
-}
-
 // shouldSkipEvent decides whether an overdue event has been overtaken by
 // reality. It returns the reason so the skip is greppable in logs.
 //
-// A failed issue lookup returns false and skips the ceiling too. Skipping
-// consumes an event permanently, so a transient read error must never be
-// grounds for it: better to let the handler run, fail, and retry next tick.
+// Each event type states its own policy, because the right test differs:
+//
+//   - Reminders are decided entirely by state. Once the round is closed or
+//     its deadline has passed a reminder is nonsense, and while the round
+//     is open a late one is still worth sending — reminders are queued at
+//     least minReminderLead (12h) ahead, so a legitimately late one can
+//     have most of a day left to be useful.
+//   - auto_close and admin_summary cannot be decided by state alone: a
+//     restored database still says "collecting", which is exactly how the
+//     2026-08-05 replay published July. They get the lateness ceiling.
+//   - create_next_issue opens a pre-created draft. Anything but a draft
+//     means the round is already open, but a late one is not stale:
+//     CreateNextIssue deliberately re-anchors an overdue draft to a fresh
+//     answering window, so no ceiling applies.
+//   - Cleanups and the comment digest are idempotent maintenance that
+//     reaches nobody's inbox. Always safe to catch up, never skipped.
+//
+// A failed issue lookup returns false. Skipping consumes an event
+// permanently, so a transient read error must never be grounds for it:
+// better to let the handler run, fail, and retry next tick.
 func (s *Scheduler) shouldSkipEvent(
 	ctx context.Context, ev store.SchedulerEvent,
 ) (bool, string) {
-	if _, visible := memberVisibleEvents[ev.EventType]; !visible {
+	var applyCeiling bool
+
+	switch ev.EventType {
+	case "reminder_1", "reminder_2":
+	case "auto_close", "admin_summary":
+		applyCeiling = true
+	case "create_next_issue":
+	default:
 		return false, ""
 	}
 
-	// Semantic check: is the round this event refers to still in the state
-	// the event assumes?
 	if ev.IssueID != nil {
 		issue, err := s.store.GetIssueByID(ctx, *ev.IssueID)
 		if err != nil {
@@ -462,34 +464,29 @@ func (s *Scheduler) shouldSkipEvent(
 		}
 
 		switch ev.EventType {
-		case "reminder_1", "reminder_2", "admin_summary", "auto_close":
-			// All four only make sense while the round is open.
+		case "create_next_issue":
+			if issue.Status != "draft" {
+				return true, "next issue is " + issue.Status + ", not draft"
+			}
+
+		default:
 			if issue.Status != "collecting" {
 				return true, "issue is " + issue.Status + ", not collecting"
 			}
 
-		case "create_next_issue":
-			// Opens a pre-created draft; anything else already opened.
-			if issue.Status != "draft" {
-				return true, "next issue is " + issue.Status + ", not draft"
-			}
-		}
-
-		// A reminder is pointless once the deadline has passed — the round
-		// is about to close, or should already have. Reminders are queued
-		// at least minReminderLead (12h) before the deadline, so this can
-		// only trigger on a genuine replay, never on a normal restart.
-		if ev.EventType == "reminder_1" || ev.EventType == "reminder_2" {
-			if time.Now().After(issue.Deadline) {
-				return true, "deadline already passed"
+			if ev.EventType == "reminder_1" || ev.EventType == "reminder_2" {
+				if time.Now().After(issue.Deadline) {
+					return true, "deadline already passed"
+				}
 			}
 		}
 	}
 
-	// Backstop: too late to be anything but a replay.
-	if delay := time.Since(ev.ScheduledAt); delay > s.staleEventCeiling {
-		return true, "scheduled " + delay.Round(time.Hour).String() +
-			" ago, beyond the " + s.staleEventCeiling.String() + " ceiling"
+	if applyCeiling {
+		if delay := time.Since(ev.ScheduledAt); delay > s.staleEventCeiling {
+			return true, "scheduled " + delay.Round(time.Hour).String() +
+				" ago, beyond the " + s.staleEventCeiling.String() + " ceiling"
+		}
 	}
 
 	return false, ""
@@ -514,24 +511,17 @@ func (s *Scheduler) checkpointWAL(ctx context.Context) {
 	defer cancel()
 
 	err := s.store.Checkpoint(ctx)
-	if err == nil {
-		return
+
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrCheckpointBusy):
+		// Ordinary contention on a live instance, not a fault: the next
+		// pass reclaims the frames.
+		s.logger.WarnContext(ctx, "WAL checkpoint incomplete, retrying next pass")
+	default:
+		s.logger.ErrorContext(ctx, "WAL checkpoint failed",
+			slog.String("error", err.Error()))
 	}
-
-	// A reader holding an older snapshot is ordinary contention on a live
-	// instance, not a fault: the next pass reclaims the frames.
-	var busy *store.ErrCheckpointBusy
-	if errors.As(err, &busy) {
-		s.logger.WarnContext(ctx, "WAL checkpoint incomplete, retrying next pass",
-			slog.Int("log_frames", busy.LogFrames),
-			slog.Int("checkpointed_frames", busy.CheckpointedFrames),
-		)
-
-		return
-	}
-
-	s.logger.ErrorContext(ctx, "WAL checkpoint failed",
-		slog.String("error", err.Error()))
 }
 
 type schedulerError string
