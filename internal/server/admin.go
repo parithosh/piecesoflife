@@ -28,6 +28,12 @@ type AdminDashboardData struct {
 	// scheduled to open (from the pending create_next_issue event). Empty
 	// when nothing is queued or an issue is already active.
 	NextIssueOpens string
+	// UpcomingIssue is the pre-created future draft. Before curation,
+	// UpcomingQuestions contains member suggestions received from the last
+	// published issue; afterward it is the exact set that will open.
+	UpcomingIssue      *store.Issue
+	UpcomingQuestions  []store.Question
+	UpcomingIssueOpens string
 	// NextRound feeds the schedule editor: the queued (or cadence-derived)
 	// schedule of the upcoming round. Nil when auto-create is off or there
 	// is nothing to anchor a suggestion on.
@@ -180,6 +186,22 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 			questionAnswers = map[int64]int{}
 		}
 	}
+	upcomingIssue, err := s.store.GetUpcomingDraftIssue(ctx, groupID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to load upcoming issue for dashboard",
+			slog.String("error", err.Error()))
+	}
+
+	var upcomingQuestions []store.Question
+	if upcomingIssue != nil {
+		upcomingQuestions, err = s.store.ListQuestionsByIssue(ctx, upcomingIssue.ID)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to list upcoming issue questions",
+				slog.Int64("issue_id", upcomingIssue.ID),
+				slog.String("error", err.Error()))
+			upcomingQuestions = make([]store.Question, 0)
+		}
+	}
 
 	publishedStatus := "published"
 	pastIssues, err := s.store.ListIssues(ctx, groupID, &publishedStatus)
@@ -206,6 +228,10 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	loc := s.settingsLocation(ctx, settings)
+	var upcomingIssueOpens string
+	if upcomingIssue != nil {
+		upcomingIssueOpens = scheduleLabel(upcomingIssue.OpensAt, loc)
+	}
 
 	var currentCloseDate string
 	if currentIssue != nil && currentIssue.Status == "collecting" {
@@ -222,18 +248,21 @@ func (s *Server) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := AdminDashboardData{
-		PageData:         s.newPageData(r),
-		CurrentIssue:     currentIssue,
-		Progress:         progress,
-		PastIssues:       pastIssues,
-		RecentEmails:     recentEmails,
-		NextIssueOpens:   nextIssueOpens,
-		NextRound:        nextRound,
-		CurrentCloseDate: currentCloseDate,
-		MinCloseDate:     minClose.Format(scheduleDateLayout),
-		MinNextOpenDate:  today.AddDate(0, 0, 1).Format(scheduleDateLayout),
-		MaxCloseDate:     today.AddDate(0, 0, maxCloseDays).Format(scheduleDateLayout),
-		MaxNextOpenDate:  today.AddDate(0, 0, maxNextOpenDays).Format(scheduleDateLayout),
+		PageData:           s.newPageData(r),
+		CurrentIssue:       currentIssue,
+		Progress:           progress,
+		PastIssues:         pastIssues,
+		RecentEmails:       recentEmails,
+		NextIssueOpens:     nextIssueOpens,
+		UpcomingIssue:      upcomingIssue,
+		UpcomingQuestions:  upcomingQuestions,
+		UpcomingIssueOpens: upcomingIssueOpens,
+		NextRound:          nextRound,
+		CurrentCloseDate:   currentCloseDate,
+		MinCloseDate:       minClose.Format(scheduleDateLayout),
+		MinNextOpenDate:    today.AddDate(0, 0, 1).Format(scheduleDateLayout),
+		MaxCloseDate:       today.AddDate(0, 0, maxCloseDays).Format(scheduleDateLayout),
+		MaxNextOpenDate:    today.AddDate(0, 0, maxNextOpenDays).Format(scheduleDateLayout),
 		MaxNextCloseDate: today.AddDate(0, 0, maxNextOpenDays+maxSubmissionWindowDays).
 			Format(scheduleDateLayout),
 		MinWindowDays:   minSubmissionWindowDays,

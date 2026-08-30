@@ -384,7 +384,7 @@
       </footer>
       {{end}}
 
-      {{if .NextIssue}}
+      {{if and .NextIssue (not .NextIssue.QuestionsCuratedAt)}}
       <section class="pl-suggest pl-suggest--next" aria-label="Suggest a question for the next issue">
         <p class="pl-eyebrow pl-eyebrow--peacock">On the loom · opens {{.NextIssueOpens}}</p>
         <h3>Suggest a question for the next issue</h3>
@@ -413,8 +413,8 @@
 // comments.
 {{if .User}}window.POLUserID = {{.User.ID}};{{end}}
 
-// Suggest-a-question for the upcoming round (card only renders when a
-// pre-created draft exists).
+// Suggest-a-question for the upcoming round (card only renders while its
+// pre-created draft still accepts suggestions).
 (function () {
     const form = document.getElementById('next-question-form');
     if (!form) return;

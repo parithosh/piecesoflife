@@ -101,7 +101,7 @@
 
         {{/* ---- questions in this round: editable in place ----- */}}
         {{if and .Questions (ne .CurrentIssue.Status "published")}}
-        <div class="pl-qadmin" data-issue-id="{{.CurrentIssue.ID}}">
+        <div class="pl-qadmin" data-question-editor data-issue-id="{{.CurrentIssue.ID}}">
           <p class="pl-eyebrow">Questions in this round</p>
           {{range $idx, $q := .Questions}}
           {{$n := index $.QuestionAnswers $q.ID}}
@@ -110,7 +110,7 @@
             <div class="pl-qadmin-main">
               <p class="pl-qadmin-text" data-q-text>{{$q.Text}}</p>
               <p class="pl-qadmin-meta">
-                {{$q.Source}}{{if gt $n 0}} · <b>{{$n}} member{{if ne $n 1}}s{{end}} already answered</b>{{end}}
+                {{if eq $q.Source "friend"}}member suggestion{{else}}{{$q.Source}}{{end}}{{if gt $n 0}} · <b>{{$n}} member{{if ne $n 1}}s{{end}} already answered</b>{{end}}
               </p>
             </div>
             <div class="pl-qadmin-actions">
@@ -127,24 +127,14 @@
           </div>
           {{end}}
 
-          <form id="add-question-form" class="pl-qadmin-add">
-            <input type="text" id="add-question-text" class="pl-field"
+          <form class="pl-qadmin-add" data-add-question-form>
+            <input type="text" class="pl-field" data-add-question-text
                    placeholder="Add a question to this round…" maxlength="500" required>
             <button type="submit" class="pl-btn pl-btn--outline">Add</button>
           </form>
-          <p id="qadmin-status" class="pl-qadmin-status" role="status" aria-live="polite"></p>
+          <p class="pl-qadmin-status" data-qadmin-status role="status" aria-live="polite"></p>
         </div>
 
-        <dialog class="pl-dialog" id="qwarn-dialog" aria-label="Question edit warning">
-          <div class="pl-dialog-body">
-            <h3 class="pl-dialog-title">⚠ Already answered</h3>
-            <p id="qwarn-message" style="font-family:var(--font-read);color:var(--ink-soft);"></p>
-            <div class="pl-dialog-actions">
-              <button type="button" class="pl-btn pl-btn--outline" data-qwarn-cancel>Cancel</button>
-              <button type="button" class="pl-btn pl-btn--gold" data-qwarn-continue>Change it anyway</button>
-            </div>
-          </div>
-        </dialog>
         {{end}}
 
         {{/* ---- who has responded ------------------------------ */}}
@@ -217,8 +207,8 @@
         {{if .NextIssueOpens}}
         <p style="font-family:var(--font-read);color:var(--ink-soft);">
           The next round is on the loom — it opens automatically on
-          <b style="color:var(--ink);">{{.NextIssueOpens}}</b> with questions
-          picked from the bank. Or start it right now.
+          <b style="color:var(--ink);">{{.NextIssueOpens}}</b>. Curate its
+          questions below, or start it right now.
         </p>
         {{else if .Settings.AutoCreateEnabled}}
         <p style="font-family:var(--font-read);color:var(--ink-soft);">
@@ -259,6 +249,101 @@
         </div>
       </dialog>
       {{end}}
+      {{if .UpcomingIssue}}
+      <section class="pl-frame" style="margin-top:24px;padding:28px;">
+        <div class="pl-frame-head" style="padding:0 0 20px;">
+          <div class="pl-frame-head-left">
+            <div>
+              <p class="pl-eyebrow pl-eyebrow--peacock">Next issue questions</p>
+              <h2 class="pl-display" style="font-size:28px;margin:4px 0 0;">
+                {{if .UpcomingIssue.Title}}{{.UpcomingIssue.Title}}{{else}}{{formatDate .UpcomingIssue.OpensAt}}{{end}}
+              </h2>
+              <p class="pl-stat-sub" style="margin-top:6px;">Opens {{.UpcomingIssueOpens}}</p>
+            </div>
+          </div>
+          {{if .UpcomingIssue.QuestionsCuratedAt}}
+          <span class="pl-pill pl-pill--submitted">Curated</span>
+          {{else}}
+          <span class="pl-pill pl-pill--waiting">Suggestions open</span>
+          {{end}}
+        </div>
+
+        {{if .UpcomingIssue.QuestionsCuratedAt}}
+        <p style="font-family:var(--font-read);color:var(--ink-soft);margin:0 0 20px;">
+          This exact ordered set will go live automatically. Member suggestions
+          are closed; you can edit, reorder, remove, or add questions until it opens.
+        </p>
+        <div class="pl-qadmin" data-question-editor data-issue-id="{{.UpcomingIssue.ID}}">
+          <p class="pl-eyebrow">Questions ready for this issue</p>
+          {{range $idx, $q := .UpcomingQuestions}}
+          <div class="pl-qadmin-row" data-question-id="{{$q.ID}}" data-answers="0">
+            <span class="pl-qadmin-num" aria-hidden="true">{{printf "%02d" (add $idx 1)}}</span>
+            <div class="pl-qadmin-main">
+              <p class="pl-qadmin-text" data-q-text>{{$q.Text}}</p>
+              <p class="pl-qadmin-meta">{{if eq $q.Source "friend"}}member suggestion{{else}}{{$q.Source}}{{end}}</p>
+            </div>
+            <div class="pl-qadmin-actions">
+              <button type="button" class="pl-btn pl-btn--outline" data-move="up" aria-label="Move question up" {{if eq $idx 0}}disabled{{end}}>↑</button>
+              <button type="button" class="pl-btn pl-btn--outline" data-move="down" aria-label="Move question down" {{if eq (add $idx 1) (len $.UpcomingQuestions)}}disabled{{end}}>↓</button>
+              <button type="button" class="pl-btn pl-btn--outline" data-q-edit>Edit</button>
+              <button type="button" class="pl-btn pl-btn--outline" data-q-remove>Remove</button>
+            </div>
+          </div>
+          {{end}}
+          <form class="pl-qadmin-add" data-add-question-form>
+            <input type="text" class="pl-field" data-add-question-text
+                   placeholder="Add a question to this issue…" maxlength="500" required>
+            <button type="submit" class="pl-btn pl-btn--outline">Add</button>
+          </form>
+          <p class="pl-qadmin-status" data-qadmin-status role="status" aria-live="polite"></p>
+        </div>
+        {{else}}
+        <p style="font-family:var(--font-read);color:var(--ink-soft);margin:0 0 20px;">
+          Prepare the set when you're ready to review it. We'll keep every
+          member suggestion below, add enabled defaults, and fill up to
+          {{.Settings.QuestionsPerIssue}} questions from the bank. Preparing
+          closes new suggestions so nothing unreviewed can slip in later.
+        </p>
+        {{if .UpcomingQuestions}}
+        <div class="pl-qadmin">
+          <p class="pl-eyebrow">Member suggestions received · {{len .UpcomingQuestions}}</p>
+          {{range $idx, $q := .UpcomingQuestions}}
+          <div class="pl-qadmin-row">
+            <span class="pl-qadmin-num" aria-hidden="true">{{printf "%02d" (add $idx 1)}}</span>
+            <div class="pl-qadmin-main">
+              <p class="pl-qadmin-text">{{$q.Text}}</p>
+              <p class="pl-qadmin-meta">member suggestion</p>
+            </div>
+          </div>
+          {{end}}
+        </div>
+        {{else}}
+        <p class="pl-stat-sub">No member suggestions have arrived yet.</p>
+        {{end}}
+        <div style="margin-top:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <button type="button" class="pl-btn pl-btn--gold"
+                  data-prepare-questions data-issue-id="{{.UpcomingIssue.ID}}">
+            Prepare question set
+          </button>
+          <span class="pl-qadmin-status" data-prepare-status role="status" aria-live="polite"></span>
+        </div>
+        {{end}}
+      </section>
+      {{end}}
+
+      {{if or .Questions (and .UpcomingIssue .UpcomingIssue.QuestionsCuratedAt)}}
+      <dialog class="pl-dialog" id="qwarn-dialog" aria-label="Question edit warning">
+        <div class="pl-dialog-body">
+          <h3 class="pl-dialog-title">Already answered</h3>
+          <p id="qwarn-message" style="font-family:var(--font-read);color:var(--ink-soft);"></p>
+          <div class="pl-dialog-actions">
+            <button type="button" class="pl-btn pl-btn--outline" data-qwarn-cancel>Cancel</button>
+            <button type="button" class="pl-btn pl-btn--gold" data-qwarn-continue>Change it anyway</button>
+          </div>
+        </div>
+      </dialog>
+      {{end}}
+
 
       {{if or .CurrentCloseDate .NextRound}}
       <dialog id="schedule-dialog" class="pl-dialog pl-dialog--publish" aria-labelledby="schedule-dialog-title"
@@ -383,24 +468,13 @@
 <script src="/static/reorder.js?v={{assetVersion}}"></script>
 <script>
 
-// --- Live question editing --------------------------------------------
-// Admins may reword or remove the round's questions while it collects.
-// When members have already answered, a warning dialog spells out the
-// consequence first — but the admin has the final say.
+// --- Question curation -------------------------------------------------
+// Each visible issue owns an independent editor. The warning dialog is
+// shared because only collecting questions can have existing answers.
 
 (function () {
-    const container = document.querySelector('.pl-qadmin');
-    if (!container) return;
-
     const warnDialog = document.getElementById('qwarn-dialog');
-    const status = document.getElementById('qadmin-status');
 
-    const setStatus = (msg, isError) => {
-        status.textContent = msg || '';
-        status.style.color = isError ? 'var(--sindoor)' : 'var(--peacock)';
-    };
-
-    // Resolves true when the admin confirms (or no warning is needed).
     function warnIfAnswered(count, verb) {
         if (!count || !warnDialog) return Promise.resolve(true);
 
@@ -419,159 +493,196 @@
         });
     }
 
-    function startEdit(row) {
-        if (row.querySelector('.pl-qadmin-editor')) return;
-
-        const textEl = row.querySelector('[data-q-text]');
-        const actions = row.querySelector('.pl-qadmin-actions');
-
-        const editor = document.createElement('div');
-        editor.className = 'pl-qadmin-editor';
-
-        const input = document.createElement('textarea');
-        input.className = 'pl-field';
-        input.maxLength = 500;
-        input.value = textEl.textContent.trim();
-
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.className = 'pl-btn pl-btn--gold';
-        save.textContent = 'Save';
-
-        const cancel = document.createElement('button');
-        cancel.type = 'button';
-        cancel.className = 'pl-btn pl-btn--outline';
-        cancel.textContent = 'Cancel';
-
-        const btnRow = document.createElement('div');
-        btnRow.className = 'pl-qadmin-editor-actions';
-        btnRow.append(save, cancel);
-        editor.append(input, btnRow);
-
-        textEl.hidden = true;
-        actions.hidden = true;
-        row.appendChild(editor);
-        input.focus();
-
-        cancel.onclick = () => {
-            editor.remove();
-            textEl.hidden = false;
-            actions.hidden = false;
+    document.querySelectorAll('[data-question-editor]').forEach(container => {
+        const status = container.querySelector('[data-qadmin-status]');
+        const setStatus = (msg, isError) => {
+            status.textContent = msg || '';
+            status.style.color = isError ? 'var(--sindoor)' : 'var(--peacock)';
         };
 
-        save.onclick = async () => {
+        function startEdit(row) {
+            if (row.querySelector('.pl-qadmin-editor')) return;
+
+            const textEl = row.querySelector('[data-q-text]');
+            const actions = row.querySelector('.pl-qadmin-actions');
+            const editor = document.createElement('div');
+            editor.className = 'pl-qadmin-editor';
+
+            const input = document.createElement('textarea');
+            input.className = 'pl-field';
+            input.maxLength = 500;
+            input.value = textEl.textContent.trim();
+
+            const save = document.createElement('button');
+            save.type = 'button';
+            save.className = 'pl-btn pl-btn--gold';
+            save.textContent = 'Save';
+
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'pl-btn pl-btn--outline';
+            cancel.textContent = 'Cancel';
+
+            const buttonRow = document.createElement('div');
+            buttonRow.className = 'pl-qadmin-editor-actions';
+            buttonRow.append(save, cancel);
+            editor.append(input, buttonRow);
+
+            textEl.hidden = true;
+            actions.hidden = true;
+            row.appendChild(editor);
+            input.focus();
+
+            cancel.onclick = () => {
+                editor.remove();
+                textEl.hidden = false;
+                actions.hidden = false;
+            };
+
+            save.onclick = async () => {
+                const text = input.value.trim();
+                if (!text) return;
+
+                const answered = Number(row.dataset.answers || '0');
+                if (!(await warnIfAnswered(answered, 'change'))) return;
+
+                save.disabled = true;
+                try {
+                    const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
+                        method: 'PATCH',
+                        headers: apiHeaders(),
+                        body: JSON.stringify({ text }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data?.error?.message || 'Save failed');
+
+                    textEl.textContent = text;
+                    cancel.onclick();
+                    setStatus('Question updated');
+                } catch (err) {
+                    setStatus(err.message, true);
+                    save.disabled = false;
+                }
+            };
+        }
+
+        async function persistOrder() {
+            const ids = [...container.querySelectorAll('.pl-qadmin-row')]
+                .map(row => Number(row.dataset.questionId));
+            try {
+                const res = await fetch(
+                    `/api/issues/${container.dataset.issueId}/questions/reorder`,
+                    {
+                        method: 'POST',
+                        headers: apiHeaders(),
+                        body: JSON.stringify({ question_ids: ids }),
+                    },
+                );
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data?.error?.message || 'Reorder failed');
+                }
+                setStatus('Order saved');
+            } catch (err) {
+                setStatus(`${err.message} — reloading`, true);
+                setTimeout(() => window.location.reload(), 1200);
+            }
+        }
+
+        const reorder = wireReorder(container, {
+            rowSelector: '.pl-qadmin-row',
+            onMoved: rows => rows.forEach((row, index) => {
+                row.querySelector('.pl-qadmin-num').textContent =
+                    String(index + 1).padStart(2, '0');
+            }),
+            persist: persistOrder,
+        });
+
+        container.addEventListener('click', async ev => {
+            const row = ev.target.closest('.pl-qadmin-row');
+            if (!row) return;
+
+            if (ev.target.closest('[data-q-edit]')) {
+                startEdit(row);
+                return;
+            }
+
+            if (ev.target.closest('[data-q-remove]')) {
+                const button = ev.target.closest('[data-q-remove]');
+                button.disabled = true;
+                try {
+                    const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
+                        method: 'DELETE',
+                        headers: { 'X-CSRF-Token': getCSRFToken() },
+                    });
+                    if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        throw new Error(data?.error?.message || 'Remove failed');
+                    }
+                    row.remove();
+                    reorder.refresh();
+                    setStatus('Question removed');
+                } catch (err) {
+                    setStatus(err.message, true);
+                    button.disabled = false;
+                }
+            }
+        });
+
+        container.querySelector('[data-add-question-form]').addEventListener('submit', async ev => {
+            ev.preventDefault();
+
+            const input = container.querySelector('[data-add-question-text]');
             const text = input.value.trim();
             if (!text) return;
 
-            const answered = Number(row.dataset.answers || '0');
-            if (!(await warnIfAnswered(answered, 'change'))) return;
-
-            save.disabled = true;
+            setStatus('Adding…');
             try {
-                const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
-                    method: 'PATCH',
-                    headers: apiHeaders(),
-                    body: JSON.stringify({ text }),
-                });
+                const res = await fetch(
+                    `/api/issues/${container.dataset.issueId}/questions`,
+                    {
+                        method: 'POST',
+                        headers: apiHeaders(),
+                        body: JSON.stringify({ text }),
+                    },
+                );
                 const data = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(data?.error?.message || 'Save failed');
+                if (!res.ok) throw new Error(data?.error?.message || 'Add failed');
 
-                textEl.textContent = text;
-                cancel.onclick();
-                setStatus('Question updated ✓');
+                input.value = '';
+                window.location.reload();
             } catch (err) {
                 setStatus(err.message, true);
-                save.disabled = false;
             }
-        };
-    }
-
-    // Reordering: shared arrow-button helper (static/reorder.js) moves the
-    // row, renumbers, and serializes the persists. On failure, reload — the
-    // server list is the source of truth.
-    async function persistOrder() {
-        const ids = [...container.querySelectorAll('.pl-qadmin-row')]
-            .map(r => Number(r.dataset.questionId));
-        try {
-            const res = await fetch(`/api/issues/${container.dataset.issueId}/questions/reorder`, {
-                method: 'POST',
-                headers: apiHeaders(),
-                body: JSON.stringify({ question_ids: ids }),
-            });
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                throw new Error(data?.error?.message || 'Reorder failed');
-            }
-            setStatus('Order saved ✓');
-        } catch (err) {
-            setStatus(`${err.message} — reloading`, true);
-            setTimeout(() => window.location.reload(), 1200);
-        }
-    }
-
-    const reorder = wireReorder(container, {
-        rowSelector: '.pl-qadmin-row',
-        onMoved: rows => rows.forEach((r, i) => {
-            r.querySelector('.pl-qadmin-num').textContent = String(i + 1).padStart(2, '0');
-        }),
-        persist: persistOrder,
+        });
     });
 
-    container.addEventListener('click', async ev => {
-        const row = ev.target.closest('.pl-qadmin-row');
+    const prepareButton = document.querySelector('[data-prepare-questions]');
+    if (!prepareButton) return;
 
-        if (ev.target.closest('[data-q-edit]')) {
-            startEdit(row);
-            return;
-        }
+    const prepareStatus = document.querySelector('[data-prepare-status]');
+    prepareButton.addEventListener('click', async () => {
+        prepareButton.disabled = true;
+        prepareStatus.textContent = 'Preparing questions…';
+        prepareStatus.style.color = 'var(--ink-soft)';
 
-        if (ev.target.closest('[data-q-remove]')) {
-            const btn = ev.target.closest('[data-q-remove]');
-            btn.disabled = true;
-            try {
-                const res = await fetch(`/api/questions/${row.dataset.questionId}`, {
-                    method: 'DELETE',
+        try {
+            const res = await fetch(
+                `/api/issues/${prepareButton.dataset.issueId}/questions/prepare`,
+                {
+                    method: 'POST',
                     headers: { 'X-CSRF-Token': getCSRFToken() },
-                });
-                if (!res.ok) {
-                    const data = await res.json().catch(() => ({}));
-                    throw new Error(data?.error?.message || 'Remove failed');
-                }
-                row.remove();
-                reorder.refresh();
-                setStatus('Question removed');
-            } catch (err) {
-                setStatus(err.message, true);
-                btn.disabled = false;
-            }
-        }
-    });
-
-    document.getElementById('add-question-form').addEventListener('submit', async ev => {
-        ev.preventDefault();
-
-        const input = document.getElementById('add-question-text');
-        const text = input.value.trim();
-        if (!text) return;
-
-        setStatus('Adding…');
-        try {
-            const res = await fetch(`/api/issues/${container.dataset.issueId}/questions`, {
-                method: 'POST',
-                headers: apiHeaders(),
-                body: JSON.stringify({ text }),
-            });
+                },
+            );
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data?.error?.message || 'Add failed');
-
-            // Clear the field before reloading — browsers restore form
-            // state across location.reload(), which reads as "not added".
-            input.value = '';
-
-            // Simplest correct refresh: new row needs numbering + wiring.
+            if (!res.ok) {
+                throw new Error(data?.error?.message || 'Could not prepare questions');
+            }
             window.location.reload();
         } catch (err) {
-            setStatus(err.message, true);
+            prepareStatus.textContent = err.message;
+            prepareStatus.style.color = 'var(--sindoor)';
+            prepareButton.disabled = false;
         }
     });
 })();

@@ -300,6 +300,8 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/issues/{id}/responses", groupMW(s.handleListResponses))
 	s.mux.Handle("GET /api/issues/{id}/responses/mine", groupMW(s.handleListMyResponses))
 	s.mux.Handle("POST /api/issues/{id}/questions", adminMW(s.handleAddQuestion))
+	s.mux.Handle("POST /api/issues/{id}/questions/prepare",
+		adminMW(s.handlePrepareIssueQuestions))
 	s.mux.Handle("POST /api/issues/{id}/questions/reorder", adminMW(s.handleReorderQuestions))
 	s.mux.Handle("PATCH /api/questions/{id}", adminMW(s.handleEditQuestion))
 	s.mux.Handle("DELETE /api/questions/{id}", adminMW(s.handleDeleteQuestion))

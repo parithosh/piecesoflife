@@ -928,6 +928,75 @@ func (s *Server) handleListMyResponses(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"responses": enriched})
 }
 
+// handlePrepareIssueQuestions freezes an upcoming draft's suggestion window,
+// then fills its reviewable set with enabled defaults and bank questions.
+// Repeating the request while the issue is still upcoming is idempotent.
+// POST /api/issues/{id}/questions/prepare
+func (s *Server) handlePrepareIssueQuestions(w http.ResponseWriter, r *http.Request) {
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
+		return
+	}
+
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
+		return
+	}
+
+	if issue.Status != "draft" || !issue.OpensAt.After(time.Now()) {
+		writeError(w, http.StatusConflict, "issue_not_curatable",
+			"Questions can only be prepared for an upcoming issue")
+		return
+	}
+
+	settings, ok := s.loadSettingsOr500(w, r)
+	if !ok {
+		return
+	}
+
+	if err := s.store.PrepareDraftQuestions(
+		r.Context(), issue.GroupID, issue.ID, questionTarget(settings, 0),
+	); err != nil {
+		if errors.Is(err, store.ErrIssueQuestionsNotCuratable) {
+			writeError(w, http.StatusConflict, "issue_not_curatable",
+				"The issue started before its questions could be prepared")
+			return
+		}
+
+		s.logger.ErrorContext(r.Context(), "Failed to prepare upcoming issue questions",
+			slog.Int64("issue_id", issue.ID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error",
+			"Failed to prepare issue questions")
+		return
+	}
+
+	prepared, err := s.store.GetIssueByID(r.Context(), issue.ID)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to reload prepared issue",
+			slog.Int64("issue_id", issue.ID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error",
+			"Failed to load prepared issue")
+		return
+	}
+
+	questions, err := s.store.ListQuestionsByIssue(r.Context(), issue.ID)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to list prepared issue questions",
+			slog.Int64("issue_id", issue.ID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error",
+			"Failed to load prepared questions")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issue":     prepared,
+		"questions": questions,
+	})
+}
+
 // addQuestionRequest is the expected JSON body for POST /api/issues/{id}/questions.
 type addQuestionRequest struct {
 	Text      string  `json:"text"`
@@ -1214,36 +1283,32 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Member suggestions only land on the NEXT round — the upcoming draft
-	// pre-created at publish time. The current collecting round is curated
-	// by the admin alone (dashboard question editor).
-	acceptsQuestions := issue.Status == "draft" && issue.OpensAt.After(time.Now())
+	// Suggestions close as soon as an admin prepares the set: every question
+	// that goes live has then passed through the admin's curation screen.
+	acceptsQuestions := issue.Status == "draft" &&
+		issue.OpensAt.After(time.Now()) &&
+		issue.QuestionsCuratedAt == nil
 	if !acceptsQuestions {
 		writeError(w, http.StatusConflict, "not_accepting_suggestions",
-			"Suggestions are only accepted for the next issue, before it opens")
+			"Suggestions are closed for this issue")
 		return
 	}
 
-	// Determine sort order by appending after existing questions.
-	existingQuestions, err := s.store.ListQuestionsByIssue(r.Context(), req.IssueID)
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "Failed to list questions for sort order",
-			slog.Int64("issue_id", req.IssueID),
-			slog.String("error", err.Error()))
-	}
-
-	sortOrder := len(existingQuestions)
-
-	questionID, err := s.store.CreateQuestion(
-		r.Context(), req.IssueID, req.Text, req.Category, "friend", &user.ID, sortOrder,
+	questionID, err := s.store.CreateSuggestedQuestion(
+		r.Context(), issue.GroupID, issue.ID, user.ID, req.Text, req.Category,
 	)
 	if err != nil {
+		if errors.Is(err, store.ErrIssueNotAcceptingSuggestions) {
+			writeError(w, http.StatusConflict, "not_accepting_suggestions",
+				"Suggestions closed while this question was being sent")
+			return
+		}
+
 		s.logger.ErrorContext(r.Context(), "Failed to create friend question",
 			slog.Int64("issue_id", req.IssueID),
 			slog.Int64("user_id", user.ID),
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to submit question")
-
 		return
 	}
 
