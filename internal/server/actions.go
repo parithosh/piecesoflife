@@ -1031,6 +1031,42 @@ func addMonthsClamped(t time.Time, months int) time.Time {
 	)
 }
 
+// CheckUploadIntegrity reconciles the uploads directory against the rows
+// that reference it, logging any disagreement. Report-only: it never
+// deletes a file, because the interesting case is rows going missing, not
+// files.
+//
+// Orphaned files are the tell. Deleting a block or dump item unlinks its
+// file, so a file nobody references is the residue of a row that vanished
+// — the signal that sat unread for three weeks after the 2026-08-05
+// stale-snapshot restore stranded a month of answers.
+func (s *Server) CheckUploadIntegrity(ctx context.Context) error {
+	report, err := s.store.CheckUploadIntegrity(ctx, s.config.UploadPath)
+	if err != nil {
+		return fmt.Errorf("checking upload integrity: %w", err)
+	}
+
+	if report.Healthy() {
+		s.logger.InfoContext(ctx, "Upload integrity verified",
+			slog.Int("referenced", report.Referenced),
+			slog.Int("on_disk", report.OnDisk),
+		)
+
+		return nil
+	}
+
+	s.logger.ErrorContext(ctx, "Upload integrity mismatch",
+		slog.Int("referenced", report.Referenced),
+		slog.Int("on_disk", report.OnDisk),
+		slog.Int("orphaned_files", report.Orphaned),
+		slog.Int("missing_files", report.Missing),
+		slog.Any("orphan_sample", report.OrphanSample),
+		slog.Any("missing_sample", report.MissingSample),
+	)
+
+	return nil
+}
+
 // SendCommentDigests drains the comment-notification queue into at most one
 // email per recipient — a chatty newsletter must not mean an inbox full of
 // per-comment pings. Fired daily by the comment_digest scheduler event.

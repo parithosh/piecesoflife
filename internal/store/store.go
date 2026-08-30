@@ -82,6 +82,14 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 
 	readDB.SetMaxOpenConns(4)
 
+	// Recycle read connections. A pooled connection that lives forever can
+	// hold a WAL read snapshot open indefinitely, and a checkpoint cannot
+	// reclaim WAL frames past the oldest live reader — that is how a 7.9MB
+	// database ends up with a 99MB -wal in production. Recycling bounds the
+	// oldest snapshot, so checkpoints can actually truncate.
+	readDB.SetConnMaxIdleTime(2 * time.Minute)
+	readDB.SetConnMaxLifetime(1 * time.Hour)
+
 	if err := writeDB.PingContext(ctx); err != nil {
 		writeDB.Close()
 		readDB.Close()
@@ -106,9 +114,23 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 	}, nil
 }
 
-// Close closes both read and write database connections.
+// Close checkpoints the WAL, then closes both connection pools. The
+// checkpoint matters beyond tidiness: it collapses the -wal back into the
+// main database file, so an operator who copies the bare .db afterwards
+// gets a complete database instead of silently losing every uncheckpointed
+// transaction.
 func (s *Store) Close() error {
 	var errs []error
+
+	// Best effort, and deliberately before the pools shut: a failed
+	// checkpoint must not prevent shutdown.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := s.Checkpoint(ctx); err != nil {
+		s.logger.WarnContext(ctx, "WAL checkpoint on shutdown failed",
+			slog.String("error", err.Error()))
+	}
+
+	cancel()
 
 	if err := s.write.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("closing write db: %w", err))
@@ -121,6 +143,39 @@ func (s *Store) Close() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("closing store: %v", errs)
 	}
+
+	return nil
+}
+
+// Checkpoint runs a TRUNCATE WAL checkpoint: flush every WAL frame into the
+// main database and reset the -wal file to zero length.
+//
+// SQLite's autocheckpoint is passive and gives up when a reader still holds
+// an older snapshot, so a busy instance can accumulate an unbounded WAL.
+// TRUNCATE reports that contention instead of hiding it — busy > 0 means
+// frames could not be reclaimed this pass.
+func (s *Store) Checkpoint(ctx context.Context) error {
+	var busy, logFrames, checkpointed int
+
+	if err := s.write.QueryRowContext(ctx,
+		"PRAGMA wal_checkpoint(TRUNCATE)",
+	).Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return fmt.Errorf("checkpointing wal: %w", err)
+	}
+
+	if busy != 0 {
+		s.logger.WarnContext(ctx, "WAL checkpoint blocked by an open reader",
+			slog.Int("log_frames", logFrames),
+			slog.Int("checkpointed_frames", checkpointed),
+		)
+
+		return nil
+	}
+
+	s.logger.DebugContext(ctx, "WAL checkpoint complete",
+		slog.Int("log_frames", logFrames),
+		slog.Int("checkpointed_frames", checkpointed),
+	)
 
 	return nil
 }

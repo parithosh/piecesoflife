@@ -63,9 +63,24 @@ func run() error {
 	}
 	defer db.Close()
 
+	// Guard before touching the schema. A database older than the data
+	// directory around it is a restore from a stale snapshot; migrating it
+	// forward replays the schema on old data and strands everything
+	// written since. This is what silently lost a month of answers on
+	// 2026-08-05, so it fails closed.
+	if err := db.VerifyDataDirectory(ctx, cfg.AllowDBRollback); err != nil {
+		return fmt.Errorf("verifying data directory: %w", err)
+	}
+
 	// Run migrations.
 	if err := db.RunMigrations(ctx); err != nil {
 		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	// Record the new high-water mark on every boot, including boots with
+	// nothing pending, so installs predating this guard get a baseline.
+	if err := db.RecordDataDirectoryState(ctx); err != nil {
+		return fmt.Errorf("recording data directory state: %w", err)
 	}
 
 	// Seed data. Order matters: the default group must exist before the

@@ -28,6 +28,7 @@ type Actions interface {
 	CreateNextIssue(ctx context.Context, groupID int64, scheduledAt time.Time) error
 	ReconcileAutoCreate(ctx context.Context) error
 	SendCommentDigests(ctx context.Context) error
+	CheckUploadIntegrity(ctx context.Context) error
 }
 
 // Scheduler dispatches timed scheduler_events.
@@ -44,6 +45,22 @@ type Scheduler struct {
 	// the event logs an ERROR, stays unfired, and retries next tick.
 	eventTimeout time.Duration
 
+	// staleEventCeiling is how late a member-visible event may fire.
+	// Beyond it the event is skipped, not fired.
+	//
+	// This exists because of the 2026-08-05 incident: a restore handed the
+	// app a month-old database, and the catch-up pass fired reminder_1
+	// (23 days late), reminder_2 (18 days) and auto_close (16 days) within
+	// 16 seconds — mailing members to answer a round they had already
+	// finished, then publishing it. Catch-up is right for a short outage
+	// and wrong for a stale database, and lateness is what separates them.
+	staleEventCeiling time.Duration
+
+	// checkpointInterval is how often the loop truncates the WAL. SQLite's
+	// passive autocheckpoint yields to open readers and can leave the -wal
+	// growing without bound.
+	checkpointInterval time.Duration
+
 	// lastTick is the UnixNano of the scheduler's last progress — a
 	// completed dispatch pass or an individual event within one — exposed
 	// via LastTick so /health can detect a wedged loop without flagging a
@@ -57,11 +74,13 @@ type Scheduler struct {
 // New constructs a Scheduler. Start must be called to begin dispatching.
 func New(st *store.Store, actions Actions, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		store:        st,
-		actions:      actions,
-		logger:       logger.With(slog.String("component", "scheduler")),
-		tickInterval: 60 * time.Second,
-		eventTimeout: 2 * time.Minute,
+		store:              st,
+		actions:            actions,
+		logger:             logger.With(slog.String("component", "scheduler")),
+		tickInterval:       60 * time.Second,
+		eventTimeout:       2 * time.Minute,
+		staleEventCeiling:  48 * time.Hour,
+		checkpointInterval: 6 * time.Hour,
 	}
 }
 
@@ -101,7 +120,13 @@ func (s *Scheduler) Start(parent context.Context) {
 		//     queued). Repeated daily from the tick loop.
 		s.reconcileAutoCreate(ctx)
 
+		// 1c. Reconcile media on disk against the rows that reference it.
+		//     Orphaned files mean rows disappeared — the signal that went
+		//     unnoticed for three weeks after the 2026-08-05 restore.
+		s.checkUploadIntegrity(ctx)
+
 		lastReconcile := time.Now()
+		lastCheckpoint := time.Now()
 
 		// 2. Make sure the daily cleanup events are queued. Idempotent —
 		//    EnsureDailyEvent inserts nothing when the event already exists.
@@ -124,6 +149,12 @@ func (s *Scheduler) Start(parent context.Context) {
 				if time.Since(lastReconcile) >= 24*time.Hour {
 					lastReconcile = time.Now()
 					s.reconcileAutoCreate(ctx)
+					s.checkUploadIntegrity(ctx)
+				}
+
+				if time.Since(lastCheckpoint) >= s.checkpointInterval {
+					lastCheckpoint = time.Now()
+					s.checkpointWAL(ctx)
 				}
 			}
 		}
@@ -216,6 +247,33 @@ func (s *Scheduler) fireEvent(
 				return
 			}
 		}
+	}
+
+	// Two guards stand between a stale event and a member's inbox.
+	//
+	// The semantic one is primary: a reminder for a round that is no longer
+	// collecting, or an auto_close for a round already published, is wrong
+	// regardless of how late it is. It also covers small delays that a
+	// lateness ceiling would wave through — a container restart, clock
+	// skew, or an admin editing a deadline backwards.
+	//
+	// The lateness ceiling is the backstop for anything the semantic check
+	// cannot revalidate.
+	if skip, reason := s.shouldSkipEvent(ctx, ev); skip {
+		logger.ErrorContext(ctx, "Skipping stale scheduler event",
+			slog.String("reason", reason),
+			slog.Time("scheduled_at", ev.ScheduledAt),
+			slog.Duration("delay", time.Since(ev.ScheduledAt)),
+		)
+
+		// Marked fired so it never retries. It is not coming back: the
+		// round it belonged to has moved on.
+		if markErr := s.store.MarkEventFired(ctx, ev.ID, true); markErr != nil {
+			logger.ErrorContext(ctx, "Failed to mark skipped event fired",
+				slog.String("error", markErr.Error()))
+		}
+
+		return
 	}
 
 	var err error
@@ -346,6 +404,92 @@ func (s *Scheduler) reconcileAutoCreate(ctx context.Context) {
 
 	if err := s.actions.ReconcileAutoCreate(ctx); err != nil {
 		s.logger.ErrorContext(ctx, "Auto-create reconcile failed",
+			slog.String("error", err.Error()))
+	}
+}
+
+// memberVisibleEvents are the event types that email members or change what
+// they see. Only these are subject to the staleness ceiling; the cleanup
+// and digest events are idempotent maintenance and always safe to catch up.
+var memberVisibleEvents = map[string]struct{}{
+	"reminder_1":        {},
+	"reminder_2":        {},
+	"admin_summary":     {},
+	"auto_close":        {},
+	"create_next_issue": {},
+}
+
+// shouldSkipEvent decides whether an overdue event has been overtaken by
+// reality. It returns the reason so the skip is greppable in logs.
+//
+// Failures to load the issue return false: a transient store error must not
+// silently drop a legitimate event. The handler will surface the error and
+// the event retries next tick.
+func (s *Scheduler) shouldSkipEvent(
+	ctx context.Context, ev store.SchedulerEvent,
+) (bool, string) {
+	if _, visible := memberVisibleEvents[ev.EventType]; !visible {
+		return false, ""
+	}
+
+	// Semantic check: is the round this event refers to still in the state
+	// the event assumes?
+	if ev.IssueID != nil {
+		issue, err := s.store.GetIssueByID(ctx, *ev.IssueID)
+		if err == nil {
+			switch ev.EventType {
+			case "reminder_1", "reminder_2", "admin_summary", "auto_close":
+				// All four only make sense while the round is open.
+				if issue.Status != "collecting" {
+					return true, "issue is " + issue.Status + ", not collecting"
+				}
+
+			case "create_next_issue":
+				// Opens a pre-created draft; anything else already opened.
+				if issue.Status != "draft" {
+					return true, "next issue is " + issue.Status + ", not draft"
+				}
+			}
+
+			// A reminder is pointless once the deadline has passed — the
+			// round is about to close, or should already have.
+			if ev.EventType == "reminder_1" || ev.EventType == "reminder_2" {
+				if time.Now().After(issue.Deadline) {
+					return true, "deadline already passed"
+				}
+			}
+		}
+	}
+
+	// Backstop: too late to be anything but a replay.
+	if delay := time.Since(ev.ScheduledAt); delay > s.staleEventCeiling {
+		return true, "scheduled " + delay.Round(time.Hour).String() +
+			" ago, beyond the " + s.staleEventCeiling.String() + " ceiling"
+	}
+
+	return false, ""
+}
+
+// checkUploadIntegrity reconciles media on disk against the rows that
+// reference it and logs the outcome. Report-only — it never deletes.
+func (s *Scheduler) checkUploadIntegrity(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, s.eventTimeout)
+	defer cancel()
+
+	if err := s.actions.CheckUploadIntegrity(ctx); err != nil {
+		s.logger.ErrorContext(ctx, "Upload integrity check failed",
+			slog.String("error", err.Error()))
+	}
+}
+
+// checkpointWAL truncates the write-ahead log so it cannot grow without
+// bound and so a bare copy of the database file stays complete.
+func (s *Scheduler) checkpointWAL(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, s.eventTimeout)
+	defer cancel()
+
+	if err := s.store.Checkpoint(ctx); err != nil {
+		s.logger.ErrorContext(ctx, "WAL checkpoint failed",
 			slog.String("error", err.Error()))
 	}
 }

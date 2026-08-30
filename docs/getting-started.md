@@ -54,6 +54,7 @@ Point your reverse proxy at the app port, and open your `BASE_URL`.
 | `PORT` | | `8080` | Listen port |
 | `DEV_MODE` | | `false` | Dev conveniences; **never in production** |
 | `DATABASE_PATH` | ✳ | — | SQLite file path |
+| `ALLOW_DB_ROLLBACK` | | `false` | Permit booting a database older than its data directory — see [Backups & moving servers](#backups--moving-servers) |
 | `UPLOAD_PATH` | ✳ | — | Media uploads directory |
 | `ADMIN_EMAIL` | ✳ | — | First admin account, seeded on boot |
 | `SESSION_SECRET` | ✳ | — | Signs CSRF cookies; long random string |
@@ -66,6 +67,34 @@ Point your reverse proxy at the app port, and open your `BASE_URL`.
 | `LOG_LEVEL` / `LOG_FORMAT` | | `info` / `json` | Logging |
 
 Uploads are capped at 200 MB per file.
+
+### Backups & moving servers
+
+The app runs SQLite in WAL mode, so the database is `piecesoflife.db` **plus**
+a `-wal` sibling holding recent commits. Copying the bare `.db` while the app
+is running silently discards everything still in the WAL. Move a deployment
+one of two ways:
+
+- `sqlite3 piecesoflife.db "VACUUM INTO '/path/snapshot.db'"` — one
+  self-contained file, safe to take while running, needs no siblings; or
+- stop the app, then copy `.db`, `.db-wal` and `.db-shm` together.
+
+After restoring, verify before trusting: compare `SELECT COUNT(*) FROM
+responses` on source and destination.
+
+Two safety nets run automatically. The app records its schema high-water mark
+in a `piecesoflife.db.state` sidecar and **refuses to start** if it is handed
+a database older than the data directory around it — the fingerprint of a
+restore from a stale snapshot. Keep that sidecar with the database when you
+move a deployment. If you are deliberately running an older database, set
+`ALLOW_DB_ROLLBACK=true`. Separately, every boot reconciles the uploads
+directory against the rows referencing it and logs an `Upload integrity
+mismatch` error when files exist that nothing points at — the visible residue
+of rows that went missing.
+
+Migrations snapshot the database first, to
+`piecesoflife.db.backup-before-<version>-<timestamp>`. Those accumulate; prune
+old ones yourself, and keep copies off the machine.
 
 ## 2. First login
 
