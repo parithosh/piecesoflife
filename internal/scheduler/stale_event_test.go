@@ -20,6 +20,8 @@ type recordingActions struct {
 
 	reminders atomic.Int32
 	publishes atomic.Int32
+	creates   atomic.Int32
+	summaries atomic.Int32
 }
 
 func (r *recordingActions) SendReminderForIssue(
@@ -32,6 +34,22 @@ func (r *recordingActions) SendReminderForIssue(
 
 func (r *recordingActions) AutoPublishIssue(context.Context, int64) error {
 	r.publishes.Add(1)
+
+	return nil
+}
+
+func (r *recordingActions) CreateNextIssue(
+	context.Context, int64, time.Time,
+) error {
+	r.creates.Add(1)
+
+	return nil
+}
+
+func (r *recordingActions) SendAdminSummaryForIssue(
+	context.Context, int64, *int64,
+) error {
+	r.summaries.Add(1)
 
 	return nil
 }
@@ -175,4 +193,74 @@ func TestCleanupEventStillCatchesUpWhenVeryLate(t *testing.T) {
 	remaining, err := st.GetOverdueEvents(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "cleanup must run, however late")
+}
+
+// TestUnreadableIssueIsNotSkipped is the guard against the gate eating work
+// it could not verify. Skipping marks an event fired and consumes it
+// forever, so a failed issue lookup must not be grounds for it — not even
+// past the staleness ceiling, where the temporal backstop would otherwise
+// fire blind on an event that might be perfectly legitimate.
+//
+// A dangling issue_id cannot be inserted (foreign keys forbid it), so the
+// unreadable case is produced the way it actually occurs in production: the
+// store call fails.
+func TestUnreadableIssueIsNotSkipped(t *testing.T) {
+	sched, _, issueID := newStaleEventFixture(t, &recordingActions{})
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ev := store.SchedulerEvent{
+		ID:          1,
+		IssueID:     &issueID,
+		EventType:   "reminder_1",
+		ScheduledAt: time.Now().UTC().Add(-30 * 24 * time.Hour),
+	}
+
+	skip, reason := sched.shouldSkipEvent(dead, ev)
+
+	assert.False(t, skip,
+		"an event we could not revalidate must not be skipped, however late")
+	assert.Empty(t, reason)
+}
+
+// TestCreateNextIssueSkippedWhenAlreadyOpened covers the fifth gated event
+// type: the event opens a pre-created draft, so anything else means the
+// round is already open and reopening it would rewind a live round.
+func TestCreateNextIssueSkippedWhenAlreadyOpened(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	setCollecting(t, st, issueID)
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "create_next_issue", time.Now().UTC().Add(-time.Minute),
+	))
+
+	sched.fireOverdueEvents(ctx, false)
+
+	assert.Zero(t, actions.creates.Load(),
+		"a round that is already collecting must not be opened again")
+}
+
+// TestAdminSummaryFiresAfterDeadlineWhileCollecting pins the deliberate
+// asymmetry: admin_summary is scheduled at the same hour as reminder_2 but
+// deliberately has no deadline test, because the admin still wants the
+// round's numbers while it is closing.
+func TestAdminSummaryFiresAfterDeadlineWhileCollecting(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	setCollecting(t, st, issueID)
+
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "admin_summary", time.Now().UTC().Add(-time.Minute),
+	))
+
+	sched.fireOverdueEvents(ctx, false)
+
+	assert.Equal(t, int32(1), actions.summaries.Load(),
+		"admin summary must still reach the admin of a collecting round")
 }

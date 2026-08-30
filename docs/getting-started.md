@@ -82,15 +82,26 @@ one of two ways:
 After restoring, verify before trusting: compare `SELECT COUNT(*) FROM
 responses` on source and destination.
 
-Two safety nets run automatically. The app records its schema high-water mark
-in a `piecesoflife.db.state` sidecar and **refuses to start** if it is handed
-a database older than the data directory around it — the fingerprint of a
-restore from a stale snapshot. Keep that sidecar with the database when you
-move a deployment. If you are deliberately running an older database, set
-`ALLOW_DB_ROLLBACK=true`. Separately, every boot reconciles the uploads
-directory against the rows referencing it and logs an `Upload integrity
-mismatch` error when files exist that nothing points at — the visible residue
-of rows that went missing.
+Two safety nets run automatically.
+
+**Rollback guard.** On every boot the app writes a `piecesoflife.db.state`
+sidecar recording two high-water marks: the number of applied migrations, and
+a boot counter kept inside the database's SQLite header. If the database it
+is handed reports a lower value for either, it **refuses to start** — the
+fingerprint of a restore from a stale snapshot. The boot counter is what
+catches a rollback to a snapshot on the *same* schema, which a migration
+count alone cannot see. Two limits worth knowing: the marks are established
+on the first boot and enforced from the second, and the sidecar must travel
+with the database — copy the whole data directory, not just the `.db`, or the
+guard silently re-baselines on the new host. Set `ALLOW_DB_ROLLBACK=true` when
+you are deliberately running an older database. None of this substitutes for
+the row-count check above.
+
+**Upload reconciliation.** Every boot, and daily thereafter, the app compares
+the uploads directory against the rows referencing it and logs an `Upload
+integrity mismatch` error listing files nothing points at. Since deleting an
+answer block or dump item unlinks its file, an unreferenced file is the
+visible residue of a row that went missing. It only reports; it never deletes.
 
 Migrations snapshot the database first, to
 `piecesoflife.db.backup-before-<version>-<timestamp>`. Those accumulate; prune

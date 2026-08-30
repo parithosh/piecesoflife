@@ -82,11 +82,13 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 
 	readDB.SetMaxOpenConns(4)
 
-	// Recycle read connections. A pooled connection that lives forever can
-	// hold a WAL read snapshot open indefinitely, and a checkpoint cannot
-	// reclaim WAL frames past the oldest live reader — that is how a 7.9MB
-	// database ends up with a 99MB -wal in production. Recycling bounds the
-	// oldest snapshot, so checkpoints can actually truncate.
+	// Recycle read connections. An *idle* pooled connection holds no WAL
+	// read snapshot — SQLite ends the snapshot when the statement or
+	// transaction does — so this is not what bounds WAL growth; the
+	// explicit Checkpoint below is. What recycling does buy is a ceiling on
+	// a connection that leaked an open read transaction, which would
+	// otherwise pin the oldest snapshot for the process's lifetime and
+	// block every checkpoint behind it.
 	readDB.SetConnMaxIdleTime(2 * time.Minute)
 	readDB.SetConnMaxLifetime(1 * time.Hour)
 
@@ -122,11 +124,13 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 func (s *Store) Close() error {
 	var errs []error
 
-	// Best effort, and deliberately before the pools shut: a failed
-	// checkpoint must not prevent shutdown.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Best effort, and deliberately before the pools shut: a blocked or
+	// failed checkpoint must not prevent shutdown. Generous timeout — a
+	// large WAL takes real time to fold into the main file, and giving up
+	// early is exactly what leaves a bare .db copy incomplete.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := s.Checkpoint(ctx); err != nil {
-		s.logger.WarnContext(ctx, "WAL checkpoint on shutdown failed",
+		s.logger.WarnContext(ctx, "WAL checkpoint on shutdown did not complete",
 			slog.String("error", err.Error()))
 	}
 
@@ -147,13 +151,29 @@ func (s *Store) Close() error {
 	return nil
 }
 
+// ErrCheckpointBusy reports that a checkpoint could not reclaim the whole
+// WAL because a reader still held an older snapshot. Distinct from a failed
+// pragma: the database is fine, but the -wal still holds frames, so a bare
+// copy of the .db is NOT complete.
+type ErrCheckpointBusy struct {
+	LogFrames          int
+	CheckpointedFrames int
+}
+
+func (e *ErrCheckpointBusy) Error() string {
+	return fmt.Sprintf(
+		"wal checkpoint blocked by an open reader: %d of %d frames reclaimed",
+		e.CheckpointedFrames, e.LogFrames,
+	)
+}
+
 // Checkpoint runs a TRUNCATE WAL checkpoint: flush every WAL frame into the
 // main database and reset the -wal file to zero length.
 //
-// SQLite's autocheckpoint is passive and gives up when a reader still holds
-// an older snapshot, so a busy instance can accumulate an unbounded WAL.
-// TRUNCATE reports that contention instead of hiding it — busy > 0 means
-// frames could not be reclaimed this pass.
+// A nil return is the caller's proof that the WAL is empty and the bare .db
+// is a complete copy. SQLite signals incomplete work by setting the
+// pragma's first column rather than failing, so that case comes back as
+// ErrCheckpointBusy instead of being flattened into success.
 func (s *Store) Checkpoint(ctx context.Context) error {
 	var busy, logFrames, checkpointed int
 
@@ -164,12 +184,10 @@ func (s *Store) Checkpoint(ctx context.Context) error {
 	}
 
 	if busy != 0 {
-		s.logger.WarnContext(ctx, "WAL checkpoint blocked by an open reader",
-			slog.Int("log_frames", logFrames),
-			slog.Int("checkpointed_frames", checkpointed),
-		)
-
-		return nil
+		return &ErrCheckpointBusy{
+			LogFrames:          logFrames,
+			CheckpointedFrames: checkpointed,
+		}
 	}
 
 	s.logger.DebugContext(ctx, "WAL checkpoint complete",

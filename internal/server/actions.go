@@ -1050,6 +1050,7 @@ func (s *Server) CheckUploadIntegrity(ctx context.Context) error {
 		s.logger.InfoContext(ctx, "Upload integrity verified",
 			slog.Int("referenced", report.Referenced),
 			slog.Int("on_disk", report.OnDisk),
+			slog.Int("outside_root", report.OutsideRoot),
 		)
 
 		return nil
@@ -1060,6 +1061,7 @@ func (s *Server) CheckUploadIntegrity(ctx context.Context) error {
 		slog.Int("on_disk", report.OnDisk),
 		slog.Int("orphaned_files", report.Orphaned),
 		slog.Int("missing_files", report.Missing),
+		slog.Int("outside_root", report.OutsideRoot),
 		slog.Any("orphan_sample", report.OrphanSample),
 		slog.Any("missing_sample", report.MissingSample),
 	)

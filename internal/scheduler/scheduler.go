@@ -6,6 +6,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -120,17 +121,24 @@ func (s *Scheduler) Start(parent context.Context) {
 		//     queued). Repeated daily from the tick loop.
 		s.reconcileAutoCreate(ctx)
 
-		// 1c. Reconcile media on disk against the rows that reference it.
-		//     Orphaned files mean rows disappeared — the signal that went
-		//     unnoticed for three weeks after the 2026-08-05 restore.
-		s.checkUploadIntegrity(ctx)
-
 		lastReconcile := time.Now()
 		lastCheckpoint := time.Now()
 
 		// 2. Make sure the daily cleanup events are queued. Idempotent —
 		//    EnsureDailyEvent inserts nothing when the event already exists.
 		s.scheduleDailyCleanup(ctx)
+
+		s.lastTick.Store(time.Now().UnixNano())
+
+		// 3. Reconcile media on disk against the rows that reference it.
+		//    Orphaned files mean rows disappeared — the signal that went
+		//    unnoticed for three weeks after the 2026-08-05 restore.
+		//
+		//    Deliberately last in startup: it walks the whole uploads tree
+		//    with synchronous filesystem calls, which on network storage
+		//    can outlast its timeout. Nothing scheduled may queue behind a
+		//    diagnostic.
+		s.checkUploadIntegrity(ctx)
 
 		s.lastTick.Store(time.Now().UnixNano())
 
@@ -188,13 +196,20 @@ func (s *Scheduler) fireOverdueEvents(ctx context.Context, startup bool) {
 			return
 		}
 
-		wasLate := startup && time.Since(ev.ScheduledAt) > 5*time.Minute
+		// Lateness is a property of the event, not of how we found it. It
+		// used to be scoped to the startup pass, which meant an event that
+		// went stale while the app was running recorded was_late = false —
+		// inconsistent now that the skip gate judges the same delay on
+		// every pass.
+		delay := time.Since(ev.ScheduledAt)
+		wasLate := delay > 5*time.Minute
 
 		if wasLate {
 			s.logger.InfoContext(ctx, "Firing late event",
 				slog.String("event_type", ev.EventType),
 				slog.Time("scheduled_at", ev.ScheduledAt),
-				slog.Duration("delay", time.Since(ev.ScheduledAt)),
+				slog.Duration("delay", delay),
+				slog.Bool("startup", startup),
 			)
 		}
 
@@ -422,9 +437,9 @@ var memberVisibleEvents = map[string]struct{}{
 // shouldSkipEvent decides whether an overdue event has been overtaken by
 // reality. It returns the reason so the skip is greppable in logs.
 //
-// Failures to load the issue return false: a transient store error must not
-// silently drop a legitimate event. The handler will surface the error and
-// the event retries next tick.
+// A failed issue lookup returns false and skips the ceiling too. Skipping
+// consumes an event permanently, so a transient read error must never be
+// grounds for it: better to let the handler run, fail, and retry next tick.
 func (s *Scheduler) shouldSkipEvent(
 	ctx context.Context, ev store.SchedulerEvent,
 ) (bool, string) {
@@ -436,27 +451,37 @@ func (s *Scheduler) shouldSkipEvent(
 	// the event assumes?
 	if ev.IssueID != nil {
 		issue, err := s.store.GetIssueByID(ctx, *ev.IssueID)
-		if err == nil {
-			switch ev.EventType {
-			case "reminder_1", "reminder_2", "admin_summary", "auto_close":
-				// All four only make sense while the round is open.
-				if issue.Status != "collecting" {
-					return true, "issue is " + issue.Status + ", not collecting"
-				}
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Cannot revalidate event, leaving it pending",
+				slog.Int64("event_id", ev.ID),
+				slog.String("event_type", ev.EventType),
+				slog.String("error", err.Error()),
+			)
 
-			case "create_next_issue":
-				// Opens a pre-created draft; anything else already opened.
-				if issue.Status != "draft" {
-					return true, "next issue is " + issue.Status + ", not draft"
-				}
+			return false, ""
+		}
+
+		switch ev.EventType {
+		case "reminder_1", "reminder_2", "admin_summary", "auto_close":
+			// All four only make sense while the round is open.
+			if issue.Status != "collecting" {
+				return true, "issue is " + issue.Status + ", not collecting"
 			}
 
-			// A reminder is pointless once the deadline has passed — the
-			// round is about to close, or should already have.
-			if ev.EventType == "reminder_1" || ev.EventType == "reminder_2" {
-				if time.Now().After(issue.Deadline) {
-					return true, "deadline already passed"
-				}
+		case "create_next_issue":
+			// Opens a pre-created draft; anything else already opened.
+			if issue.Status != "draft" {
+				return true, "next issue is " + issue.Status + ", not draft"
+			}
+		}
+
+		// A reminder is pointless once the deadline has passed — the round
+		// is about to close, or should already have. Reminders are queued
+		// at least minReminderLead (12h) before the deadline, so this can
+		// only trigger on a genuine replay, never on a normal restart.
+		if ev.EventType == "reminder_1" || ev.EventType == "reminder_2" {
+			if time.Now().After(issue.Deadline) {
+				return true, "deadline already passed"
 			}
 		}
 	}
@@ -488,10 +513,25 @@ func (s *Scheduler) checkpointWAL(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, s.eventTimeout)
 	defer cancel()
 
-	if err := s.store.Checkpoint(ctx); err != nil {
-		s.logger.ErrorContext(ctx, "WAL checkpoint failed",
-			slog.String("error", err.Error()))
+	err := s.store.Checkpoint(ctx)
+	if err == nil {
+		return
 	}
+
+	// A reader holding an older snapshot is ordinary contention on a live
+	// instance, not a fault: the next pass reclaims the frames.
+	var busy *store.ErrCheckpointBusy
+	if errors.As(err, &busy) {
+		s.logger.WarnContext(ctx, "WAL checkpoint incomplete, retrying next pass",
+			slog.Int("log_frames", busy.LogFrames),
+			slog.Int("checkpointed_frames", busy.CheckpointedFrames),
+		)
+
+		return
+	}
+
+	s.logger.ErrorContext(ctx, "WAL checkpoint failed",
+		slog.String("error", err.Error()))
 }
 
 type schedulerError string
