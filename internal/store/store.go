@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -106,7 +107,9 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 	}, nil
 }
 
-// Close closes both read and write database connections.
+// Close closes both connection pools. SQLite checkpoints the WAL itself
+// when the last connection to the database closes, so the -wal collapses
+// into the main file here without an explicit pass.
 func (s *Store) Close() error {
 	var errs []error
 
@@ -121,6 +124,40 @@ func (s *Store) Close() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("closing store: %v", errs)
 	}
+
+	return nil
+}
+
+// ErrCheckpointBusy reports that a checkpoint could not reclaim the whole
+// WAL because a reader still held an older snapshot. Distinct from a failed
+// pragma: the database is fine, but the -wal still holds frames.
+var ErrCheckpointBusy = errors.New("wal checkpoint blocked by an open reader")
+
+// Checkpoint runs a TRUNCATE WAL checkpoint: flush every WAL frame into the
+// main database and reset the -wal file to zero length. Left to itself
+// SQLite only checkpoints passively, yielding to readers, which is how a
+// 7.9MB database grew a 99MB -wal in production.
+//
+// A nil return means the WAL is empty. SQLite signals incomplete work by
+// setting the pragma's first column rather than failing, so that case comes
+// back as ErrCheckpointBusy instead of being flattened into success.
+func (s *Store) Checkpoint(ctx context.Context) error {
+	var busy, logFrames, checkpointed int
+
+	if err := s.write.QueryRowContext(ctx,
+		"PRAGMA wal_checkpoint(TRUNCATE)",
+	).Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return fmt.Errorf("checkpointing wal: %w", err)
+	}
+
+	if busy != 0 {
+		return ErrCheckpointBusy
+	}
+
+	s.logger.DebugContext(ctx, "WAL checkpoint complete",
+		slog.Int("log_frames", logFrames),
+		slog.Int("checkpointed_frames", checkpointed),
+	)
 
 	return nil
 }

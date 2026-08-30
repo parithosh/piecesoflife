@@ -67,6 +67,45 @@ Point your reverse proxy at the app port, and open your `BASE_URL`.
 
 Uploads are capped at 200 MB per file.
 
+### Backups & moving servers
+
+The app runs SQLite in WAL mode, so the database is `piecesoflife.db` **plus**
+a `-wal` sibling holding recent commits. Copying the bare `.db` while the app
+is running silently discards everything still in the WAL. Move a deployment
+one of two ways:
+
+- `sqlite3 piecesoflife.db "VACUUM INTO '/path/snapshot.db'"` — one
+  self-contained file, safe to take while running, needs no siblings; or
+- stop the app, then copy `.db`, `.db-wal` and `.db-shm` together.
+
+After restoring, verify before trusting: compare `SELECT COUNT(*) FROM
+responses` on source and destination.
+
+Two safety nets run automatically.
+
+**Rollback guard.** Every boot bumps a counter in the database's SQLite
+header and records it in a `piecesoflife.db.state` sidecar. A database
+reporting a lower counter than the sidecar is older than the data directory
+it landed in — the fingerprint of a stale-snapshot restore — and the app
+**refuses to start**. Because the counter lives inside the database file, it
+catches a rollback even when the schema is unchanged, which is the case that
+loses data with no other symptom. Two limits worth knowing: the mark is
+established on the first boot and enforced from the second, and the sidecar
+must travel with the database — copy the whole data directory, not just the
+`.db`, or the guard re-baselines on the new host. To run an older database
+deliberately, delete the sidecar; the error message names its path. None of
+this substitutes for the row-count check above.
+
+**Upload reconciliation.** Every boot, and daily thereafter, the app compares
+the uploads directory against the rows referencing it and logs an `Upload
+integrity mismatch` error listing files nothing points at. Since deleting an
+answer block or dump item unlinks its file, an unreferenced file is the
+visible residue of a row that went missing. It only reports; it never deletes.
+
+Migrations snapshot the database first, to
+`piecesoflife.db.backup-before-<version>-<timestamp>`. Those accumulate; prune
+old ones yourself, and keep copies off the machine.
+
 ## 2. First login
 
 The account from `ADMIN_EMAIL` is created on first boot. Enter that email

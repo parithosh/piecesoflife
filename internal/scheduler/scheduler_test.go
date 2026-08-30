@@ -56,6 +56,8 @@ func (stubActions) ReconcileAutoCreate(context.Context) error { return nil }
 
 func (stubActions) SendCommentDigests(context.Context) error { return nil }
 
+func (stubActions) CheckUploadIntegrity(context.Context) error { return nil }
+
 // blockingDigestActions hangs SendCommentDigests until its context dies —
 // the shape of a wedged store call or email send inside an event handler.
 type blockingDigestActions struct {
