@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -232,109 +231,7 @@ func (s *Store) DeleteQuestionsByIssue(
 func (s *Store) SelectRandomUnusedQuestions(
 	ctx context.Context, groupID int64, count int,
 ) ([]QuestionBank, error) {
-	categories := []string{
-		"life_updates", "deep_thoughts", "fun_silly",
-		"memories", "goals", "recommendations", "hypotheticals",
-	}
-
-	results := make([]QuestionBank, 0, count)
-	usedIDs := make(map[int64]bool, count)
-
-	// Round 1: one unused question per category.
-	for _, cat := range categories {
-		if len(results) >= count {
-			break
-		}
-
-		var q QuestionBank
-
-		err := s.read.QueryRowContext(ctx,
-			`SELECT id, group_id, text, category, used, created_at
-			 FROM question_bank
-			 WHERE group_id = ? AND used = 0 AND category = ?
-			 ORDER BY RANDOM() LIMIT 1`, groupID, cat,
-		).Scan(&q.ID, &q.GroupID, &q.Text, &q.Category, &q.Used, &q.CreatedAt)
-		if err == sql.ErrNoRows {
-			continue
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("selecting question from %s: %w", cat, err)
-		}
-
-		results = append(results, q)
-		usedIDs[q.ID] = true
-	}
-
-	// Round 2: fill remaining from any unused questions.
-	if len(results) < count {
-		remaining := count - len(results)
-
-		rows, err := s.read.QueryContext(ctx,
-			`SELECT id, group_id, text, category, used, created_at
-			 FROM question_bank WHERE group_id = ? AND used = 0
-			 ORDER BY RANDOM() LIMIT ?`, groupID, remaining+len(usedIDs),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("selecting remaining questions: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() && len(results) < count {
-			var q QuestionBank
-
-			if err := rows.Scan(
-				&q.ID, &q.Text, &q.Category, &q.Used, &q.CreatedAt,
-			); err != nil {
-				return nil, fmt.Errorf("scanning question: %w", err)
-			}
-
-			if !usedIDs[q.ID] {
-				results = append(results, q)
-				usedIDs[q.ID] = true
-			}
-		}
-
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterating remaining questions: %w", err)
-		}
-	}
-
-	// Round 3: if still under count, fill with any (including used).
-	if len(results) < count {
-		remaining := count - len(results)
-
-		rows, err := s.read.QueryContext(ctx,
-			`SELECT id, group_id, text, category, used, created_at
-			 FROM question_bank WHERE group_id = ?
-			 ORDER BY RANDOM() LIMIT ?`,
-			groupID, remaining+len(usedIDs),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("selecting fallback questions: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() && len(results) < count {
-			var q QuestionBank
-
-			if err := rows.Scan(
-				&q.ID, &q.Text, &q.Category, &q.Used, &q.CreatedAt,
-			); err != nil {
-				return nil, fmt.Errorf("scanning fallback question: %w", err)
-			}
-
-			if !usedIDs[q.ID] {
-				results = append(results, q)
-			}
-		}
-
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterating fallback questions: %w", err)
-		}
-	}
-
-	return results, nil
+	return selectRandomUnusedQuestions(ctx, s.read, groupID, count)
 }
 
 // MarkBankQuestionUsed marks a question bank entry as used.

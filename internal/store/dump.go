@@ -84,7 +84,8 @@ func (s *Store) GetIssueByDumpItemID(
 ) (*Issue, error) {
 	iss, err := scanIssue(s.read.QueryRowContext(ctx,
 		`SELECT i.id, i.group_id, i.title, i.month, i.year, i.status,
-		        i.opens_at, i.deadline, i.published_at, i.created_at
+		        i.opens_at, i.deadline, i.published_at, i.created_at,
+		        i.questions_curated_at
 		 FROM issues i
 		 JOIN dump_items d ON d.issue_id = i.id
 		 WHERE d.id = ?`, dumpItemID,

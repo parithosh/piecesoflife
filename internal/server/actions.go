@@ -658,13 +658,13 @@ func (s *Server) queueNextIssueEvent(
 	}
 }
 
-// openIssueForCollecting flips a draft round to collecting: stitches in the
-// enabled default questions, then pads the list up to the total question
-// target with bank questions. Friend suggestions gathered while the round
-// was upcoming stay first, and — like the defaults — count toward the
-// target, so the bank only fills the shortfall; suggestions beyond the
-// target simply mean no padding. Schedules the round's reminder and
-// auto-close events, and emails every active member that it is open.
+// openIssueForCollecting flips a draft round to collecting. An admin-curated
+// draft opens with its stored questions unchanged. Otherwise, enabled defaults
+// are stitched in and bank questions pad the list to the configured target.
+// Friend suggestions gathered while an uncurated round was upcoming stay
+// first and count toward that target; suggestions beyond it are never trimmed.
+// The transition schedules reminder and auto-close events, then emails every
+// active member that the round is open.
 // questionCount overrides the settings target when > 0.
 func (s *Server) openIssueForCollecting(
 	ctx context.Context, settings *store.Settings, issue *store.Issue,
@@ -683,49 +683,56 @@ func (s *Server) openIssueForCollectingWithTransition(
 	ctx context.Context, settings *store.Settings, issue *store.Issue,
 	questionCount int, transition func() error, eventsAlreadyScheduled bool,
 ) error {
-	existing, err := s.store.ListQuestionsByIssue(ctx, issue.ID)
+	freshIssue, err := s.store.GetIssueByID(ctx, issue.ID)
 	if err != nil {
-		s.logger.WarnContext(ctx, "Failed to list questions before opening issue",
-			slog.Int64("issue_id", issue.ID),
-			slog.String("error", err.Error()))
-		existing = nil
+		return fmt.Errorf("checking issue %d question curation: %w", issue.ID, err)
 	}
 
-	hasDefaults := false
-
-	for _, q := range existing {
-		if q.Source == "default" {
-			hasDefaults = true
-			break
-		}
-	}
-
-	nextOrder := len(existing)
-	if !hasDefaults {
-		nextOrder += s.insertDefaultQuestions(ctx, issue.GroupID, issue.ID, nextOrder)
-	}
-
-	if need := questionTarget(settings, questionCount) - nextOrder; need > 0 {
-		bankQuestions, err := s.store.SelectRandomUnusedQuestions(ctx, issue.GroupID, need)
+	if freshIssue.QuestionsCuratedAt == nil {
+		existing, err := s.store.ListQuestionsByIssue(ctx, issue.ID)
 		if err != nil {
-			s.logger.WarnContext(ctx, "Failed to select bank questions for issue open",
+			s.logger.WarnContext(ctx, "Failed to list questions before opening issue",
 				slog.Int64("issue_id", issue.ID),
 				slog.String("error", err.Error()))
+			existing = nil
 		}
 
-		for i, bq := range bankQuestions {
-			cat := bq.Category
-			if _, err := s.store.CreateQuestion(ctx, issue.ID, bq.Text, &cat,
-				"bank", nil, nextOrder+i); err != nil {
-				s.logger.WarnContext(ctx, "Failed to add bank question on issue open",
-					slog.Int64("bank_question_id", bq.ID),
-					slog.String("error", err.Error()))
-				continue
+		hasDefaults := false
+
+		for _, q := range existing {
+			if q.Source == "default" {
+				hasDefaults = true
+				break
 			}
-			if err := s.store.MarkBankQuestionUsed(ctx, bq.ID); err != nil {
-				s.logger.WarnContext(ctx, "Failed to mark bank question used",
-					slog.Int64("bank_question_id", bq.ID),
+		}
+
+		nextOrder := len(existing)
+		if !hasDefaults {
+			nextOrder += s.insertDefaultQuestions(ctx, issue.GroupID, issue.ID, nextOrder)
+		}
+
+		if need := questionTarget(settings, questionCount) - nextOrder; need > 0 {
+			bankQuestions, err := s.store.SelectRandomUnusedQuestions(ctx, issue.GroupID, need)
+			if err != nil {
+				s.logger.WarnContext(ctx, "Failed to select bank questions for issue open",
+					slog.Int64("issue_id", issue.ID),
 					slog.String("error", err.Error()))
+			}
+
+			for i, bq := range bankQuestions {
+				cat := bq.Category
+				if _, err := s.store.CreateQuestion(ctx, issue.ID, bq.Text, &cat,
+					"bank", nil, nextOrder+i); err != nil {
+					s.logger.WarnContext(ctx, "Failed to add bank question on issue open",
+						slog.Int64("bank_question_id", bq.ID),
+						slog.String("error", err.Error()))
+					continue
+				}
+				if err := s.store.MarkBankQuestionUsed(ctx, bq.ID); err != nil {
+					s.logger.WarnContext(ctx, "Failed to mark bank question used",
+						slog.Int64("bank_question_id", bq.ID),
+						slog.String("error", err.Error()))
+				}
 			}
 		}
 	}

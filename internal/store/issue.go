@@ -11,20 +11,21 @@ import (
 // issueColumns is the canonical issues SELECT list; its order must match the
 // Scan order in scanIssue.
 const issueColumns = `id, group_id, title, month, year, status, opens_at, deadline,
-	published_at, created_at`
+	published_at, created_at, questions_curated_at`
 
 // Issue represents a newsletter issue.
 type Issue struct {
-	ID          int64      `json:"id"`
-	GroupID     int64      `json:"group_id"`
-	Title       *string    `json:"title"`
-	Month       int        `json:"month"`
-	Year        int        `json:"year"`
-	Status      string     `json:"status"`
-	OpensAt     time.Time  `json:"opens_at"`
-	Deadline    time.Time  `json:"deadline"`
-	PublishedAt *time.Time `json:"published_at"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID                 int64      `json:"id"`
+	GroupID            int64      `json:"group_id"`
+	Title              *string    `json:"title"`
+	Month              int        `json:"month"`
+	Year               int        `json:"year"`
+	Status             string     `json:"status"`
+	OpensAt            time.Time  `json:"opens_at"`
+	Deadline           time.Time  `json:"deadline"`
+	PublishedAt        *time.Time `json:"published_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	QuestionsCuratedAt *time.Time `json:"questions_curated_at"`
 }
 
 // scanIssue reads one issues row selected with issueColumns. Works for both
@@ -34,7 +35,7 @@ func scanIssue(row interface{ Scan(dest ...any) error }) (*Issue, error) {
 	var iss Issue
 
 	err := row.Scan(&iss.ID, &iss.GroupID, &iss.Title, &iss.Month, &iss.Year, &iss.Status,
-		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt)
+		&iss.OpensAt, &iss.Deadline, &iss.PublishedAt, &iss.CreatedAt, &iss.QuestionsCuratedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +89,7 @@ func (s *Store) GetIssueByResponseID(
 ) (*Issue, error) {
 	iss, err := scanIssue(s.read.QueryRowContext(ctx,
 		`SELECT i.id, i.group_id, i.title, i.month, i.year, i.status, i.opens_at,
-		        i.deadline, i.published_at, i.created_at
+		        i.deadline, i.published_at, i.created_at, i.questions_curated_at
 		 FROM issues i
 		 JOIN questions q ON q.issue_id = i.id
 		 JOIN responses r ON r.question_id = q.id
