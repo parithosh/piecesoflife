@@ -414,11 +414,14 @@ func (s *Store) GetNextPendingEventByType(
 	return &e, nil
 }
 
-// MarkEventFired records that a scheduled event has been executed.
+// MarkEventFired records that a scheduled event has been executed. It
+// fails when no row was updated: an event id the caller obtained from a
+// read that no longer matches the write side is a symptom worth an error,
+// not a silent no-op.
 func (s *Store) MarkEventFired(
 	ctx context.Context, id int64, wasLate bool,
 ) error {
-	_, err := s.write.ExecContext(ctx,
+	res, err := s.write.ExecContext(ctx,
 		`UPDATE scheduler_events SET fired_at = CURRENT_TIMESTAMP,
 		 was_late = ? WHERE id = ?`,
 		wasLate, id,
@@ -427,7 +430,32 @@ func (s *Store) MarkEventFired(
 		return fmt.Errorf("marking event %d as fired: %w", id, err)
 	}
 
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("marking event %d as fired: %w", id, err)
+	} else if n != 1 {
+		return fmt.Errorf("marking event %d as fired: no such event", id)
+	}
+
 	return nil
+}
+
+// IsEventPending reports whether the event exists and has not fired. It
+// deliberately reads through the write pool: the single write connection
+// is never inside a stale read snapshot, so this is the one answer the
+// scheduler can trust before it acts on a row a pooled reader handed it.
+func (s *Store) IsEventPending(ctx context.Context, id int64) (bool, error) {
+	var pending bool
+
+	err := s.write.QueryRowContext(ctx,
+		`SELECT EXISTS(
+		   SELECT 1 FROM scheduler_events WHERE id = ? AND fired_at IS NULL
+		 )`, id,
+	).Scan(&pending)
+	if err != nil {
+		return false, fmt.Errorf("checking event %d pending: %w", id, err)
+	}
+
+	return pending, nil
 }
 
 // GetNextPendingEventForGroup returns the earliest unfired event of the

@@ -234,6 +234,27 @@ func (s *Scheduler) fireEvent(
 		slog.String("event_type", ev.EventType),
 	)
 
+	// Trust the writer, not the reader, before acting. The overdue list
+	// came from a pooled read connection, and a read connection can be
+	// stuck inside an old snapshot (2026-09-18: a driver leak left one
+	// frozen for two weeks, and it re-fired a round's open event every
+	// tick for nineteen ticks — 54 emails). The write connection is the
+	// one view that cannot be stale. An event it says has already fired
+	// is skipped without touching it; a failed check leaves the event
+	// for the next tick rather than risk acting on a lie.
+	pending, err := s.store.IsEventPending(ctx, ev.ID)
+	if err != nil {
+		logger.ErrorContext(ctx, "Cannot confirm event is pending, leaving it",
+			slog.String("error", err.Error()))
+		return
+	}
+
+	if !pending {
+		logger.ErrorContext(ctx, "Overdue event already fired on the write side — stale read connection",
+			slog.Time("scheduled_at", ev.ScheduledAt))
+		return
+	}
+
 	// An archived Loop must not keep closing rounds and emailing members.
 	// Archiving deletes its pending events, but events created through any
 	// other path still land here — mark them fired so they never retry.
@@ -281,8 +302,6 @@ func (s *Scheduler) fireEvent(
 
 		return
 	}
-
-	var err error
 
 	switch ev.EventType {
 	case "reminder_1":
