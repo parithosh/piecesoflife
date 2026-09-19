@@ -353,3 +353,46 @@ func TestUnreadableIssueIsNotSkipped(t *testing.T) {
 		"an event we could not revalidate must not be skipped, however late")
 	assert.Empty(t, reason)
 }
+
+// TestEventAlreadyFiredOnWriteSideIsNotReplayed is the 2026-09-18 incident:
+// a pooled read connection frozen inside an old snapshot handed the loop a
+// create_next_issue row that the write side had marked fired two weeks
+// earlier, and the round was re-opened every tick. The overdue row here is
+// built the way that reader delivered it — fired_at empty — while the
+// store already holds it fired. The gate must consult the write side and
+// act on nothing.
+func TestEventAlreadyFiredOnWriteSideIsNotReplayed(t *testing.T) {
+	ctx := context.Background()
+	actions := &recordingActions{}
+	sched, st, issueID := newStaleEventFixture(t, actions)
+
+	scheduledAt := time.Now().UTC().Add(-time.Minute)
+	require.NoError(t, st.CreateSchedulerEvent(
+		ctx, &issueID, "create_next_issue", scheduledAt,
+	))
+
+	overdue, err := st.GetOverdueEvents(ctx)
+	require.NoError(t, err)
+	require.Len(t, overdue, 1)
+
+	require.NoError(t, st.MarkEventFired(ctx, overdue[0].ID, false))
+
+	stale := overdue[0]
+	stale.FiredAt = nil
+
+	sched.fireEvent(ctx, stale, false)
+
+	assert.Zero(t, actions.creates,
+		"an event the write side has already fired must not run again")
+}
+
+// TestMarkEventFiredRejectsUnknownID keeps the mark from being a silent
+// no-op: a row the writer cannot see is an error to surface, not success.
+func TestMarkEventFiredRejectsUnknownID(t *testing.T) {
+	_, st, _ := newStaleEventFixture(t, stubActions{})
+
+	err := st.MarkEventFired(context.Background(), 424242, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no such event")
+}

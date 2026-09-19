@@ -83,6 +83,16 @@ func New(ctx context.Context, dbPath string, logger *slog.Logger) (*Store, error
 
 	readDB.SetMaxOpenConns(4)
 
+	// Recycle read connections. A pooled connection that is left inside a
+	// read transaction — modernc.org/sqlite < v1.49 dropped an unclosed
+	// statement when a context was cancelled mid-query — serves a frozen
+	// snapshot to every later caller and pins the WAL checkpoint behind
+	// its read mark. On 2026-09-18 that fed the scheduler a two-week-old
+	// view of scheduler_events and re-opened a round nineteen times. A
+	// bounded lifetime caps how long any such connection can survive;
+	// reopening a SQLite connection is cheap.
+	readDB.SetConnMaxLifetime(10 * time.Minute)
+
 	if err := writeDB.PingContext(ctx); err != nil {
 		writeDB.Close()
 		readDB.Close()
