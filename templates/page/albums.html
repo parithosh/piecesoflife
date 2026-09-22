@@ -49,7 +49,12 @@ function cardHtml(item) {
     const month = `${item.year}-${String(item.month).padStart(2, '0')}`;
     const dumpTag = item.from_dump ? '<span class="album-dump-tag">dump</span>'
         : item.from_notebook ? '<span class="album-dump-tag">notebook</span>' : '';
-    const captionHtml = caption ? `<div class="album-caption">${caption}</div>` : '';
+    const covered = item.kind === 'photo' && Boolean(item.is_covered);
+    const coverNote = escapeHtml(item.cover_note || '');
+    const coverKey = `${escapeHtml(item.source || 'media')}:${Number(item.id) || 0}`;
+    const captionHtml = caption
+        ? `<div class="album-caption"${covered ? ' data-covered-caption hidden' : ''}>${caption}</div>`
+        : '';
     const meta = `
             <figcaption>
                 <span>${name}${dumpTag}</span>
@@ -76,14 +81,28 @@ function cardHtml(item) {
         `;
     }
 
+    const cover = covered ? `
+                <button type="button" class="covered-photo-cover" data-cover-reveal>
+                    <span class="covered-photo-cover-title">Covered photo</span>
+                    ${coverNote ? `<span class="covered-photo-cover-note">${coverNote}</span>` : ''}
+                    <span class="covered-photo-cover-action">Reveal photo</span>
+                </button>
+                <button type="button" class="covered-photo-again" data-cover-again hidden>Cover again</button>`
+        : '';
+
     return `
-        <figure class="album-card"
+        <figure class="album-card${covered ? ' covered-photo' : ''}"
                 data-lightbox
                 data-lightbox-src="${url}"
                 data-lightbox-caption="${caption} — ${name}"
+                ${covered ? `data-covered-photo data-covered-key="${coverKey}" data-cover-note="${coverNote}"` : ''}
                 tabindex="0" role="button"
-                aria-label="View photo${caption ? ': ' + caption : ''} by ${name}">
-            <img src="${url}" alt="${caption}" loading="lazy">
+                aria-label="${covered ? `Reveal covered photo by ${name}` : `View photo${caption ? ': ' + caption : ''} by ${name}`}">
+            <div class="covered-photo-frame">
+                <img src="${url}" alt="${covered ? 'Covered photo' : caption}"
+                     data-covered-alt="${caption}" loading="lazy">
+                ${cover}
+            </div>
             ${meta}
         </figure>
     `;

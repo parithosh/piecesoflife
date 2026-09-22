@@ -30,6 +30,8 @@ type RambleBlock struct {
 	Content   *string   `json:"content"`
 	FilePath  *string   `json:"file_path"`
 	Caption   *string   `json:"caption"`
+	IsCovered bool      `json:"is_covered"`
+	CoverNote *string   `json:"cover_note"`
 	SortOrder int       `json:"sort_order"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -108,7 +110,7 @@ func (s *Store) ListRambleDays(
 
 	blockRows, err := s.read.QueryContext(ctx,
 		`SELECT b.id, b.ramble_id, b.type, b.content, b.file_path, b.caption,
-		        b.sort_order, b.created_at, b.updated_at
+		        b.is_covered, b.cover_note, b.sort_order, b.created_at, b.updated_at
 		 FROM ramble_blocks b
 		 JOIN rambles r ON r.id = b.ramble_id
 		 WHERE r.user_id = ?
@@ -122,8 +124,8 @@ func (s *Store) ListRambleDays(
 	for blockRows.Next() {
 		var b RambleBlock
 		if err := blockRows.Scan(&b.ID, &b.RambleID, &b.Type, &b.Content,
-			&b.FilePath, &b.Caption, &b.SortOrder,
-			&b.CreatedAt, &b.UpdatedAt); err != nil {
+			&b.FilePath, &b.Caption, &b.IsCovered, &b.CoverNote,
+			&b.SortOrder, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning ramble block: %w", err)
 		}
 
@@ -145,7 +147,7 @@ func (s *Store) ListRambleBlocks(
 ) ([]RambleBlock, error) {
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT id, ramble_id, type, content, file_path, caption,
-		        sort_order, created_at, updated_at
+		        is_covered, cover_note, sort_order, created_at, updated_at
 		 FROM ramble_blocks WHERE ramble_id = ?
 		 ORDER BY sort_order`, rambleID,
 	)
@@ -159,8 +161,8 @@ func (s *Store) ListRambleBlocks(
 	for rows.Next() {
 		var b RambleBlock
 		if err := rows.Scan(&b.ID, &b.RambleID, &b.Type, &b.Content,
-			&b.FilePath, &b.Caption, &b.SortOrder,
-			&b.CreatedAt, &b.UpdatedAt); err != nil {
+			&b.FilePath, &b.Caption, &b.IsCovered, &b.CoverNote,
+			&b.SortOrder, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning ramble block: %w", err)
 		}
 
@@ -369,15 +371,33 @@ func (s *Store) GetRambleBlockByID(
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT id, ramble_id, type, content, file_path, caption,
-		        sort_order, created_at, updated_at
+		        is_covered, cover_note, sort_order, created_at, updated_at
 		 FROM ramble_blocks WHERE id = ?`, id,
 	).Scan(&b.ID, &b.RambleID, &b.Type, &b.Content, &b.FilePath,
-		&b.Caption, &b.SortOrder, &b.CreatedAt, &b.UpdatedAt)
+		&b.Caption, &b.IsCovered, &b.CoverNote, &b.SortOrder,
+		&b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting ramble block %d: %w", id, err)
 	}
 
 	return &b, nil
+}
+
+// UpdateRambleBlockCover changes a journal photo's viewer-controlled cover
+// metadata. Ownership checks live in the handler.
+func (s *Store) UpdateRambleBlockCover(
+	ctx context.Context, id int64, isCovered bool, coverNote *string,
+) error {
+	_, err := s.write.ExecContext(ctx,
+		`UPDATE ramble_blocks SET is_covered = ?, cover_note = ?,
+		 updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		isCovered, coverNote, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating ramble block %d cover: %w", id, err)
+	}
+
+	return nil
 }
 
 // DeleteRambleBlock removes a journal block; a day left with no blocks is

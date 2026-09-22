@@ -72,13 +72,28 @@
                     {{if .Content}}<p>{{.Content}}</p>{{end}}
                 {{else if eq .Type "photo"}}
                     {{if .FilePath}}
-                    <figure data-lightbox
+                    <figure class="{{if .IsCovered}}covered-photo{{end}}"
+                            data-lightbox
                             data-lightbox-src="{{.FilePath | uploadURL}}"
-                            data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
-                        <img src="{{.FilePath | uploadURL}}"
-                             alt="{{if .Caption}}{{.Caption}}{{end}}">
+                            data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}"
+                            {{if .IsCovered}}data-covered-photo
+                            data-covered-key="response:{{.ID}}"
+                            data-cover-note="{{if .CoverNote}}{{.CoverNote}}{{end}}"{{end}}>
+                        <span class="covered-photo-frame">
+                            <img src="{{.FilePath | uploadURL}}"
+                                 alt="{{if .IsCovered}}Covered photo{{else if .Caption}}{{.Caption}}{{end}}"
+                                 data-covered-alt="{{if .Caption}}{{.Caption}}{{end}}">
+                            {{if .IsCovered}}
+                            <button type="button" class="covered-photo-cover" data-cover-reveal>
+                                <span class="covered-photo-cover-title">Covered photo</span>
+                                {{if .CoverNote}}<span class="covered-photo-cover-note">{{.CoverNote}}</span>{{end}}
+                                <span class="covered-photo-cover-action">Reveal photo</span>
+                            </button>
+                            <button type="button" class="covered-photo-again" data-cover-again hidden>Cover again</button>
+                            {{end}}
+                        </span>
                         {{if .Caption}}
-                        <figcaption>{{.Caption}}</figcaption>
+                        <figcaption {{if .IsCovered}}data-covered-caption hidden{{end}}>{{.Caption}}</figcaption>
                         {{end}}
                     </figure>
                     {{end}}

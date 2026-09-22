@@ -20,6 +20,7 @@ file.
    from the camera roll, link embeds, audio and video recorded straight
    from the browser; and a free-form **photo & video dump** — caption
    anything you drop in — for everything that didn't fit a question.
+   Photos can be covered until each reader chooses to reveal them.
    Reminder emails chase the stragglers so you don't have to.
 3. **The issue is published** — at the deadline automatically, or when the
    admin presses the button. Everyone gets an email that signs them

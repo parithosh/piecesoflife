@@ -18,6 +18,92 @@
     let currentIndex = 0;
     let images = [];
     let lastFocused = null;
+    const COVER_SESSION_PREFIX = 'pol:covered-photo:';
+
+    function wasRevealed(key) {
+        if (!key) return false;
+        try {
+            return sessionStorage.getItem(COVER_SESSION_PREFIX + key) === '1';
+        } catch {
+            return false;
+        }
+    }
+
+    function rememberReveal(key, revealed) {
+        if (!key) return;
+        try {
+            if (revealed) sessionStorage.setItem(COVER_SESSION_PREFIX + key, '1');
+            else sessionStorage.removeItem(COVER_SESSION_PREFIX + key);
+        } catch {
+            // Storage can be unavailable in locked-down browsers. The reveal
+            // still works for this page; it simply will not follow navigation.
+        }
+    }
+
+    function coveredScope(el) {
+        return el.closest('[data-covered-scope]') || el;
+    }
+
+    function showCoveredDependents(el, revealed) {
+        coveredScope(el).querySelectorAll('[data-covered-dependent]').forEach(dep => {
+            dep.hidden = !revealed;
+        });
+    }
+
+    function revealCoveredPhoto(el, remember) {
+        if (!el) return;
+        el.classList.add('is-revealed');
+        el.dataset.coveredRevealed = 'true';
+        el.style.cursor = 'zoom-in';
+        const img = el.querySelector('img');
+        if (img) img.alt = img.dataset.coveredAlt || '';
+        el.querySelectorAll('[data-covered-caption]').forEach(caption => {
+            caption.hidden = false;
+        });
+        const again = el.querySelector('[data-cover-again]');
+        if (again) again.hidden = false;
+        showCoveredDependents(el, true);
+        if (remember !== false) rememberReveal(el.dataset.coveredKey, true);
+    }
+
+    function coverPhotoAgain(el, remember) {
+        if (!el) return;
+        el.classList.remove('is-revealed');
+        el.dataset.coveredRevealed = 'false';
+        el.style.cursor = 'pointer';
+        const img = el.querySelector('img');
+        if (img) img.alt = 'Covered photo';
+        el.querySelectorAll('[data-covered-caption]').forEach(caption => {
+            caption.hidden = true;
+        });
+        const again = el.querySelector('[data-cover-again]');
+        if (again) again.hidden = true;
+        showCoveredDependents(el, false);
+        if (remember !== false) rememberReveal(el.dataset.coveredKey, false);
+    }
+
+    function isCovered(el) {
+        return Boolean(el?.hasAttribute('data-covered-photo') &&
+            !el.classList.contains('is-revealed'));
+    }
+
+    function attachCoveredPhotos() {
+        document.querySelectorAll('[data-covered-photo]').forEach(el => {
+            if (wasRevealed(el.dataset.coveredKey)) revealCoveredPhoto(el, false);
+            else coverPhotoAgain(el, false);
+
+            const again = el.querySelector('[data-cover-again]');
+            if (again && !again.dataset.coverAgainWired) {
+                again.dataset.coverAgainWired = '1';
+                again.addEventListener('click', ev => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    coverPhotoAgain(el);
+                    collectImages();
+                });
+            }
+        });
+    }
 
     // Touch swipe tracking.
     const SWIPE_X_THRESHOLD = 50;  // px of horizontal travel → prev/next
@@ -36,8 +122,12 @@
             .map(el => {
                 const img = el.tagName === 'IMG' ? el : el.querySelector('img');
                 return {
+                    el,
                     src: el.dataset.lightboxSrc || img?.src || '',
-                    caption: el.dataset.lightboxCaption || img?.alt || '',
+                    caption: el.dataset.lightboxCaption || img?.dataset.coveredAlt ||
+                        img?.alt || '',
+                    covered: isCovered(el),
+                    coverNote: el.dataset.coverNote || '',
                 };
             })
             .filter(x => x.src);
@@ -59,6 +149,11 @@
 
         overlay.innerHTML = `
             <img id="lightbox-img" style="max-width:94vw;max-height:86vh;object-fit:contain;border-radius:6px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+            <div id="lightbox-cover" style="display:none;width:min(86vw,620px);aspect-ratio:4/3;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:32px;box-sizing:border-box;border:1px solid rgba(230,178,60,.7);border-radius:6px;background:#f4ead5;color:#2a0e15;text-align:center;background-image:repeating-linear-gradient(45deg,rgba(122,15,56,.045) 0 8px,transparent 8px 18px);">
+                <strong style="font:400 clamp(24px,4vw,38px) Georgia,serif;">Covered photo</strong>
+                <span id="lightbox-cover-note" style="max-width:38ch;font:16px/1.45 Georgia,serif;"></span>
+                <button id="lightbox-reveal" type="button" style="margin-top:8px;padding:10px 18px;border:1px solid #7a0f38;border-radius:999px;background:#7a0f38;color:#fff;font:700 14px sans-serif;cursor:pointer;">Reveal photo</button>
+            </div>
             <div id="lightbox-caption" style="position:absolute;bottom:24px;left:0;right:0;text-align:center;color:#eee;font-size:14px;padding:0 16px;"></div>
             <button id="lightbox-prev" type="button" aria-label="Previous image" style="position:absolute;left:16px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.1);color:#fff;border:none;width:44px;height:44px;border-radius:50%;font-size:20px;cursor:pointer;">‹</button>
             <button id="lightbox-next" type="button" aria-label="Next image" style="position:absolute;right:16px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.1);color:#fff;border:none;width:44px;height:44px;border-radius:50%;font-size:20px;cursor:pointer;">›</button>
@@ -73,6 +168,13 @@
         overlay.querySelector('#lightbox-close').addEventListener('click', close);
         overlay.querySelector('#lightbox-prev').addEventListener('click', prev);
         overlay.querySelector('#lightbox-next').addEventListener('click', next);
+        overlay.querySelector('#lightbox-reveal').addEventListener('click', function() {
+            const current = images[currentIndex];
+            if (!current?.el) return;
+            revealCoveredPhoto(current.el);
+            current.covered = false;
+            render();
+        });
 
         // Touch swipe: horizontal → prev/next, generous vertical → close.
         // Only single-finger gestures; taps below the thresholds fall through
@@ -121,7 +223,8 @@
 
     function focusableElements() {
         return Array.from(overlay.querySelectorAll('button'))
-            .filter(el => el.style.visibility !== 'hidden' && !el.disabled);
+            .filter(el => el.offsetParent !== null &&
+                el.style.visibility !== 'hidden' && !el.disabled);
     }
 
     function open(index) {
@@ -162,14 +265,28 @@
 
     function render() {
         const img = overlay.querySelector('#lightbox-img');
+        const cover = overlay.querySelector('#lightbox-cover');
+        const coverNote = overlay.querySelector('#lightbox-cover-note');
         const caption = overlay.querySelector('#lightbox-caption');
         const cur = images[currentIndex];
-        img.src = cur.src;
-        img.alt = cur.caption || '';
-        caption.textContent = cur.caption || '';
 
-        // Name the dialog after the image so screen readers announce it.
-        overlay.setAttribute('aria-label', cur.caption || 'Image viewer');
+        if (cur.covered) {
+            img.style.display = 'none';
+            img.removeAttribute('src');
+            img.alt = '';
+            cover.style.display = 'flex';
+            coverNote.textContent = cur.coverNote ||
+                'The sender chose to let readers reveal this photo themselves.';
+            caption.textContent = '';
+            overlay.setAttribute('aria-label', 'Covered photo');
+        } else {
+            cover.style.display = 'none';
+            img.style.display = '';
+            img.src = cur.src;
+            img.alt = cur.caption || '';
+            caption.textContent = cur.caption || '';
+            overlay.setAttribute('aria-label', cur.caption || 'Image viewer');
+        }
 
         overlay.querySelector('#lightbox-prev').style.visibility =
             images.length > 1 ? 'visible' : 'hidden';
@@ -217,16 +334,22 @@
     });
 
     function attach() {
+        attachCoveredPhotos();
         collectImages();
 
-        document.querySelectorAll('[data-lightbox]').forEach((el, idx) => {
+        document.querySelectorAll('[data-lightbox]').forEach(el => {
             if (el.dataset.lightboxWired) return;
             el.dataset.lightboxWired = '1';
-            el.style.cursor = 'zoom-in';
+            el.style.cursor = isCovered(el) ? 'pointer' : 'zoom-in';
             el.addEventListener('click', function(ev) {
                 ev.preventDefault();
+                if (isCovered(el)) {
+                    revealCoveredPhoto(el);
+                    collectImages();
+                    return;
+                }
                 collectImages(); // refresh in case DOM changed
-                open(images.findIndex(i => i.src === (el.dataset.lightboxSrc || el.querySelector('img')?.src)));
+                open(images.findIndex(i => i.el === el));
             });
         });
     }

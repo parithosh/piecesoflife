@@ -66,8 +66,28 @@
         <div class="pl-ramble-media">
           {{range .Day.Blocks}}
           {{if eq .Type "photo"}}
-          <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+          <figure class="pl-ramble-thumb pl-ramble-thumb--coverable{{if .IsCovered}} is-covered-for-readers{{end}}"
+                  data-block-id="{{.ID}}">
             <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+            <span class="pl-cover-badge" data-cover-badge
+                  {{if not .IsCovered}}hidden{{end}}>Covered for readers</span>
+            <div class="pl-cover-editor pl-cover-editor--compact" data-cover-editor
+                 data-cover-endpoint="/api/ramble/blocks/{{.ID}}/cover">
+              <label class="pl-cover-toggle">
+                <input type="checkbox" data-cover-toggle {{if .IsCovered}}checked{{end}}>
+                Cover until opened
+              </label>
+              <span class="pl-cover-help">Readers choose when to reveal it.</span>
+              <label class="pl-cover-note" data-cover-note-wrap
+                     {{if not .IsCovered}}hidden{{end}}>
+                Note for readers (optional)
+                <input type="text" data-cover-note maxlength="120"
+                       value="{{if .CoverNote}}{{.CoverNote}}{{end}}"
+                       placeholder="A surprise or sensitive moment">
+              </label>
+              <span class="pl-cover-status" data-cover-status
+                    role="status" aria-live="polite"></span>
+            </div>
             <button type="button" class="pl-thumb-remove" data-block-remove="{{.ID}}"
                     aria-label="Remove this photo" hidden>✕</button>
           </figure>
@@ -123,6 +143,7 @@
 
 {{define "scripts"}}
 <script src="/static/recorder.js?v={{assetVersion}}"></script>
+<script src="/static/editor.js?v={{assetVersion}}"></script>
 <script>
 (function () {
     // "Today" is the browser's day, not the server's — the page you opened

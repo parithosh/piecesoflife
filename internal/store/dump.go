@@ -17,6 +17,8 @@ type DumpItem struct {
 	ContentType *string   `json:"content_type"`
 	FilePath    string    `json:"file_path"`
 	Caption     *string   `json:"caption"`
+	IsCovered   bool      `json:"is_covered"`
+	CoverNote   *string   `json:"cover_note"`
 	SortOrder   int       `json:"sort_order"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -66,10 +68,11 @@ func (s *Store) GetDumpItemByID(
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT id, issue_id, user_id, kind, content_type, file_path,
-		        caption, sort_order, created_at
+		        caption, is_covered, cover_note, sort_order, created_at
 		 FROM dump_items WHERE id = ?`, id,
 	).Scan(&d.ID, &d.IssueID, &d.UserID, &d.Kind, &d.ContentType,
-		&d.FilePath, &d.Caption, &d.SortOrder, &d.CreatedAt)
+		&d.FilePath, &d.Caption, &d.IsCovered, &d.CoverNote,
+		&d.SortOrder, &d.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting dump item %d: %w", id, err)
 	}
@@ -105,8 +108,8 @@ func (s *Store) ListDumpItemsByIssue(
 ) ([]DumpItemWithUser, error) {
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT d.id, d.issue_id, d.user_id, d.kind, d.content_type,
-		        d.file_path, d.caption, d.sort_order, d.created_at,
-		        u.name, u.avatar_url
+		        d.file_path, d.caption, d.is_covered, d.cover_note,
+		        d.sort_order, d.created_at, u.name, u.avatar_url
 		 FROM dump_items d
 		 JOIN users u ON u.id = d.user_id
 		 WHERE d.issue_id = ?
@@ -123,8 +126,9 @@ func (s *Store) ListDumpItemsByIssue(
 	for rows.Next() {
 		var d DumpItemWithUser
 		if err := rows.Scan(&d.ID, &d.IssueID, &d.UserID, &d.Kind,
-			&d.ContentType, &d.FilePath, &d.Caption, &d.SortOrder,
-			&d.CreatedAt, &d.UserName, &d.UserAvatarURL); err != nil {
+			&d.ContentType, &d.FilePath, &d.Caption, &d.IsCovered,
+			&d.CoverNote, &d.SortOrder, &d.CreatedAt, &d.UserName,
+			&d.UserAvatarURL); err != nil {
 			return nil, fmt.Errorf("scanning dump item: %w", err)
 		}
 
@@ -145,7 +149,7 @@ func (s *Store) ListDumpItemsForUser(
 ) ([]DumpItem, error) {
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT id, issue_id, user_id, kind, content_type, file_path,
-		        caption, sort_order, created_at
+		        caption, is_covered, cover_note, sort_order, created_at
 		 FROM dump_items
 		 WHERE issue_id = ? AND user_id = ?
 		 ORDER BY sort_order`,
@@ -162,8 +166,8 @@ func (s *Store) ListDumpItemsForUser(
 	for rows.Next() {
 		var d DumpItem
 		if err := rows.Scan(&d.ID, &d.IssueID, &d.UserID, &d.Kind,
-			&d.ContentType, &d.FilePath, &d.Caption, &d.SortOrder,
-			&d.CreatedAt); err != nil {
+			&d.ContentType, &d.FilePath, &d.Caption, &d.IsCovered,
+			&d.CoverNote, &d.SortOrder, &d.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning dump item: %w", err)
 		}
 
@@ -205,6 +209,21 @@ func (s *Store) UpdateDumpItemCaption(
 		`UPDATE dump_items SET caption = ? WHERE id = ?`, caption, id,
 	); err != nil {
 		return fmt.Errorf("updating dump item %d caption: %w", id, err)
+	}
+
+	return nil
+}
+
+// UpdateDumpItemCover changes a photo's viewer-controlled cover metadata.
+// Ownership and issue-status checks live in the handler.
+func (s *Store) UpdateDumpItemCover(
+	ctx context.Context, id int64, isCovered bool, coverNote *string,
+) error {
+	if _, err := s.write.ExecContext(ctx,
+		`UPDATE dump_items SET is_covered = ?, cover_note = ? WHERE id = ?`,
+		isCovered, coverNote, id,
+	); err != nil {
+		return fmt.Errorf("updating dump item %d cover: %w", id, err)
 	}
 
 	return nil

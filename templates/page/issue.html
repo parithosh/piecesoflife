@@ -109,11 +109,27 @@
                       {{if eq .Type "text"}}
                         {{if .Content}}<p>{{.Content}}</p>{{end}}
                       {{else if eq .Type "photo"}}
-                        <figure class="published-photo" data-lightbox
+                        <figure class="published-photo{{if .IsCovered}} covered-photo{{end}}"
+                                data-lightbox
                                 data-lightbox-src="{{.FilePath | uploadURL}}"
-                                data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
-                          <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}">
-                          {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                                data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}"
+                                {{if .IsCovered}}data-covered-photo
+                                data-covered-key="response:{{.ID}}"
+                                data-cover-note="{{if .CoverNote}}{{.CoverNote}}{{end}}"{{end}}>
+                          <span class="covered-photo-frame">
+                            <img src="{{.FilePath | uploadURL}}"
+                                 alt="{{if .IsCovered}}Covered photo{{else if .Caption}}{{.Caption}}{{end}}"
+                                 data-covered-alt="{{if .Caption}}{{.Caption}}{{end}}">
+                            {{if .IsCovered}}
+                            <button type="button" class="covered-photo-cover" data-cover-reveal>
+                              <span class="covered-photo-cover-title">Covered photo</span>
+                              {{if .CoverNote}}<span class="covered-photo-cover-note">{{.CoverNote}}</span>{{end}}
+                              <span class="covered-photo-cover-action">Reveal photo</span>
+                            </button>
+                            <button type="button" class="covered-photo-again" data-cover-again hidden>Cover again</button>
+                            {{end}}
+                          </span>
+                          {{if .Caption}}<figcaption {{if .IsCovered}}data-covered-caption hidden{{end}}>{{.Caption}}</figcaption>{{end}}
                         </figure>
                       {{else if eq .Type "audio"}}
                         {{if .FilePath}}
@@ -197,16 +213,32 @@
                 <h3 class="pl-nb-date">{{$d.DiaryDay.Day | dayDisplay}}</h3>
                 <div class="pl-nb-text">
                 {{range $d.Blocks}}
-                <div class="pl-nb-block">
+                <div class="pl-nb-block"{{if and (eq .Type "photo") .IsCovered}} data-covered-scope{{end}}>
                   {{if eq .Type "text"}}
                     {{if .Content}}<p>{{.Content}}</p>{{end}}
                   {{else if eq .Type "photo"}}
                     {{if .FilePath}}
-                    <figure class="pl-print" data-lightbox
+                    <figure class="pl-print{{if .IsCovered}} covered-photo{{end}}"
+                            data-lightbox
                             data-lightbox-src="{{.FilePath | uploadURL}}"
-                            data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
-                      <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
-                      {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                            data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}"
+                            {{if .IsCovered}}data-covered-photo
+                            data-covered-key="diary:{{.ID}}"
+                            data-cover-note="{{if .CoverNote}}{{.CoverNote}}{{end}}"{{end}}>
+                      <span class="covered-photo-frame">
+                        <img src="{{.FilePath | uploadURL}}"
+                             alt="{{if .IsCovered}}Covered photo{{else if .Caption}}{{.Caption}}{{end}}"
+                             data-covered-alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                        {{if .IsCovered}}
+                        <button type="button" class="covered-photo-cover" data-cover-reveal>
+                          <span class="covered-photo-cover-title">Covered photo</span>
+                          {{if .CoverNote}}<span class="covered-photo-cover-note">{{.CoverNote}}</span>{{end}}
+                          <span class="covered-photo-cover-action">Reveal photo</span>
+                        </button>
+                        <button type="button" class="covered-photo-again" data-cover-again hidden>Cover again</button>
+                        {{end}}
+                      </span>
+                      {{if .Caption}}<figcaption {{if .IsCovered}}data-covered-caption hidden{{end}}>{{.Caption}}</figcaption>{{end}}
                     </figure>
                     {{end}}
                   {{else if eq .Type "audio"}}
@@ -230,7 +262,8 @@
                   {{end}}
                   <div class="comments-panel pl-nb-block-comments"
                        data-diary-block-id="{{.ID}}"
-                       data-comment-count="{{index $.DiaryBlockCommentCounts .ID}}"></div>
+                       data-comment-count="{{index $.DiaryBlockCommentCounts .ID}}"
+                       {{if and (eq .Type "photo") .IsCovered}}data-covered-dependent hidden{{end}}></div>
                 </div>
                 {{end}}
                 </div>
@@ -276,16 +309,32 @@
               {{if .Photos}}
               <div class="pl-collage">
                 {{range .Photos}}
-                <figure class="pl-collage-item">
-                  <span data-lightbox
+                <figure class="pl-collage-item{{if .IsCovered}} covered-photo{{end}}"
+                        data-lightbox
                         data-lightbox-src="{{.FilePath | uploadURL}}"
-                        data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}">
-                    <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                        data-lightbox-caption="{{if .Caption}}{{.Caption}}{{end}}"
+                        {{if .IsCovered}}data-covered-scope
+                        data-covered-photo
+                        data-covered-key="dump:{{.ID}}"
+                        data-cover-note="{{if .CoverNote}}{{.CoverNote}}{{end}}"{{end}}>
+                  <span class="{{if .IsCovered}}covered-photo-frame{{end}}">
+                    <img src="{{.FilePath | uploadURL}}"
+                         alt="{{if .IsCovered}}Covered photo{{else if .Caption}}{{.Caption}}{{end}}"
+                         data-covered-alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                    {{if .IsCovered}}
+                    <button type="button" class="covered-photo-cover" data-cover-reveal>
+                      <span class="covered-photo-cover-title">Covered photo</span>
+                      {{if .CoverNote}}<span class="covered-photo-cover-note">{{.CoverNote}}</span>{{end}}
+                      <span class="covered-photo-cover-action">Reveal photo</span>
+                    </button>
+                    <button type="button" class="covered-photo-again" data-cover-again hidden>Cover again</button>
+                    {{end}}
                   </span>
-                  {{if .Caption}}<figcaption>{{.Caption}}</figcaption>{{end}}
+                  {{if .Caption}}<figcaption {{if .IsCovered}}data-covered-caption hidden{{end}}>{{.Caption}}</figcaption>{{end}}
                   <div class="comments-panel pl-collage-comments"
                        data-dump-item-id="{{.ID}}"
-                       data-comment-count="{{index $.DumpCommentCounts .ID}}"></div>
+                       data-comment-count="{{index $.DumpCommentCounts .ID}}"
+                       {{if .IsCovered}}data-covered-dependent hidden{{end}}></div>
                 </figure>
                 {{end}}
               </div>

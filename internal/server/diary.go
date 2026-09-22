@@ -182,6 +182,54 @@ func (s *Server) handleUpdateDiaryBlock(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// handleUpdateDiaryBlockCover changes how a photo in the editable notebook
+// snapshot will be presented to readers.
+// PATCH /api/diary-blocks/{id}/cover
+func (s *Server) handleUpdateDiaryBlockCover(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	blockID, ok := s.parseIDParam(w, r, "id", "block ID")
+	if !ok {
+		return
+	}
+
+	block, err := s.store.GetDiaryBlockByID(ctx, blockID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		return
+	}
+
+	if _, ok := s.loadOwnedDiaryDay(w, r, block.DiaryDayID, true); !ok {
+		return
+	}
+	if block.Type != photoBlockType {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_block_type",
+			"Only photos can be covered")
+		return
+	}
+
+	isCovered, coverNote, ok := readMediaCoverRequest(w, r)
+	if !ok {
+		return
+	}
+
+	if err := s.store.UpdateDiaryBlockCover(ctx, blockID, isCovered, coverNote); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to update notebook photo cover",
+			slog.Int64("block_id", blockID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save photo cover")
+		return
+	}
+
+	updated, err := s.store.GetDiaryBlockByID(ctx, blockID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to load photo cover")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // handleDeleteDiaryDay drops one day from the caller's snapshot.
 // DELETE /api/diary-days/{id}
 func (s *Server) handleDeleteDiaryDay(w http.ResponseWriter, r *http.Request) {

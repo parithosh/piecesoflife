@@ -282,6 +282,48 @@ func (s *Server) handleDumpCaption(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"item": item})
 }
 
+// handleDumpCover changes how a dump photo is initially presented to readers.
+// PATCH /api/dump/{id}/cover
+func (s *Server) handleDumpCover(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	itemID, ok := s.parseIDParam(w, r, "id", "dump item ID")
+	if !ok {
+		return
+	}
+
+	item, ok := s.loadEditableDumpItem(w, r, itemID)
+	if !ok {
+		return
+	}
+	if item.Kind != photoBlockType {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_media_type",
+			"Only photos can be covered")
+		return
+	}
+
+	isCovered, coverNote, ok := readMediaCoverRequest(w, r)
+	if !ok {
+		return
+	}
+
+	if err := s.store.UpdateDumpItemCover(ctx, itemID, isCovered, coverNote); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to update dump photo cover",
+			slog.Int64("dump_item_id", itemID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save photo cover")
+		return
+	}
+
+	updated, err := s.store.GetDumpItemByID(ctx, itemID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to load photo cover")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"item": updated})
+}
+
 // handleDumpDelete removes one of the member's own dump items (admins may
 // remove anyone's). Blocked once the issue is published.
 // DELETE /api/dump/{id}

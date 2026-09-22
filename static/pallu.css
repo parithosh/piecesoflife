@@ -594,6 +594,7 @@ input.pl-field::placeholder,
     display: block;
     border-radius: 2px;
 }
+.pl-dump-thumb--coverable { width: 168px; }
 .pl-dump-caption {
     display: block;
     width: 100%;
@@ -689,6 +690,207 @@ input.pl-field::placeholder,
     z-index: 1;
 }
 .block-remove:hover { background: var(--rani); color: #fff; }
+
+/* Covered-photo authoring stays attached to the photo it affects. Authors
+ * always see the real image; the badge describes the reader-facing state. */
+.pl-cover-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 1;
+    max-width: calc(100% - 42px);
+    padding: 4px 7px;
+    border: 1px solid rgba(255, 255, 255, 0.68);
+    border-radius: 999px;
+    background: rgba(42, 14, 21, 0.88);
+    color: var(--ivory);
+    font: 700 9px/1.2 var(--font-ui);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.pl-cover-badge[hidden],
+.pl-cover-note[hidden] { display: none; }
+.photo-block > .pl-cover-badge { top: 10px; left: 10px; }
+.pl-cover-editor {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--ivory-2);
+    color: var(--ink);
+    font-family: var(--font-ui);
+}
+.pl-cover-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.pl-cover-toggle input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--rani);
+}
+.pl-cover-help {
+    display: block;
+    margin: 4px 0 0 23px;
+    color: var(--ink-soft);
+    font: 400 11px/1.35 var(--font-ui);
+}
+.pl-cover-note {
+    display: block;
+    margin-top: 9px;
+    color: var(--ink-soft);
+    font: 600 10px/1.35 var(--font-ui);
+}
+.pl-cover-note input {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    margin-top: 4px;
+    padding: 7px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--ivory);
+    color: var(--ink);
+    font: 400 12px/1.35 var(--font-ui);
+}
+.pl-cover-note input:focus {
+    outline: 2px solid color-mix(in srgb, var(--marigold) 55%, transparent);
+    outline-offset: 1px;
+    border-color: var(--marigold);
+}
+.pl-cover-status {
+    display: block;
+    min-height: 1.25em;
+    margin-top: 5px;
+    color: var(--peacock);
+    font: 600 10px/1.25 var(--font-ui);
+}
+.pl-cover-status.is-error { color: var(--sindoor); }
+.pl-cover-editor--compact {
+    margin-top: 6px;
+    padding: 7px;
+}
+.pl-cover-editor--compact .pl-cover-toggle { font-size: 11px; gap: 5px; }
+.pl-cover-editor--compact .pl-cover-help { margin-left: 21px; font-size: 10px; }
+.pl-cover-editor--compact .pl-cover-note { font-size: 9px; }
+
+/* Reader-facing cover: the photograph keeps its intrinsic footprint while an
+ * opaque, paper-like reverse replaces the pixels until explicit reveal. */
+.covered-photo,
+.covered-photo-frame {
+    position: relative;
+}
+.covered-photo-frame { display: block; }
+.covered-photo .covered-photo-frame,
+.covered-photo.covered-photo-frame { min-height: 180px; }
+.covered-photo:not(.is-revealed) .covered-photo-frame,
+.covered-photo.covered-photo-frame:not(.is-revealed) {
+    display: grid;
+}
+.covered-photo:not(.is-revealed) .covered-photo-frame > img,
+.covered-photo:not(.is-revealed) .covered-photo-frame > .covered-photo-cover,
+.covered-photo.covered-photo-frame:not(.is-revealed) > img,
+.covered-photo.covered-photo-frame:not(.is-revealed) > .covered-photo-cover {
+    grid-area: 1 / 1;
+}
+.covered-photo:not(.is-revealed) .covered-photo-frame > .covered-photo-cover,
+.covered-photo.covered-photo-frame:not(.is-revealed) > .covered-photo-cover {
+    position: relative;
+    inset: auto;
+}
+.covered-photo:not(.is-revealed) .covered-photo-frame > img,
+.covered-photo.covered-photo-frame:not(.is-revealed) > img {
+    opacity: 0;
+}
+.covered-photo-cover {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 100%;
+    box-sizing: border-box;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 22px;
+    border: 1px solid var(--zari);
+    border-radius: 4px;
+    background-color: var(--ivory-2);
+    background-image:
+        repeating-linear-gradient(45deg,
+            rgba(122, 15, 56, 0.045) 0 8px,
+            transparent 8px 18px),
+        radial-gradient(circle at 20% 30%, rgba(230, 178, 60, 0.12), transparent 42%);
+    color: var(--ink);
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+.covered-photo-cover-title {
+    font: 400 clamp(18px, 3vw, 28px)/1.1 var(--font-display);
+    color: var(--rani);
+}
+.covered-photo-cover-note {
+    max-width: 34ch;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font: italic 14px/1.4 var(--font-read);
+    color: var(--ink-soft);
+}
+.covered-photo-cover-action {
+    margin-top: 4px;
+    padding: 7px 13px;
+    border-radius: 999px;
+    background: var(--rani);
+    color: var(--ivory);
+    font: 700 12px/1 var(--font-ui);
+}
+.covered-photo.is-revealed .covered-photo-cover { display: none; }
+.covered-photo-again {
+    position: absolute;
+    z-index: 2;
+    top: 8px;
+    right: 8px;
+    padding: 5px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.72);
+    border-radius: 999px;
+    background: rgba(42, 14, 21, 0.82);
+    color: var(--ivory);
+    font: 700 10px/1 var(--font-ui);
+    cursor: pointer;
+}
+.covered-photo-again[hidden],
+[data-covered-caption][hidden],
+[data-covered-dependent][hidden] { display: none; }
+.covered-photo-cover:focus-visible,
+.covered-photo-again:focus-visible {
+    outline: 3px solid var(--marigold);
+    outline-offset: 3px;
+}
+.album-card.covered-photo .covered-photo-frame {
+    min-height: 190px;
+}
+.album-card.covered-photo .covered-photo-cover {
+    border-width: 0 0 1px;
+    border-radius: 0;
+}
+.pl-collage-item .covered-photo-frame { min-height: 180px; }
+.pl-print.covered-photo .covered-photo-frame,
+.published-photo.covered-photo .covered-photo-frame,
+.pl-memento-photo.covered-photo .covered-photo-frame { min-height: 260px; }
+
+@media (max-width: 640px) {
+    .covered-photo-cover { padding: 16px; }
+}
 .media-block audio,
 .media-block video {
     display: block;
@@ -3802,6 +4004,7 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
     width: 132px;
     margin: 0;
 }
+.pl-ramble-thumb--coverable { width: 188px; }
 
 .pl-ramble-thumb img,
 .pl-ramble-thumb video {
