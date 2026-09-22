@@ -477,6 +477,19 @@ submitAllButton.addEventListener('click', async function() {
     if (errorBox) errorBox.hidden = true;
     this.disabled = true;
     this.textContent = 'Submitting…';
+    const editorHelper = window.__polEditor;
+    const coverSavesOK = await editorHelper?.flushCoverEditors?.() ?? true;
+    if (!coverSavesOK) {
+        editorHelper?.setCoverEditorsLocked?.(false);
+        this.textContent = this.dataset.label || 'Submit to the issue →';
+        this.disabled = false;
+        if (errorBox) {
+            errorBox.textContent = 'A photo cover could not be saved. Fix it before submitting.';
+            errorBox.hidden = false;
+        }
+        return;
+    }
+
 
     // Autosave all first.
     for (const section of document.querySelectorAll('.question-section')) {
@@ -503,6 +516,7 @@ submitAllButton.addEventListener('click', async function() {
         this.textContent = '✓ Submitted!';
         setTimeout(() => { window.location.href = '/'; }, 1000);
     } else {
+        editorHelper?.setCoverEditorsLocked?.(false);
         this.textContent = this.dataset.label || 'Submit to the issue →';
         this.disabled = false;
         if (errorBox) {

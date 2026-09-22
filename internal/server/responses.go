@@ -78,7 +78,7 @@ type updateBlockRequest struct {
 // updateMediaCoverRequest is shared by each photo-owning surface. The cover
 // is a presentation choice; it never changes who may access the upload.
 type updateMediaCoverRequest struct {
-	IsCovered bool   `json:"is_covered"`
+	IsCovered *bool  `json:"is_covered"`
 	CoverNote string `json:"cover_note"`
 }
 
@@ -90,6 +90,10 @@ func readMediaCoverRequest(
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
 		return false, nil, false
 	}
+	if req.IsCovered == nil {
+		writeError(w, http.StatusBadRequest, "validation_error", "is_covered is required")
+		return false, nil, false
+	}
 
 	note := strings.TrimSpace(req.CoverNote)
 	if utf8.RuneCountInString(note) > maxCoverNoteRunes {
@@ -99,10 +103,10 @@ func readMediaCoverRequest(
 	}
 
 	if note == "" {
-		return req.IsCovered, nil, true
+		return *req.IsCovered, nil, true
 	}
 
-	return req.IsCovered, &note, true
+	return *req.IsCovered, &note, true
 }
 
 // reorderBlocksRequest is the JSON body for POST /api/responses/{id}/blocks/reorder.

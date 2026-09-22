@@ -422,6 +422,14 @@ func TestCoveredPhotoLifecycle(t *testing.T) {
 	assert.True(t, block.IsCovered)
 	require.NotNil(t, block.CoverNote)
 	assert.Equal(t, "A costume surprise", *block.CoverNote)
+	// Omitting the required state must not turn an existing cover off.
+	rr = patchCover(session, responseTarget, `{"cover_note":"replace it"}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	block, err = env.store.GetBlockByID(ctx, coveredBlockID)
+	require.NoError(t, err)
+	assert.True(t, block.IsCovered)
+	require.NotNil(t, block.CoverNote)
+	assert.Equal(t, "A costume surprise", *block.CoverNote)
 
 	// Another member cannot change the author's presentation choice.
 	assert.Equal(t, http.StatusForbidden,

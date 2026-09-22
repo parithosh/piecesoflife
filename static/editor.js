@@ -16,6 +16,7 @@ const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 // over-long caption is trimmed by the field instead of rejected on save.
 const MAX_DUMP_CAPTION = 500;
 const MAX_COVER_NOTE = 120;
+let coverEditorsLocked = false;
 
 function uploadTooLarge(file) {
     if (file.size <= MAX_UPLOAD_BYTES) return null;
@@ -112,6 +113,24 @@ function coverEditor(endpoint, isCovered, coverNote) {
     editor.append(toggleLabel, help, noteLabel, status);
     return editor;
 }
+function setCoverEditorsLocked(locked) {
+    coverEditorsLocked = locked;
+    document.querySelectorAll('[data-cover-editor]').forEach(editor => {
+        const saving = editor.dataset.coverSaveState === 'saving';
+        editor.querySelector('[data-cover-toggle]').disabled = locked || saving;
+        editor.querySelector('[data-cover-note]').disabled = locked || saving;
+    });
+}
+
+async function flushCoverEditors() {
+    setCoverEditorsLocked(true);
+    const results = await Promise.all(
+        Array.from(document.querySelectorAll('[data-cover-editor]'))
+            .map(editor => editor.__polFlushCover?.() ?? true),
+    );
+    return results.every(Boolean);
+}
+
 
 function attachCoverEditors(root) {
     root = root || document;
@@ -130,7 +149,9 @@ function attachCoverEditors(root) {
         const card = editor.closest('.photo-block, .pl-dump-thumb, .pl-ramble-thumb');
         const badge = card?.querySelector('[data-cover-badge]');
         let savedCovered = toggle.checked;
-        let savedNote = note.value;
+        let savedNote = note.value.trim();
+        let savePromise = null;
+        editor.dataset.coverSaveState = 'saved';
 
         function sync() {
             noteWrap.hidden = !toggle.checked;
@@ -138,11 +159,12 @@ function attachCoverEditors(root) {
             card?.classList.toggle('is-covered-for-readers', toggle.checked);
         }
 
-        async function save() {
+        async function persist() {
             const nextCovered = toggle.checked;
             const nextNote = note.value.trim();
             toggle.disabled = true;
             note.disabled = true;
+            editor.dataset.coverSaveState = 'saving';
             status.textContent = 'Saving…';
             status.classList.remove('is-error');
 
@@ -162,18 +184,38 @@ function attachCoverEditors(root) {
                 savedCovered = nextCovered;
                 savedNote = nextNote;
                 note.value = nextNote;
+                editor.dataset.coverSaveState = 'saved';
                 status.textContent = 'Saved';
+                return true;
             } catch (err) {
                 toggle.checked = savedCovered;
                 note.value = savedNote;
+                editor.dataset.coverSaveState = 'error';
                 status.textContent = err.message || 'Save failed';
                 status.classList.add('is-error');
+                return false;
             } finally {
-                toggle.disabled = false;
-                note.disabled = false;
+                toggle.disabled = coverEditorsLocked;
+                note.disabled = coverEditorsLocked;
                 sync();
             }
         }
+
+        function save() {
+            if (savePromise) return savePromise;
+            savePromise = persist().finally(() => {
+                savePromise = null;
+            });
+            return savePromise;
+        }
+
+        editor.__polFlushCover = () => {
+            if (savePromise) return savePromise;
+            const dirty = toggle.checked !== savedCovered ||
+                note.value.trim() !== savedNote;
+            if (dirty) return save();
+            return Promise.resolve(editor.dataset.coverSaveState !== 'error');
+        };
 
         toggle.addEventListener('change', () => {
             sync();
@@ -575,6 +617,8 @@ window.__polEditor = {
     createLinkBlock,
     showToast,
     attachCoverEditors,
+    flushCoverEditors,
+    setCoverEditorsLocked,
 };
 
 // Run once on load.
