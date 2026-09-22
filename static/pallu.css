@@ -1315,6 +1315,7 @@ input.pl-field::placeholder,
     display: flex; justify-content: space-between; align-items: center;
     gap: 20px; flex-wrap: wrap;
 }
+.pl-frame-head--plain { background: transparent; color: inherit; }
 .pl-frame-head-left { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .pl-frame-month { font-family: var(--font-display); font-weight: 400; font-size: 30px; }
 .pl-countdown { font-family: var(--font-ui); font-weight: 600; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--marigold); }
