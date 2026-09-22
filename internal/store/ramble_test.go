@@ -168,9 +168,11 @@ func TestDiaryAttachSnapshotsJournal(t *testing.T) {
 	seedRambleText(t, s, user, "2026-06-23", "gulmohar", "crows again")
 
 	rambleID := seedRambleText(t, s, user, "2026-06-27", "evening walk")
-	_, err = s.CreateRambleBlock(ctx, rambleID, "photo", nil,
+	photoID, err := s.CreateRambleBlock(ctx, rambleID, "photo", nil,
 		strPtr("/up/2026/06/sky.jpg"), strPtr("the ninety-second sky"))
 	require.NoError(t, err)
+	require.NoError(t, s.UpdateRambleBlockCover(
+		ctx, photoID, true, strPtr("A sky worth opening")))
 
 	// A day outside the window stays out of the snapshot.
 	seedRambleText(t, s, user, "2026-05-01", "too old")
@@ -192,6 +194,9 @@ func TestDiaryAttachSnapshotsJournal(t *testing.T) {
 	require.Len(t, days[0].Blocks, 2, "each journal block copies separately")
 	require.Len(t, days[1].Blocks, 2)
 	assert.Equal(t, "the ninety-second sky", *days[1].Blocks[1].Caption)
+	assert.True(t, days[1].Blocks[1].IsCovered)
+	require.NotNil(t, days[1].Blocks[1].CoverNote)
+	assert.Equal(t, "A sky worth opening", *days[1].Blocks[1].CoverNote)
 
 	// The snapshot is a copy: editing it leaves the journal alone.
 	blockRemoved, dayRemoved, err := s.UpdateDiaryBlockText(

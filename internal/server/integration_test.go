@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -368,6 +369,132 @@ func TestMementoAccessControl(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCoveredPhotoLifecycle verifies the consumer-visible contract across
+// authoring, published reading, Media, archive covers, and mementos.
+func TestCoveredPhotoLifecycle(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	member := env.createUser(t, "Leela", "leela@example.com")
+	other := env.createUser(t, "Nikhil", "nikhil@example.com")
+	session := env.sessionCookie(t, member.ID)
+	otherSession := env.sessionCookie(t, other.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	issueID, questionIDs := env.seedIssue(t, "collecting", 9, 2026, 2)
+	coveredResponseID, err := env.store.CreateResponse(ctx, member.ID, questionIDs[0])
+	require.NoError(t, err)
+	uncoveredResponseID, err := env.store.CreateResponse(ctx, member.ID, questionIDs[1])
+	require.NoError(t, err)
+
+	coveredPath := filepath.Join(env.srv.config.UploadPath, "covered.jpg")
+	uncoveredPath := filepath.Join(env.srv.config.UploadPath, "uncovered.jpg")
+	dumpPath := filepath.Join(env.srv.config.UploadPath, "dump-covered.jpg")
+	hiddenCaption := "The costume reveal"
+
+	coveredBlockID, err := env.store.CreateBlock(ctx, coveredResponseID, "photo",
+		nil, &coveredPath, &hiddenCaption, nil, 0)
+	require.NoError(t, err)
+	_, err = env.store.CreateBlock(ctx, uncoveredResponseID, "photo",
+		nil, &uncoveredPath, nil, nil, 0)
+	require.NoError(t, err)
+	dumpID, err := env.store.CreateDumpItem(ctx, issueID, member.ID, "photo",
+		nil, dumpPath, nil)
+	require.NoError(t, err)
+
+	patchCover := func(sess *http.Cookie, target, body string) *httptest.ResponseRecorder {
+		req := newJSONRequest(http.MethodPatch, target, body)
+		req.AddCookie(sess)
+		req.AddCookie(csrfCookie)
+		req.Header.Set("X-CSRF-Token", csrfHeader)
+		return env.do(t, req)
+	}
+
+	responseTarget := fmt.Sprintf("/api/blocks/%d/cover", coveredBlockID)
+	rr := patchCover(session, responseTarget,
+		`{"is_covered":true,"cover_note":"  A costume surprise  "}`)
+	require.Equal(t, http.StatusOK, rr.Code, "cover response photo: %s", rr.Body.String())
+
+	block, err := env.store.GetBlockByID(ctx, coveredBlockID)
+	require.NoError(t, err)
+	assert.True(t, block.IsCovered)
+	require.NotNil(t, block.CoverNote)
+	assert.Equal(t, "A costume surprise", *block.CoverNote)
+
+	// Another member cannot change the author's presentation choice.
+	assert.Equal(t, http.StatusForbidden,
+		patchCover(otherSession, responseTarget,
+			`{"is_covered":false,"cover_note":""}`).Code)
+
+	dumpTarget := fmt.Sprintf("/api/dump/%d/cover", dumpID)
+	rr = patchCover(session, dumpTarget,
+		`{"is_covered":true,"cover_note":"A second surprise"}`)
+	require.Equal(t, http.StatusOK, rr.Code, "cover dump photo: %s", rr.Body.String())
+
+	require.NoError(t, env.store.SubmitResponse(ctx, coveredResponseID))
+	require.NoError(t, env.store.SubmitResponse(ctx, uncoveredResponseID))
+	require.NoError(t, env.store.PublishIssue(ctx, issueID))
+
+	issueReq := httptest.NewRequest(http.MethodGet, "/issues/2026/9", nil)
+	issueReq.AddCookie(session)
+	issuePage := env.do(t, issueReq)
+	require.Equal(t, http.StatusOK, issuePage.Code)
+	assert.Contains(t, issuePage.Body.String(),
+		fmt.Sprintf(`data-covered-key="response:%d"`, coveredBlockID))
+	assert.Contains(t, issuePage.Body.String(),
+		fmt.Sprintf(`data-covered-key="dump:%d"`, dumpID))
+	assert.Contains(t, issuePage.Body.String(), "A costume surprise")
+	assert.Contains(t, issuePage.Body.String(), "data-covered-caption hidden")
+
+	albumReq := httptest.NewRequest(http.MethodGet, "/api/albums", nil)
+	albumReq.AddCookie(session)
+	albumRR := env.do(t, albumReq)
+	require.Equal(t, http.StatusOK, albumRR.Code)
+
+	var album struct {
+		Items []mediaEntry `json:"items"`
+	}
+	require.NoError(t, json.NewDecoder(albumRR.Body).Decode(&album))
+	var foundResponse, foundDump bool
+	for _, item := range album.Items {
+		switch {
+		case item.Source == "response" && item.ID == coveredBlockID:
+			foundResponse = true
+			assert.True(t, item.IsCovered)
+			require.NotNil(t, item.CoverNote)
+			assert.Equal(t, "A costume surprise", *item.CoverNote)
+		case item.Source == "dump" && item.ID == dumpID:
+			foundDump = true
+			assert.True(t, item.IsCovered)
+		}
+	}
+	assert.True(t, foundResponse, "covered answer photo must remain discoverable in Media")
+	assert.True(t, foundDump, "covered dump photo must remain discoverable in Media")
+
+	archiveReq := httptest.NewRequest(http.MethodGet, "/issues", nil)
+	archiveReq.AddCookie(session)
+	archive := env.do(t, archiveReq)
+	require.Equal(t, http.StatusOK, archive.Code)
+	assert.Contains(t, archive.Body.String(), "/uploads/uncovered.jpg")
+	assert.NotContains(t, archive.Body.String(), "/uploads/covered.jpg",
+		"covered photo must not become archive cover art")
+
+	mementoReq := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/m/%d", coveredResponseID), nil)
+	mementoReq.AddCookie(session)
+	memento := env.do(t, mementoReq)
+	require.Equal(t, http.StatusOK, memento.Code)
+	assert.Contains(t, memento.Body.String(),
+		fmt.Sprintf(`data-covered-key="response:%d"`, coveredBlockID))
+	assert.NotContains(t, memento.Body.String(), `property="og:image"`,
+		"covered photo must not become an unsolicited social preview")
+
+	assert.Equal(t, http.StatusConflict,
+		patchCover(session, dumpTarget,
+			`{"is_covered":false,"cover_note":""}`).Code,
+		"cover metadata closes when the issue is published")
 }
 
 // TestIssuePageQuestionClamping verifies the ?q deep-link parameter is

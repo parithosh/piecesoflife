@@ -244,6 +244,57 @@ func (s *Server) handleUpdateRambleBlock(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleUpdateRambleBlockCover changes how a journal photo will be presented
+// if it is later woven into an issue.
+// PATCH /api/ramble/blocks/{id}/cover
+func (s *Server) handleUpdateRambleBlockCover(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
+	id, ok := s.parseIDParam(w, r, "id", "block ID")
+	if !ok {
+		return
+	}
+
+	block, err := s.store.GetRambleBlockByID(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		return
+	}
+
+	ramble, err := s.store.GetRambleByID(ctx, block.RambleID)
+	if err != nil || ramble.UserID != user.ID {
+		writeError(w, http.StatusNotFound, "not_found", "Block not found")
+		return
+	}
+	if block.Type != photoBlockType {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_block_type",
+			"Only photos can be covered")
+		return
+	}
+
+	isCovered, coverNote, ok := readMediaCoverRequest(w, r)
+	if !ok {
+		return
+	}
+
+	if err := s.store.UpdateRambleBlockCover(ctx, id, isCovered, coverNote); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to update ramble photo cover",
+			slog.Int64("block_id", id),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save photo cover")
+		return
+	}
+
+	updated, err := s.store.GetRambleBlockByID(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to load photo cover")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.rambleBlockJSON(*updated))
+}
+
 // handleRambleMediaUpload attaches a photo/audio/video to one journal day.
 // POST /api/ramble/{day}/media
 func (s *Server) handleRambleMediaUpload(w http.ResponseWriter, r *http.Request) {

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/yuin/goldmark"
 
@@ -29,11 +30,12 @@ const (
 	maxMultipartMemory = 32 << 20 // 32 MB
 	// maxMediaBlocks caps uploads per response, per media type — 100 each
 	// of photos, audio, and video.
-	maxMediaBlocks  = 100
-	photoBlockType  = "photo"
-	audioBlockType  = "audio"
-	videoBlockType  = "video"
-	maxCommentBytes = 4000
+	maxMediaBlocks    = 100
+	photoBlockType    = "photo"
+	audioBlockType    = "audio"
+	videoBlockType    = "video"
+	maxCommentBytes   = 4000
+	maxCoverNoteRunes = 120
 )
 
 // heifBrands are the ISO-BMFF ftyp brands that identify HEIF-family images,
@@ -71,6 +73,36 @@ type addBlockRequest struct {
 type updateBlockRequest struct {
 	Content *string `json:"content"`
 	Caption *string `json:"caption"`
+}
+
+// updateMediaCoverRequest is shared by each photo-owning surface. The cover
+// is a presentation choice; it never changes who may access the upload.
+type updateMediaCoverRequest struct {
+	IsCovered bool   `json:"is_covered"`
+	CoverNote string `json:"cover_note"`
+}
+
+func readMediaCoverRequest(
+	w http.ResponseWriter, r *http.Request,
+) (bool, *string, bool) {
+	var req updateMediaCoverRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return false, nil, false
+	}
+
+	note := strings.TrimSpace(req.CoverNote)
+	if utf8.RuneCountInString(note) > maxCoverNoteRunes {
+		writeError(w, http.StatusUnprocessableEntity, "cover_note_too_long",
+			fmt.Sprintf("Notes for readers are capped at %d characters", maxCoverNoteRunes))
+		return false, nil, false
+	}
+
+	if note == "" {
+		return req.IsCovered, nil, true
+	}
+
+	return req.IsCovered, &note, true
 }
 
 // reorderBlocksRequest is the JSON body for POST /api/responses/{id}/blocks/reorder.
@@ -353,6 +385,47 @@ func (s *Server) handleUpdateBlock(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()),
 		)
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to retrieve block")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// handleUpdateBlockCover changes how a photo is initially presented to
+// readers. The owning response must still be editable.
+// PATCH /api/blocks/{id}/cover
+func (s *Server) handleUpdateBlockCover(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.parseIDParam(w, r, "id", "block ID")
+	if !ok {
+		return
+	}
+
+	block, _, ok := s.loadOwnedBlock(w, r, id, true)
+	if !ok {
+		return
+	}
+	if block.Type != photoBlockType {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_block_type",
+			"Only photos can be covered")
+		return
+	}
+
+	isCovered, coverNote, ok := readMediaCoverRequest(w, r)
+	if !ok {
+		return
+	}
+
+	if err := s.store.UpdateBlockCover(r.Context(), id, isCovered, coverNote); err != nil {
+		s.logger.ErrorContext(r.Context(), "Failed to update photo cover",
+			slog.Int64("block_id", id),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save photo cover")
+		return
+	}
+
+	updated, err := s.store.GetBlockByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to load photo cover")
 		return
 	}
 

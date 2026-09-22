@@ -161,7 +161,7 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 	// Per-issue failure isn't fatal — the card just renders without photos.
 	cards := make([]IssueArchiveCard, 0, len(issues))
 	for _, iss := range issues {
-		photos, pErr := s.store.ListPhotosForIssue(ctx, iss.ID, 4)
+		photos, pErr := s.store.ListUncoveredPhotosForIssue(ctx, iss.ID, 4)
 		if pErr != nil {
 			s.logger.WarnContext(ctx, "Failed to load collage photos",
 				slog.Int64("issue_id", iss.ID),
@@ -1019,9 +1019,9 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 
 	var ogImage string
 	for _, b := range blocks {
-		if b.Type == "photo" && b.FilePath != nil {
-			// Use the memento-scoped file route so anonymous viewers can
-			// fetch the OG image even though /uploads/ is auth-gated.
+		if b.Type == "photo" && b.FilePath != nil && !b.IsCovered {
+			// Covered photos are never unsolicited social previews. Use the
+			// memento-scoped route only for an uncovered photo.
 			ogImage = s.config.BaseURL + s.mementoFileURL(responseID, *b.FilePath)
 			break
 		}
@@ -1192,9 +1192,13 @@ func truncateWords(s string, max int) string {
 // mediaEntry is one item on the Media page: any photo, video, or audio ever
 // shared into a published issue — answer blocks and photo-dump items alike.
 type mediaEntry struct {
-	Kind         string    `json:"kind"` // photo | audio | video
+	ID           int64     `json:"id"`
+	Source       string    `json:"source"` // response | dump | diary
+	Kind         string    `json:"kind"`   // photo | audio | video
 	URL          string    `json:"url"`
 	Caption      *string   `json:"caption"`
+	IsCovered    bool      `json:"is_covered"`
+	CoverNote    *string   `json:"cover_note"`
 	CreatedAt    time.Time `json:"created_at"`
 	UserName     string    `json:"user_name"`
 	FromDump     bool      `json:"from_dump"`
@@ -1259,9 +1263,13 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 				}
 
 				media = append(media, mediaEntry{
+					ID:        block.ID,
+					Source:    "response",
 					Kind:      block.Type,
 					URL:       s.uploadURL(*block.FilePath),
 					Caption:   block.Caption,
+					IsCovered: block.IsCovered,
+					CoverNote: block.CoverNote,
 					CreatedAt: block.CreatedAt,
 					UserName:  author.Name,
 					IssueID:   issue.ID,
@@ -1282,9 +1290,13 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 
 		for _, item := range dumpItems {
 			media = append(media, mediaEntry{
+				ID:        item.ID,
+				Source:    "dump",
 				Kind:      item.Kind,
 				URL:       s.uploadURL(item.FilePath),
 				Caption:   item.Caption,
+				IsCovered: item.IsCovered,
+				CoverNote: item.CoverNote,
 				CreatedAt: item.CreatedAt,
 				UserName:  item.UserName,
 				FromDump:  true,
@@ -1313,9 +1325,13 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 					}
 
 					media = append(media, mediaEntry{
+						ID:           b.ID,
+						Source:       "diary",
 						Kind:         b.Type,
 						URL:          s.uploadURL(*b.FilePath),
 						Caption:      b.Caption,
+						IsCovered:    b.IsCovered,
+						CoverNote:    b.CoverNote,
 						CreatedAt:    b.CreatedAt,
 						UserName:     g.UserName,
 						FromNotebook: true,

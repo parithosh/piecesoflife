@@ -78,9 +78,28 @@
                       <textarea class="response-text" placeholder="Share your thoughts…"
                                 data-block-id="{{.ID}}">{{if .Content}}{{.Content}}{{end}}</textarea>
                       {{else if eq .Type "photo"}}
-                      <div class="photo-block">
+                      <div class="photo-block{{if .IsCovered}} is-covered-for-readers{{end}}">
                         <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" style="max-width:100%;border-radius:4px;">
+                        <span class="pl-cover-badge" data-cover-badge
+                              {{if not .IsCovered}}hidden{{end}}>Covered for readers</span>
                         {{if .Caption}}<p class="caption">{{.Caption}}</p>{{end}}
+                        <div class="pl-cover-editor" data-cover-editor
+                             data-cover-endpoint="/api/blocks/{{.ID}}/cover">
+                          <label class="pl-cover-toggle">
+                            <input type="checkbox" data-cover-toggle {{if .IsCovered}}checked{{end}}>
+                            Cover until opened
+                          </label>
+                          <span class="pl-cover-help">Readers choose when to reveal it.</span>
+                          <label class="pl-cover-note" data-cover-note-wrap
+                                 {{if not .IsCovered}}hidden{{end}}>
+                            Note for readers (optional)
+                            <input type="text" data-cover-note maxlength="120"
+                                   value="{{if .CoverNote}}{{.CoverNote}}{{end}}"
+                                   placeholder="A surprise, spoiler, or sensitive moment">
+                          </label>
+                          <span class="pl-cover-status" data-cover-status
+                                role="status" aria-live="polite"></span>
+                        </div>
                         <button type="button" class="block-remove" data-block-remove="{{.ID}}"
                                 aria-label="Remove this photo">✕</button>
                       </div>
@@ -160,18 +179,40 @@
           <div class="pl-dump-grid{{if not .DumpItems}} is-empty{{end}}" id="dump-grid"
                data-issue-id="{{.Issue.ID}}">
             {{range .DumpItems}}
-            <figure class="pl-dump-thumb" data-dump-id="{{.ID}}">
+            <figure class="pl-dump-thumb{{if eq .Kind "photo"}} pl-dump-thumb--coverable{{end}}{{if .IsCovered}} is-covered-for-readers{{end}}"
+                    data-dump-id="{{.ID}}">
               <span class="pl-dump-thumb-media">
                 {{if eq .Kind "video"}}
                 <video src="{{.FilePath | uploadURL}}" preload="metadata" muted playsinline></video>
                 <span class="pl-dump-thumb-kind" aria-hidden="true">▶</span>
                 {{else}}
                 <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}">
+                <span class="pl-cover-badge" data-cover-badge
+                      {{if not .IsCovered}}hidden{{end}}>Covered for readers</span>
                 {{end}}
               </span>
               <input type="text" class="pl-dump-caption" data-dump-caption="{{.ID}}"
                      value="{{if .Caption}}{{.Caption}}{{end}}" maxlength="500"
                      placeholder="Caption…" aria-label="Caption for this {{.Kind}}">
+              {{if eq .Kind "photo"}}
+              <div class="pl-cover-editor pl-cover-editor--compact" data-cover-editor
+                   data-cover-endpoint="/api/dump/{{.ID}}/cover">
+                <label class="pl-cover-toggle">
+                  <input type="checkbox" data-cover-toggle {{if .IsCovered}}checked{{end}}>
+                  Cover until opened
+                </label>
+                <span class="pl-cover-help">Readers choose when to reveal it.</span>
+                <label class="pl-cover-note" data-cover-note-wrap
+                       {{if not .IsCovered}}hidden{{end}}>
+                  Note for readers (optional)
+                  <input type="text" data-cover-note maxlength="120"
+                         value="{{if .CoverNote}}{{.CoverNote}}{{end}}"
+                         placeholder="A surprise or sensitive moment">
+                </label>
+                <span class="pl-cover-status" data-cover-status
+                      role="status" aria-live="polite"></span>
+              </div>
+              {{end}}
               <button type="button" class="pl-dump-remove" data-dump-remove="{{.ID}}"
                       aria-label="Remove from dump">✕</button>
             </figure>
@@ -243,8 +284,28 @@
             <div class="pl-ramble-media">
               {{range .Blocks}}
               {{if eq .Type "photo"}}
-              <figure class="pl-ramble-thumb" data-block-id="{{.ID}}">
+              <figure class="pl-ramble-thumb pl-ramble-thumb--coverable{{if .IsCovered}} is-covered-for-readers{{end}}"
+                      data-block-id="{{.ID}}">
                 <img src="{{.FilePath | uploadURL}}" alt="{{if .Caption}}{{.Caption}}{{end}}" loading="lazy">
+                <span class="pl-cover-badge" data-cover-badge
+                      {{if not .IsCovered}}hidden{{end}}>Covered for readers</span>
+                <div class="pl-cover-editor pl-cover-editor--compact" data-cover-editor
+                     data-cover-endpoint="/api/diary-blocks/{{.ID}}/cover">
+                  <label class="pl-cover-toggle">
+                    <input type="checkbox" data-cover-toggle {{if .IsCovered}}checked{{end}}>
+                    Cover until opened
+                  </label>
+                  <span class="pl-cover-help">Readers choose when to reveal it.</span>
+                  <label class="pl-cover-note" data-cover-note-wrap
+                         {{if not .IsCovered}}hidden{{end}}>
+                    Note for readers (optional)
+                    <input type="text" data-cover-note maxlength="120"
+                           value="{{if .CoverNote}}{{.CoverNote}}{{end}}"
+                           placeholder="A surprise or sensitive moment">
+                  </label>
+                  <span class="pl-cover-status" data-cover-status
+                        role="status" aria-live="polite"></span>
+                </div>
                 <button type="button" class="pl-thumb-remove" data-diary-block-remove="{{.ID}}"
                         aria-label="Remove this photo">✕</button>
               </figure>

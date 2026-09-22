@@ -42,6 +42,8 @@ type DiaryBlock struct {
 	Content    *string   `json:"content"`
 	FilePath   *string   `json:"file_path"`
 	Caption    *string   `json:"caption"`
+	IsCovered  bool      `json:"is_covered"`
+	CoverNote  *string   `json:"cover_note"`
 	SortOrder  int       `json:"sort_order"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -225,10 +227,11 @@ func (s *Store) GetDiaryBlockByID(
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT id, diary_day_id, type, content, file_path, caption,
-		        sort_order, created_at, updated_at
+		        is_covered, cover_note, sort_order, created_at, updated_at
 		 FROM diary_blocks WHERE id = ?`, id,
 	).Scan(&b.ID, &b.DiaryDayID, &b.Type, &b.Content, &b.FilePath,
-		&b.Caption, &b.SortOrder, &b.CreatedAt, &b.UpdatedAt)
+		&b.Caption, &b.IsCovered, &b.CoverNote, &b.SortOrder,
+		&b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting diary block %d: %w", id, err)
 	}
@@ -317,7 +320,8 @@ func (s *Store) ListDiaryDays(
 
 	blockRows, err := s.read.QueryContext(ctx,
 		`SELECT b.id, b.diary_day_id, b.type, b.content, b.file_path,
-		        b.caption, b.sort_order, b.created_at, b.updated_at
+		        b.caption, b.is_covered, b.cover_note, b.sort_order,
+		        b.created_at, b.updated_at
 		 FROM diary_blocks b
 		 JOIN diary_days d ON d.id = b.diary_day_id
 		 WHERE d.section_id = ?
@@ -331,8 +335,8 @@ func (s *Store) ListDiaryDays(
 	for blockRows.Next() {
 		var b DiaryBlock
 		if err := blockRows.Scan(&b.ID, &b.DiaryDayID, &b.Type, &b.Content,
-			&b.FilePath, &b.Caption, &b.SortOrder,
-			&b.CreatedAt, &b.UpdatedAt); err != nil {
+			&b.FilePath, &b.Caption, &b.IsCovered, &b.CoverNote,
+			&b.SortOrder, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning diary block: %w", err)
 		}
 
@@ -346,6 +350,23 @@ func (s *Store) ListDiaryDays(
 	}
 
 	return days, nil
+}
+
+// UpdateDiaryBlockCover changes a snapshot photo's viewer-controlled cover
+// metadata. Ownership and issue-status checks live in the handler.
+func (s *Store) UpdateDiaryBlockCover(
+	ctx context.Context, id int64, isCovered bool, coverNote *string,
+) error {
+	_, err := s.write.ExecContext(ctx,
+		`UPDATE diary_blocks SET is_covered = ?, cover_note = ?,
+		 updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		isCovered, coverNote, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating diary block %d cover: %w", id, err)
+	}
+
+	return nil
 }
 
 // ListDiarySectionsByIssue returns every section on an issue joined with its
@@ -624,8 +645,10 @@ func copyDiaryDays(
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO diary_blocks
-		     (diary_day_id, type, content, file_path, caption, sort_order)
-		 SELECT dd.id, rb.type, rb.content, rb.file_path, rb.caption, rb.sort_order
+		     (diary_day_id, type, content, file_path, caption,
+		      is_covered, cover_note, sort_order)
+		 SELECT dd.id, rb.type, rb.content, rb.file_path, rb.caption,
+		        rb.is_covered, rb.cover_note, rb.sort_order
 		 FROM diary_days dd
 		 JOIN rambles r ON r.user_id = ? AND r.day = dd.day
 		 JOIN ramble_blocks rb ON rb.ramble_id = r.id

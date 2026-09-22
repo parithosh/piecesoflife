@@ -30,6 +30,8 @@ type ResponseBlock struct {
 	Content    *string   `json:"content"`
 	FilePath   *string   `json:"file_path"`
 	Caption    *string   `json:"caption"`
+	IsCovered  bool      `json:"is_covered"`
+	CoverNote  *string   `json:"cover_note"`
 	LinkURL    *string   `json:"link_url"`
 	SortOrder  int       `json:"sort_order"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -268,6 +270,43 @@ func (s *Store) ListPhotosForIssue(
 	return paths, nil
 }
 
+// ListUncoveredPhotosForIssue returns archive-safe photo previews. Covered
+// photos remain part of the issue and its counts, but never become unsolicited
+// cover art.
+func (s *Store) ListUncoveredPhotosForIssue(
+	ctx context.Context, issueID int64, limit int,
+) ([]string, error) {
+	rows, err := s.read.QueryContext(ctx,
+		`SELECT rb.file_path
+		 FROM response_blocks rb
+		 JOIN responses r ON rb.response_id = r.id
+		 JOIN questions q ON r.question_id = q.id
+		 WHERE q.issue_id = ? AND r.is_draft = 0
+		       AND rb.type = 'photo' AND rb.file_path IS NOT NULL
+		       AND rb.is_covered = FALSE
+		 ORDER BY rb.created_at DESC
+		 LIMIT ?`, issueID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing uncovered photos for issue %d: %w", issueID, err)
+	}
+	defer rows.Close()
+
+	paths := make([]string, 0, limit)
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("scanning uncovered photo path: %w", err)
+		}
+		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating uncovered photos: %w", err)
+	}
+
+	return paths, nil
+}
+
 // ListResponsesByIssue returns submitted responses for an issue.
 func (s *Store) ListResponsesByIssue(
 	ctx context.Context, issueID int64, onlySubmitted bool,
@@ -501,11 +540,11 @@ func (s *Store) GetBlockByID(
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT id, response_id, type, content, file_path, caption,
-		        link_url, sort_order, created_at, updated_at
+		        is_covered, cover_note, link_url, sort_order, created_at, updated_at
 		 FROM response_blocks WHERE id = ?`, id,
 	).Scan(&b.ID, &b.ResponseID, &b.Type, &b.Content,
-		&b.FilePath, &b.Caption, &b.LinkURL, &b.SortOrder,
-		&b.CreatedAt, &b.UpdatedAt)
+		&b.FilePath, &b.Caption, &b.IsCovered, &b.CoverNote, &b.LinkURL,
+		&b.SortOrder, &b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting block %d: %w", id, err)
 	}
@@ -519,7 +558,7 @@ func (s *Store) ListBlocksByResponse(
 ) ([]ResponseBlock, error) {
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT id, response_id, type, content, file_path, caption,
-		        link_url, sort_order, created_at, updated_at
+		        is_covered, cover_note, link_url, sort_order, created_at, updated_at
 		 FROM response_blocks WHERE response_id = ?
 		 ORDER BY sort_order`, responseID,
 	)
@@ -535,8 +574,8 @@ func (s *Store) ListBlocksByResponse(
 		var b ResponseBlock
 
 		err := rows.Scan(&b.ID, &b.ResponseID, &b.Type, &b.Content,
-			&b.FilePath, &b.Caption, &b.LinkURL, &b.SortOrder,
-			&b.CreatedAt, &b.UpdatedAt)
+			&b.FilePath, &b.Caption, &b.IsCovered, &b.CoverNote, &b.LinkURL,
+			&b.SortOrder, &b.CreatedAt, &b.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scanning block: %w", err)
 		}
@@ -566,6 +605,23 @@ func (s *Store) UpdateBlock(
 	)
 	if err != nil {
 		return fmt.Errorf("updating block %d: %w", id, err)
+	}
+
+	return nil
+}
+
+// UpdateBlockCover changes a photo's viewer-controlled cover metadata.
+// Ownership and edit-window checks live in the handler.
+func (s *Store) UpdateBlockCover(
+	ctx context.Context, id int64, isCovered bool, coverNote *string,
+) error {
+	_, err := s.write.ExecContext(ctx,
+		`UPDATE response_blocks SET is_covered = ?, cover_note = ?,
+		 updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		isCovered, coverNote, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating block %d cover: %w", id, err)
 	}
 
 	return nil

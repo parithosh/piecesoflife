@@ -15,6 +15,7 @@ const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 // Mirrors maxDumpCaptionRunes on the server (internal/server/dump.go) so an
 // over-long caption is trimmed by the field instead of rejected on save.
 const MAX_DUMP_CAPTION = 500;
+const MAX_COVER_NOTE = 120;
 
 function uploadTooLarge(file) {
     if (file.size <= MAX_UPLOAD_BYTES) return null;
@@ -66,6 +67,126 @@ async function uploadMedia(responseID, file, kind) {
 // Helper: upload a photo.
 async function uploadPhoto(responseID, file) {
     return uploadMedia(responseID, file, 'photo');
+}
+
+// --- Covered photo authoring -------------------------------------------
+
+function coverEditor(endpoint, isCovered, coverNote) {
+    const editor = document.createElement('div');
+    editor.className = 'pl-cover-editor pl-cover-editor--compact';
+    editor.dataset.coverEditor = '';
+    editor.dataset.coverEndpoint = endpoint;
+
+    const toggleLabel = document.createElement('label');
+    toggleLabel.className = 'pl-cover-toggle';
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    toggle.checked = Boolean(isCovered);
+    toggle.dataset.coverToggle = '';
+    toggleLabel.append(toggle, document.createTextNode(' Cover until opened'));
+
+    const help = document.createElement('span');
+    help.className = 'pl-cover-help';
+    help.textContent = 'Readers choose when to reveal it.';
+
+    const noteLabel = document.createElement('label');
+    noteLabel.className = 'pl-cover-note';
+    noteLabel.dataset.coverNoteWrap = '';
+    noteLabel.hidden = !toggle.checked;
+    noteLabel.append(document.createTextNode('Note for readers (optional)'));
+
+    const note = document.createElement('input');
+    note.type = 'text';
+    note.maxLength = MAX_COVER_NOTE;
+    note.placeholder = 'A surprise, spoiler, or sensitive moment';
+    note.value = coverNote || '';
+    note.dataset.coverNote = '';
+    noteLabel.appendChild(note);
+
+    const status = document.createElement('span');
+    status.className = 'pl-cover-status';
+    status.dataset.coverStatus = '';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    editor.append(toggleLabel, help, noteLabel, status);
+    return editor;
+}
+
+function attachCoverEditors(root) {
+    root = root || document;
+    const editors = [];
+    if (root.matches?.('[data-cover-editor]')) editors.push(root);
+    root.querySelectorAll?.('[data-cover-editor]').forEach(el => editors.push(el));
+
+    editors.forEach(editor => {
+        if (editor.dataset.coverEditorWired) return;
+        editor.dataset.coverEditorWired = '1';
+
+        const toggle = editor.querySelector('[data-cover-toggle]');
+        const note = editor.querySelector('[data-cover-note]');
+        const noteWrap = editor.querySelector('[data-cover-note-wrap]');
+        const status = editor.querySelector('[data-cover-status]');
+        const card = editor.closest('.photo-block, .pl-dump-thumb, .pl-ramble-thumb');
+        const badge = card?.querySelector('[data-cover-badge]');
+        let savedCovered = toggle.checked;
+        let savedNote = note.value;
+
+        function sync() {
+            noteWrap.hidden = !toggle.checked;
+            if (badge) badge.hidden = !toggle.checked;
+            card?.classList.toggle('is-covered-for-readers', toggle.checked);
+        }
+
+        async function save() {
+            const nextCovered = toggle.checked;
+            const nextNote = note.value.trim();
+            toggle.disabled = true;
+            note.disabled = true;
+            status.textContent = 'Saving…';
+            status.classList.remove('is-error');
+
+            try {
+                const res = await fetch(editor.dataset.coverEndpoint, {
+                    method: 'PATCH',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({
+                        is_covered: nextCovered,
+                        cover_note: nextNote,
+                    }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    throw new Error(data?.error?.message || 'Could not save photo cover');
+                }
+                savedCovered = nextCovered;
+                savedNote = nextNote;
+                note.value = nextNote;
+                status.textContent = 'Saved';
+            } catch (err) {
+                toggle.checked = savedCovered;
+                note.value = savedNote;
+                status.textContent = err.message || 'Save failed';
+                status.classList.add('is-error');
+            } finally {
+                toggle.disabled = false;
+                note.disabled = false;
+                sync();
+            }
+        }
+
+        toggle.addEventListener('change', () => {
+            sync();
+            save();
+        });
+        note.addEventListener('change', save);
+        note.addEventListener('keydown', ev => {
+            if (ev.key !== 'Enter') return;
+            ev.preventDefault();
+            note.blur();
+        });
+        sync();
+    });
 }
 
 // --- Link-block detection on paste -------------------------------------
@@ -273,10 +394,18 @@ function dumpThumb(item, url) {
         kind.textContent = '▶';
         media.appendChild(kind);
     } else {
+        fig.classList.add('pl-dump-thumb--coverable');
         const img = document.createElement('img');
         img.src = url;
         img.alt = '';
         media.appendChild(img);
+
+        const badge = document.createElement('span');
+        badge.className = 'pl-cover-badge';
+        badge.dataset.coverBadge = '';
+        badge.hidden = !item.is_covered;
+        badge.textContent = 'Covered for readers';
+        media.appendChild(badge);
     }
 
     const caption = document.createElement('input');
@@ -288,6 +417,14 @@ function dumpThumb(item, url) {
     caption.placeholder = 'Caption…';
     caption.setAttribute('aria-label', `Caption for this ${item.kind}`);
     fig.appendChild(caption);
+
+    if (item.kind === 'photo') {
+        fig.appendChild(coverEditor(
+            `/api/dump/${item.id}/cover`,
+            item.is_covered,
+            item.cover_note,
+        ));
+    }
 
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -333,6 +470,7 @@ function attachDump() {
         }
 
         grid.appendChild(dumpThumb(data.item, data.url));
+        attachCoverEditors(grid.lastElementChild);
         grid.classList.remove('is-empty');
     }
 
@@ -428,12 +566,15 @@ function attachDump() {
     });
 }
 
+attachCoverEditors();
+
 // Expose for respond.html to call after rendering.
 window.__polEditor = {
     uploadMedia,
     uploadPhoto,
     createLinkBlock,
     showToast,
+    attachCoverEditors,
 };
 
 // Run once on load.
