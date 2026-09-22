@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -19,35 +20,78 @@ type Settings struct {
 	Timezone             string     `json:"timezone"`
 	InviteNote           *string    `json:"invite_note"`
 	SetupComplete        bool       `json:"setup_complete"`
-	AccentColor          string     `json:"accent_color"`
-	AutoCreateEnabled    bool       `json:"auto_create_enabled"`
-	AllowPublicMementos  bool       `json:"allow_public_mementos"`
-	QuestionsPerIssue    int        `json:"questions_per_issue"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	// Theme is the published appearance config (internal/theme.Config
+	// JSON); nil means the house look. ThemePrevious is the look it
+	// replaced, kept for one-step restore.
+	Theme               json.RawMessage `json:"theme,omitempty"`
+	ThemePrevious       json.RawMessage `json:"-"`
+	AutoCreateEnabled   bool            `json:"auto_create_enabled"`
+	AllowPublicMementos bool            `json:"allow_public_mementos"`
+	QuestionsPerIssue   int             `json:"questions_per_issue"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 // GetSettings returns one group's settings row.
 func (s *Store) GetSettings(ctx context.Context, groupID int64) (*Settings, error) {
 	var st Settings
+	var themeRaw, prevRaw sql.NullString
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT id, group_id, loop_name, tagline, frequency,
 		        submission_window_days, start_datetime, timezone,
 		        invite_note, setup_complete,
-		        accent_color, auto_create_enabled, allow_public_mementos,
+		        theme, theme_previous, auto_create_enabled, allow_public_mementos,
 		        questions_per_issue, created_at, updated_at
 		 FROM settings WHERE group_id = ?`, groupID,
 	).Scan(&st.ID, &st.GroupID, &st.LoopName, &st.Tagline, &st.Frequency,
 		&st.SubmissionWindowDays, &st.StartDatetime, &st.Timezone,
 		&st.InviteNote, &st.SetupComplete,
-		&st.AccentColor, &st.AutoCreateEnabled, &st.AllowPublicMementos,
+		&themeRaw, &prevRaw, &st.AutoCreateEnabled, &st.AllowPublicMementos,
 		&st.QuestionsPerIssue, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting settings for group %d: %w", groupID, err)
 	}
 
+	st.Theme = rawJSON(themeRaw)
+	st.ThemePrevious = rawJSON(prevRaw)
+
 	return &st, nil
+}
+
+func rawJSON(ns sql.NullString) json.RawMessage {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+
+	return json.RawMessage(ns.String)
+}
+
+func nullJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	return string(raw)
+}
+
+// UpdateTheme publishes a group's appearance, storing the look it replaces
+// as the restore point. nil theme = house look.
+func (s *Store) UpdateTheme(ctx context.Context, groupID int64, theme, previous json.RawMessage) error {
+	result, err := s.write.ExecContext(ctx,
+		`UPDATE settings SET theme = ?, theme_previous = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE group_id = ?`,
+		nullJSON(theme), nullJSON(previous), groupID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating theme for group %d: %w", groupID, err)
+	}
+
+	if n, err := result.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("settings for group %d: %w", groupID, sql.ErrNoRows)
+	}
+
+	return nil
 }
 
 // UpdateSettings writes all editable settings fields of st's group. A
@@ -59,14 +103,14 @@ func (s *Store) UpdateSettings(ctx context.Context, st *Settings) error {
 			loop_name = ?, tagline = ?, frequency = ?,
 			submission_window_days = ?, start_datetime = ?,
 			timezone = ?, invite_note = ?,
-			accent_color = ?, auto_create_enabled = ?,
+			auto_create_enabled = ?,
 			allow_public_mementos = ?, questions_per_issue = ?,
 			updated_at = CURRENT_TIMESTAMP
 		 WHERE group_id = ?`,
 		st.LoopName, st.Tagline, st.Frequency,
 		st.SubmissionWindowDays, st.StartDatetime,
 		st.Timezone, st.InviteNote,
-		st.AccentColor, st.AutoCreateEnabled,
+		st.AutoCreateEnabled,
 		st.AllowPublicMementos, st.QuestionsPerIssue,
 		st.GroupID,
 	)

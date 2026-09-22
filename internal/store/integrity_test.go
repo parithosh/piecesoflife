@@ -48,6 +48,30 @@ func TestCheckUploadIntegrityFindsOrphans(t *testing.T) {
 	assert.Contains(t, report.OrphanSample[1], "orphan-b.mp4")
 }
 
+// Circle photos live in settings.theme (and its restore point), not in a
+// media row; they must count as referenced or every circle photo would be
+// reported as an orphan.
+func TestCheckUploadIntegrityCountsCirclePhotos(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	uploads := t.TempDir()
+
+	photo := writeUploadFile(t, uploads, "branding/1/0123456789abcdef.jpg")
+	oldBanner := writeUploadFile(t, uploads, "branding/1/fedcba9876543210.jpg")
+	writeUploadFile(t, uploads, "branding/1/aaaaaaaaaaaaaaaa.jpg")
+
+	current := fmt.Sprintf(`{"v":1,"fabric":"coastal","photo":{"path":%q,"x":50,"y":50}}`, photo)
+	previous := fmt.Sprintf(`{"v":1,"fabric":"rani","banner":{"path":%q,"x":50,"y":50}}`, oldBanner)
+	require.NoError(t, st.UpdateTheme(ctx, 1, []byte(current), []byte(previous)))
+
+	report, err := st.CheckUploadIntegrity(ctx, uploads)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, report.Referenced)
+	assert.Equal(t, 1, report.Orphaned)
+	assert.Zero(t, report.Missing)
+}
+
 // TestCheckUploadIntegrityFindsMissingFiles covers the opposite failure: a
 // lost or partially copied uploads volume.
 func TestCheckUploadIntegrityFindsMissingFiles(t *testing.T) {

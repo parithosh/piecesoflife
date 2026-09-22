@@ -7,14 +7,13 @@
  * Theme rules:
  *   1. oat.css uses light-dark() driven by `color-scheme`; the Pallu
  *      identity pins the whole app to light (see pallu.css :root).
- *   2. The admin-configurable accent overrides --accent (and propagates to
- *      --primary / --ring through the bridge), so it tints buttons, links,
- *      focus rings, and other oat components automatically.
+ *   2. --accent (moss) tints the legacy oat widgets — buttons, links,
+ *      focus rings — via --primary / --ring. It is fixed: per-circle
+ *      appearance themes the Pallu tokens instead (see pallu.css :root).
  */
 
 :root {
-    /* Configurable accent — replaced by an inline <style> in base.html with
-     * the value from settings.accent_color. Default is a deep moss. */
+    /* Legacy widget accent (deep moss). Not circle-themed. */
     --accent: #2d5016;
     --accent-on: #ffffff;
     --accent-soft: color-mix(in srgb, var(--accent) 10%, var(--card));

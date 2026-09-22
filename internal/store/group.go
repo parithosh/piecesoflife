@@ -155,36 +155,6 @@ func (s *Store) ListGroupOverviews(ctx context.Context) ([]GroupOverview, error)
 	return overviews, nil
 }
 
-// GetOldestActiveGroupID returns the instance's first-created active
-// group — the "default" Loop for legacy data that predates multi-group.
-func (s *Store) GetOldestActiveGroupID(ctx context.Context) (int64, error) {
-	var id int64
-
-	err := s.read.QueryRowContext(ctx,
-		`SELECT id FROM groups WHERE is_active = 1
-		 ORDER BY created_at, id LIMIT 1`,
-	).Scan(&id)
-	if err != nil {
-		return 0, fmt.Errorf("getting oldest active group: %w", err)
-	}
-
-	return id, nil
-}
-
-// CountActiveGroups returns how many non-archived groups exist.
-func (s *Store) CountActiveGroups(ctx context.Context) (int, error) {
-	var count int
-
-	err := s.read.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM groups WHERE is_active = 1",
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("counting active groups: %w", err)
-	}
-
-	return count, nil
-}
-
 // SetGroupActive archives (false) or restores (true) a group. Archived
 // groups keep all their data but disappear from switchers and stop being a
 // valid current Loop.

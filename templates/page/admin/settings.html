@@ -17,6 +17,7 @@
           <a href="/admin/members"   class="pl-tab">Members</a>
           <a href="/admin/questions" class="pl-tab">Questions</a>
           <a href="/admin/settings"  class="pl-tab is-active" aria-current="page">Settings</a>
+          <a href="/admin/appearance" class="pl-tab">Appearance</a>
         </nav>
       </div>
 
@@ -128,6 +129,11 @@
                    {{if .Settings.AllowPublicMementos}}checked{{end}}>
             <span>Allow members to share individual responses as public memento pages</span>
           </label>
+          {{if not .InstanceAllowsMementos}}
+          <p class="pl-paused-note">Paused by your instance operator: no circle can
+          share public memento links right now, whatever this switch says. Your
+          choice is kept and applies again if they turn mementos back on.</p>
+          {{end}}
         </section>
 
         <section class="pl-settings-section">

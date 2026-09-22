@@ -89,6 +89,9 @@ type AdminSettingsData struct {
 	// EmailLogTotal is the all-time count, shown when it exceeds the slice.
 	EmailLogs     []store.EmailLog
 	EmailLogTotal int
+	// InstanceAllowsMementos is the operator's public-memento ceiling; when
+	// off, the circle's own switch is shown as paused rather than live.
+	InstanceAllowsMementos bool
 }
 
 // AdminQuestionsData is the template data for the question bank management page.
@@ -432,13 +435,19 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		emailLogs = make([]store.EmailLog, 0)
 	}
 
+	instanceAllowsMementos := true
+	if inst, err := s.store.GetInstanceSettings(ctx); err == nil {
+		instanceAllowsMementos = inst.AllowPublicMementos
+	}
+
 	data := AdminSettingsData{
-		PageData:         s.newPageData(r),
-		EmailProvider:    s.config.EmailProvider,
-		EmailFrom:        s.config.FromEmail,
-		DefaultQuestions: defaultQuestions,
-		EmailLogs:        emailLogs,
-		EmailLogTotal:    emailLogTotal,
+		PageData:               s.newPageData(r),
+		EmailProvider:          s.config.EmailProvider,
+		EmailFrom:              s.config.FromEmail,
+		DefaultQuestions:       defaultQuestions,
+		EmailLogs:              emailLogs,
+		EmailLogTotal:          emailLogTotal,
+		InstanceAllowsMementos: instanceAllowsMementos,
 	}
 
 	s.renderPage(w, "settings.html", data)
@@ -610,7 +619,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		SubmissionWindowDays *int    `json:"submission_window_days"`
 		Timezone             *string `json:"timezone"`
 		InviteNote           *string `json:"invite_note"`
-		AccentColor          *string `json:"accent_color"`
 		AutoCreateEnabled    *bool   `json:"auto_create_enabled"`
 		AllowPublicMementos  *bool   `json:"allow_public_mementos"`
 		QuestionsPerIssue    *int    `json:"questions_per_issue"`
@@ -679,17 +687,6 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	if req.InviteNote != nil {
 		current.InviteNote = req.InviteNote
-	}
-
-	if req.AccentColor != nil {
-		color := strings.TrimSpace(*req.AccentColor)
-		if !isValidHexColor(color) {
-			writeValidationError(w, map[string]string{
-				"accent_color": "Must be a 3 or 6 digit hex color, e.g. #2d5016",
-			})
-			return
-		}
-		current.AccentColor = color
 	}
 
 	if req.AutoCreateEnabled != nil {
@@ -926,25 +923,4 @@ func (s *Server) handleSendReminder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"message": "Reminder emails queued",
 	})
-}
-
-// isValidHexColor reports whether s is a valid #RGB or #RRGGBB color.
-func isValidHexColor(s string) bool {
-	if len(s) != 4 && len(s) != 7 {
-		return false
-	}
-	if s[0] != '#' {
-		return false
-	}
-	for i := 1; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= '0' && c <= '9':
-		case c >= 'a' && c <= 'f':
-		case c >= 'A' && c <= 'F':
-		default:
-			return false
-		}
-	}
-	return true
 }

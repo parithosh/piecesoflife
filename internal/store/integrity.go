@@ -93,13 +93,20 @@ func (s *Store) CheckUploadIntegrity(
 }
 
 // referencedFilePaths returns every upload path any row points at, across
-// answers, the photo dump, private rambles, and notebook spreads.
+// answers, the photo dump, private rambles, notebook spreads, and circle
+// photos/banners (published look and its restore point).
 func (s *Store) referencedFilePaths(ctx context.Context) (map[string]struct{}, error) {
 	const query = `
 		SELECT file_path FROM response_blocks WHERE file_path IS NOT NULL
 		UNION SELECT file_path FROM dump_items WHERE file_path IS NOT NULL
 		UNION SELECT file_path FROM ramble_blocks WHERE file_path IS NOT NULL
 		UNION SELECT file_path FROM diary_blocks WHERE file_path IS NOT NULL
+		UNION SELECT p FROM (
+			SELECT json_extract(theme, '$.photo.path') AS p FROM settings
+			UNION SELECT json_extract(theme, '$.banner.path') FROM settings
+			UNION SELECT json_extract(theme_previous, '$.photo.path') FROM settings
+			UNION SELECT json_extract(theme_previous, '$.banner.path') FROM settings
+		) WHERE p IS NOT NULL
 	`
 
 	rows, err := s.read.QueryContext(ctx, query)

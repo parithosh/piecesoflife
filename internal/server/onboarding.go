@@ -221,14 +221,10 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 
 	// Step 2: Update settings. Idempotent (single-row UPSERT-ish).
 	currentSettings, _ := s.store.GetSettings(ctx, groupID)
-	accentColor := "#2d5016"
 	autoCreateEnabled := false
 	allowPublicMementos := true
 	questionsPerIssue := fallbackQuestionsPerIssue
 	if currentSettings != nil {
-		if currentSettings.AccentColor != "" {
-			accentColor = currentSettings.AccentColor
-		}
 		autoCreateEnabled = currentSettings.AutoCreateEnabled
 		allowPublicMementos = currentSettings.AllowPublicMementos
 		if currentSettings.QuestionsPerIssue > 0 {
@@ -249,7 +245,6 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		StartDatetime:        &utcStart,
 		Timezone:             req.Timezone,
 		InviteNote:           req.InviteNote,
-		AccentColor:          accentColor,
 		AutoCreateEnabled:    autoCreateEnabled,
 		AllowPublicMementos:  allowPublicMementos,
 		QuestionsPerIssue:    questionsPerIssue,

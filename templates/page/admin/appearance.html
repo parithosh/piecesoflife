@@ -1,0 +1,470 @@
+{{define "title"}}Appearance — {{.Settings.LoopName}}{{end}}
+
+{{define "mainClass"}}pl-main{{end}}
+
+{{define "content"}}
+<div class="pl-page">
+  <div class="pl-card pl-card--admin pl-card--wide">
+    <div class="pl-admin">
+
+      <div class="pl-admin-head">
+        <div>
+          <p class="pl-eyebrow pl-eyebrow--peacock">The Loom</p>
+          <h1 class="pl-admin-title">Appearance</h1>
+        </div>
+        <nav class="pl-tabs" aria-label="Admin sections">
+          <a href="/admin"            class="pl-tab">Dashboard</a>
+          <a href="/admin/members"    class="pl-tab">Members</a>
+          <a href="/admin/questions"  class="pl-tab">Questions</a>
+          <a href="/admin/settings"   class="pl-tab">Settings</a>
+          <a href="/admin/appearance" class="pl-tab is-active" aria-current="page">Appearance</a>
+        </nav>
+      </div>
+
+      <div class="zari pl-admin-rule" aria-hidden="true"></div>
+
+      {{if not .Enabled}}
+      <section class="pl-appr-paused">
+        <h2 class="pl-display pl-settings-title">Appearance is switched off on this instance</h2>
+        <p class="pl-settings-sub">
+          Every circle currently shows the house look.
+          {{if or .State.Photo .State.Banner .State.Main .State.Highlight .State.Second (ne .State.Fabric "rani")}}
+          The look you chose for {{.Settings.LoopName}} is saved and comes back the
+          moment it's switched on again.
+          {{end}}
+        </p>
+        {{if .IsInstanceAdmin}}
+        <p class="pl-settings-sub">You run this instance, so it's your call:
+          <a href="/instance">turn it on in the Console →</a></p>
+        {{else}}
+        <p class="pl-settings-sub">The person who runs this instance can turn it on
+          for every circle from their Console.</p>
+        {{end}}
+      </section>
+      {{else}}
+
+      <div class="pl-appr">
+        <form class="pl-appr-controls" id="appr-form" onsubmit="return false">
+
+          <section class="pl-settings-section">
+            <h2 class="pl-display pl-settings-title">Fabric</h2>
+            <p class="pl-settings-sub">A complete, readable palette. Pick one, then fine-tune the colours below if you like.</p>
+            <div class="pl-appr-fabrics" role="radiogroup" aria-label="Fabric">
+              {{range .Fabrics}}
+              <label class="pl-appr-fabric">
+                <input type="radio" name="fabric" value="{{.ID}}">
+                <span class="pl-appr-swatches" aria-hidden="true">
+                  <span style="background: {{.Main}}"></span><span style="background: {{.Highlight}}"></span><span style="background: {{.Second}}"></span><span style="background: {{.Paper}}"></span>
+                </span>
+                <span class="pl-appr-fabric-name">{{.Name}}</span>
+                <span class="pl-appr-fabric-vibe">{{.Vibe}}</span>
+              </label>
+              {{end}}
+            </div>
+          </section>
+
+          <section class="pl-settings-section">
+            <h2 class="pl-display pl-settings-title">Colours</h2>
+            <p class="pl-settings-sub">Everything else — hover shades, text on colour, borders, shadows — follows from these three.</p>
+
+            <div class="pl-appr-knob" data-knob="main">
+              <input type="color" id="knob-main" class="pl-appr-color">
+              <label for="knob-main" class="pl-appr-knob-text"><b>Main colour</b><span>Navigation bar, headings and buttons.</span></label>
+              <button type="button" class="pl-chip-btn" data-reset>Use fabric colour</button>
+              <p class="pl-appr-adjusted" role="status" hidden></p>
+            </div>
+            <div class="pl-appr-knob" data-knob="highlight">
+              <input type="color" id="knob-highlight" class="pl-appr-color">
+              <label for="knob-highlight" class="pl-appr-knob-text"><b>Highlight</b><span>Gold threads, active tabs, the paisley.</span></label>
+              <button type="button" class="pl-chip-btn" data-reset>Use fabric colour</button>
+              <p class="pl-appr-adjusted" role="status" hidden></p>
+            </div>
+            <div class="pl-appr-knob" data-knob="second">
+              <input type="color" id="knob-second" class="pl-appr-color">
+              <label for="knob-second" class="pl-appr-knob-text"><b>Second colour</b><span>Eyebrow labels and the answering panel.</span></label>
+              <button type="button" class="pl-chip-btn" data-reset>Use fabric colour</button>
+              <p class="pl-appr-adjusted" role="status" hidden></p>
+            </div>
+          </section>
+
+          <section class="pl-settings-section">
+            <h2 class="pl-display pl-settings-title">Photos</h2>
+            <p class="pl-settings-sub">Only members see these, never the login page or public memento links.
+              Location and camera details are removed on upload. Tap a photo to choose the part that must stay in view.</p>
+
+            <div class="pl-appr-photo" data-slot="photo">
+              <div class="pl-appr-photo-frame" data-focal title="Tap the part of the photo that must stay in view">
+                <img alt="" hidden>
+                <span class="pl-appr-focal" hidden></span>
+                <span class="pl-appr-photo-empty">Circle photo</span>
+              </div>
+              <div class="pl-appr-photo-text">
+                <b>Circle photo</b>
+                <span>Replaces the woven emblem in the masthead, the navigation and on “Your circles”.</span>
+                <div class="pl-export-row">
+                  <label class="pl-btn pl-btn--outline pl-appr-upload">Choose photo
+                    <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hidden></label>
+                  <button type="button" class="pl-btn pl-btn--outline" data-remove hidden>Remove</button>
+                </div>
+                <span class="pl-form-status" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+
+            <div class="pl-appr-photo" data-slot="banner">
+              <div class="pl-appr-photo-frame" data-focal title="Tap the part of the photo that must stay in view">
+                <img alt="" hidden>
+                <span class="pl-appr-focal" hidden></span>
+                <span class="pl-appr-photo-empty">Banner</span>
+              </div>
+              <div class="pl-appr-photo-text">
+                <b>Banner</b>
+                <span>Sits behind each issue's masthead and the “Open now” panel, under a wash of your main colour so titles stay readable.</span>
+                <div class="pl-export-row">
+                  <label class="pl-btn pl-btn--outline pl-appr-upload">Choose photo
+                    <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hidden></label>
+                  <button type="button" class="pl-btn pl-btn--outline" data-remove hidden>Remove</button>
+                </div>
+                <span class="pl-form-status" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+          </section>
+
+          <div class="pl-form-actions pl-appr-actions">
+            <button type="button" id="appr-publish" class="pl-btn pl-btn--rani" disabled>Publish to circle</button>
+            <button type="button" id="appr-discard" class="pl-btn pl-btn--outline" hidden>Discard changes</button>
+            <button type="button" id="appr-restore" class="pl-btn pl-btn--outline" {{if not .HasPrevious}}hidden{{end}}>Restore previous look</button>
+            <span id="appr-status" class="pl-form-status" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+
+        <div class="pl-appr-preview" id="appr-preview">
+          <div class="pl-appr-preview-bar">
+            <p class="pl-eyebrow">Preview · your latest issue</p>
+            <div class="pl-appr-seg" role="group" aria-label="Preview size">
+              <button type="button" class="is-active" data-size="desktop" aria-pressed="true">Desktop</button>
+              <button type="button" data-size="phone" aria-pressed="false">Phone</button>
+            </div>
+            <button type="button" class="pl-chip-btn" id="appr-compare"
+                    title="Press and hold to see what members see right now">Hold: current look</button>
+          </div>
+          <div class="pl-appr-frame-wrap" data-size="desktop">
+            <iframe id="appr-frame" src="{{.PreviewURL}}" title="Preview of your circle with the draft appearance"
+                    tabindex="-1"></iframe>
+          </div>
+          <p class="pl-field-help">Only you see this preview. Members keep the current look until you publish.</p>
+        </div>
+      </div>
+      <a href="#appr-preview" class="pl-btn pl-btn--gold pl-appr-jump">See preview ↓</a>
+      {{end}}
+
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+{{if .Enabled}}
+<script>
+(function () {
+    const fabrics = {{.Fabrics}};
+    const byId = Object.fromEntries(fabrics.map(f => [f.id, f]));
+    const knobs = ['main', 'highlight', 'second'];
+    const knobNudge = { main: 'Deepened', highlight: 'Lightened', second: 'Deepened' };
+
+    let published = {{.State}};
+    let state = structuredClone(published);
+    let preview = null; // last /preview response for `state`
+
+    const form = document.getElementById('appr-form');
+    const frame = document.getElementById('appr-frame');
+    const statusEl = document.getElementById('appr-status');
+    const publishBtn = document.getElementById('appr-publish');
+    const discardBtn = document.getElementById('appr-discard');
+    const restoreBtn = document.getElementById('appr-restore');
+
+    const setStatus = (msg, ok) => {
+        statusEl.textContent = msg || '';
+        statusEl.style.color = ok === false ? 'var(--sindoor)' : (ok ? 'var(--peacock)' : 'var(--ink-soft)');
+    };
+    const errorMessage = async (res, fallback) => {
+        const data = await res.json().catch(() => ({}));
+        return (data?.error?.fields && Object.values(data.error.fields)[0]) || data?.error?.message || fallback;
+    };
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+    // ---- controls <-> state -------------------------------------------
+
+    function renderControls() {
+        form.querySelectorAll('input[name=fabric]').forEach(r => { r.checked = r.value === state.fabric; });
+        const fabric = byId[state.fabric];
+        for (const k of knobs) {
+            const row = form.querySelector(`[data-knob="${k}"]`);
+            row.querySelector('input').value = state[k] || fabric[k];
+            row.querySelector('[data-reset]').hidden = !state[k];
+            const adj = (preview?.adjustments || []).find(a => a.knob === k);
+            const note = row.querySelector('.pl-appr-adjusted');
+            note.hidden = !adj;
+            if (adj) {
+                note.innerHTML = '';
+                note.append(`${knobNudge[k]} a little so text stays readable: `,
+                    swatch(adj.picked), ' → ', swatch(adj.used));
+            }
+        }
+        for (const slot of ['photo', 'banner']) {
+            const box = form.querySelector(`[data-slot="${slot}"]`);
+            const p = state[slot];
+            const img = box.querySelector('img');
+            const dot = box.querySelector('.pl-appr-focal');
+            img.hidden = dot.hidden = !p;
+            box.querySelector('.pl-appr-photo-empty').hidden = !!p;
+            box.querySelector('[data-remove]').hidden = !p;
+            if (p) {
+                if (img.getAttribute('src') !== p.url) img.src = p.url;
+                dot.style.left = p.x + '%';
+                dot.style.top = p.y + '%';
+            }
+        }
+        const dirty = !same(state, published);
+        publishBtn.disabled = !dirty;
+        discardBtn.hidden = !dirty;
+    }
+
+    function swatch(hex) {
+        const s = document.createElement('span');
+        s.className = 'pl-appr-chip';
+        s.style.background = hex;
+        s.title = hex;
+        return s;
+    }
+
+    form.addEventListener('change', (e) => {
+        if (e.target.name === 'fabric') {
+            // A fabric is a whole palette: switching starts from its own colours.
+            state.fabric = e.target.value;
+            for (const k of knobs) state[k] = '';
+            refresh();
+        }
+    });
+
+    for (const k of knobs) {
+        const row = form.querySelector(`[data-knob="${k}"]`);
+        row.querySelector('input').addEventListener('input', (e) => {
+            state[k] = e.target.value.toLowerCase() === byId[state.fabric][k] ? '' : e.target.value.toLowerCase();
+            refresh();
+        });
+        row.querySelector('[data-reset]').addEventListener('click', () => { state[k] = ''; refresh(); });
+    }
+
+    // ---- photos --------------------------------------------------------
+
+    for (const slot of ['photo', 'banner']) {
+        const box = form.querySelector(`[data-slot="${slot}"]`);
+        const slotStatus = box.querySelector('.pl-form-status');
+
+        box.querySelector('input[type=file]').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            e.target.value = '';
+            if (!file) return;
+            slotStatus.textContent = 'Preparing photo…';
+            const body = new FormData();
+            body.append('slot', slot);
+            body.append('photo', file);
+            try {
+                const res = await fetch('/api/admin/appearance/photo', {
+                    method: 'POST', headers: { 'X-CSRF-Token': getCSRFToken() }, body,
+                });
+                if (!res.ok) throw new Error(await errorMessage(res, 'Upload failed'));
+                state[slot] = await res.json();
+                slotStatus.textContent = 'Ready — tap the photo to set its focus.';
+                refresh();
+            } catch (err) {
+                slotStatus.textContent = err.message;
+            }
+        });
+
+        box.querySelector('[data-remove]').addEventListener('click', () => {
+            state[slot] = null;
+            slotStatus.textContent = '';
+            refresh();
+        });
+
+        box.querySelector('[data-focal]').addEventListener('click', (e) => {
+            if (!state[slot]) return;
+            const r = e.currentTarget.getBoundingClientRect();
+            state[slot] = {
+                ...state[slot],
+                x: Math.round(Math.min(100, Math.max(0, (e.clientX - r.left) / r.width * 100))),
+                y: Math.round(Math.min(100, Math.max(0, (e.clientY - r.top) / r.height * 100))),
+            };
+            refresh(false);
+        });
+    }
+
+    // ---- live preview --------------------------------------------------
+
+    let timer = null;
+    let seq = 0;
+    function refresh(colours = true) {
+        renderControls();
+        if (!colours && preview) { applyDraft(); return; }
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+            const mine = ++seq;
+            try {
+                const res = await fetch('/api/admin/appearance/preview', {
+                    method: 'POST', headers: apiHeaders(),
+                    body: JSON.stringify({ fabric: state.fabric, main: state.main,
+                        highlight: state.highlight, second: state.second }),
+                });
+                if (!res.ok) throw new Error(await errorMessage(res, 'Preview failed'));
+                const data = await res.json();
+                if (mine !== seq) return;
+                preview = data;
+                renderControls();
+                applyDraft();
+            } catch (err) {
+                setStatus(err.message, false);
+            }
+        }, 90);
+    }
+
+    // What the server rendered into the frame (the published look), kept so
+    // "hold to compare" can put it back.
+    let original = null;
+
+    function frameRoot() {
+        try { return frame.contentDocument?.documentElement || null; } catch { return null; }
+    }
+
+    function captureOriginal() {
+        const root = frameRoot();
+        if (!root) return;
+        const style = root.querySelector('#pl-theme');
+        original = {
+            css: style ? style.textContent : null,
+            themed: root.hasAttribute('data-themed'),
+            photo: root.hasAttribute('data-circle-photo'),
+            banner: root.hasAttribute('data-banner'),
+        };
+    }
+
+    function paint(root, css, themed, photo, banner) {
+        const doc = root.ownerDocument;
+        let style = doc.getElementById('pl-theme');
+        if (css === null) {
+            style?.remove();
+        } else {
+            if (!style) {
+                style = doc.createElement('style');
+                style.id = 'pl-theme';
+                doc.head.appendChild(style);
+            }
+            style.textContent = css;
+        }
+        root.toggleAttribute('data-themed', themed);
+        root.toggleAttribute('data-circle-photo', photo);
+        root.toggleAttribute('data-banner', banner);
+    }
+
+    function photoCSS(name, p) {
+        return `--${name}:url("${p.url}");--${name}-pos:${p.x}% ${p.y}%;`;
+    }
+
+    function applyDraft() {
+        const root = frameRoot();
+        if (!root || !preview) return;
+        const house = preview.house && !state.photo && !state.banner;
+        if (house) { paint(root, null, false, false, false); return; }
+        let decls = preview.declarations;
+        if (state.photo) decls += photoCSS('circle-photo', state.photo);
+        if (state.banner) decls += photoCSS('banner', state.banner);
+        paint(root, `:root{${decls}}`, true, !!state.photo, !!state.banner);
+    }
+
+    frame.addEventListener('load', () => { captureOriginal(); applyDraft(); });
+
+    const compare = document.getElementById('appr-compare');
+    const showOriginal = () => {
+        const root = frameRoot();
+        if (root && original) paint(root, original.css, original.themed, original.photo, original.banner);
+    };
+    compare.addEventListener('pointerdown', showOriginal);
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) compare.addEventListener(ev, applyDraft);
+    compare.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') showOriginal(); });
+    compare.addEventListener('keyup', applyDraft);
+
+    // Desktop preview renders the page at a real desktop width and scales
+    // it down to the column, so members' layout (not a squeezed mobile
+    // one) is what the admin judges. Phone renders at true phone width.
+    const wrap = document.querySelector('.pl-appr-frame-wrap');
+    const DESKTOP_WIDTH = 1280;
+    function fitFrame() {
+        const phone = wrap.dataset.size === 'phone';
+        const s = phone ? 1 : Math.min(1, wrap.clientWidth / DESKTOP_WIDTH);
+        frame.style.width = phone ? '' : DESKTOP_WIDTH + 'px';
+        frame.style.height = (wrap.clientHeight / s) + 'px';
+        frame.style.transform = s === 1 ? '' : `scale(${s})`;
+    }
+    new ResizeObserver(fitFrame).observe(wrap);
+
+    document.querySelectorAll('.pl-appr-seg button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.pl-appr-seg button').forEach(b => {
+                b.classList.toggle('is-active', b === btn);
+                b.setAttribute('aria-pressed', String(b === btn));
+            });
+            wrap.dataset.size = btn.dataset.size;
+            fitFrame();
+        });
+    });
+
+    // ---- publish / discard / restore ----------------------------------
+
+    function adopt(data) {
+        published = data.state;
+        state = structuredClone(published);
+        restoreBtn.hidden = !data.has_previous;
+        frame.contentWindow?.location.reload();
+        refresh();
+    }
+
+    publishBtn.addEventListener('click', async () => {
+        publishBtn.disabled = true;
+        setStatus('Publishing…');
+        try {
+            const res = await fetch('/api/admin/appearance', {
+                method: 'PUT', headers: apiHeaders(), body: JSON.stringify(state),
+            });
+            if (!res.ok) throw new Error(await errorMessage(res, 'Publish failed'));
+            adopt(await res.json());
+            setStatus('Published — everyone in the circle sees the new look now.', true);
+        } catch (err) {
+            setStatus(err.message, false);
+            renderControls();
+        }
+    });
+
+    discardBtn.addEventListener('click', () => {
+        state = structuredClone(published);
+        setStatus('');
+        refresh();
+    });
+
+    restoreBtn.addEventListener('click', async () => {
+        if (!confirm('Put back the look the circle had before the last change?')) return;
+        setStatus('Restoring…');
+        try {
+            const res = await fetch('/api/admin/appearance/restore', { method: 'POST', headers: apiHeaders() });
+            if (!res.ok) throw new Error(await errorMessage(res, 'Restore failed'));
+            adopt(await res.json());
+            setStatus('Previous look restored.', true);
+        } catch (err) {
+            setStatus(err.message, false);
+        }
+    });
+
+    refresh();
+})();
+</script>
+{{end}}
+{{end}}

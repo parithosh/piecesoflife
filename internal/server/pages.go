@@ -1027,11 +1027,15 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	pd := PageData{User: viewer, Settings: settings}
+	// Mementos can be public: the circle's colours carry over, its photos
+	// never do (withPhotos=false keeps their URLs out of the page).
+	if settings.Theme != nil && s.appearanceEnabled(ctx) {
+		pd.Theme = s.resolveTheme(ctx, settings.Theme, false)
+	}
+
 	data := MementoPageData{
-		PageData: PageData{
-			User:     viewer,
-			Settings: settings,
-		},
+		PageData:      pd,
 		Response:      *resp,
 		Blocks:        blocks,
 		Author:        *author,

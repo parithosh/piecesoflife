@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/parithosh/piecesoflife/internal/store"
+	"github.com/parithosh/piecesoflife/internal/theme"
 )
 
 // exportRoot is the top-level JSON shape for /api/admin/export.
@@ -349,10 +350,11 @@ func (s *Server) buildExportPayload(
 }
 
 // writeZipUploads copies every on-disk file referenced by the payload's
-// response and diary blocks into the archive under uploads/, preserving each
-// file's path relative to the configured upload directory. Returns how many
-// files were included and how many were skipped (missing on disk,
-// duplicate-safe, or resolving outside the upload directory).
+// response and diary blocks — plus the circle's published photo and banner
+// — into the archive under uploads/, preserving each file's path relative
+// to the configured upload directory. Returns how many files were included
+// and how many were skipped (missing on disk, duplicate-safe, or resolving
+// outside the upload directory).
 func (s *Server) writeZipUploads(
 	ctx context.Context, zw *zip.Writer, payload *exportRoot,
 ) (included, skipped int) {
@@ -371,6 +373,16 @@ func (s *Server) writeZipUploads(
 			for _, b := range d.Blocks {
 				s.zipOneUpload(ctx, zw, base, seen, b.ID, b.FilePath,
 					&included, &skipped)
+			}
+		}
+	}
+
+	if payload.Settings != nil {
+		if cfg, err := theme.ParseConfig(payload.Settings.Theme); err == nil && cfg != nil {
+			for _, p := range []*theme.Photo{cfg.Photo, cfg.Banner} {
+				if p != nil {
+					s.zipOneUpload(ctx, zw, base, seen, 0, &p.Path, &included, &skipped)
+				}
 			}
 		}
 	}

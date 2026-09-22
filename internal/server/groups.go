@@ -14,7 +14,7 @@ import (
 // LoopCard is one Loop on the /loops page: the membership plus the state of
 // its current round.
 type LoopCard struct {
-	store.UserGroup
+	LoopEntry
 	Current bool
 	// Collecting is true while the Loop has an open round; Deadline is that
 	// round's deadline.
@@ -49,12 +49,15 @@ type GroupRow struct {
 // GET /loops
 func (s *Server) handleLoopsPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	// /loops spans every circle, so it wears the house look; each card
+	// carries its own circle's colour and photo instead.
 	pd := s.newPageData(r)
+	pd.Theme = nil
 
 	cards := make([]LoopCard, 0, len(pd.Loops))
 
 	for _, ug := range pd.Loops {
-		card := LoopCard{UserGroup: ug}
+		card := LoopCard{LoopEntry: ug}
 
 		if pd.Group != nil && pd.Group.ID == ug.GroupID {
 			card.Current = true
@@ -155,8 +158,13 @@ func (s *Server) handleInstancePage(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, row)
 	}
 
+	// The console belongs to the instance, not the circle the operator
+	// happens to be in: it always renders the house look.
+	pd := s.newPageData(r)
+	pd.Theme = nil
+
 	s.renderPage(w, "instance.html", InstancePageData{
-		PageData: s.newPageData(r),
+		PageData: pd,
 		Instance: instance,
 		Groups:   rows,
 	})
@@ -354,8 +362,9 @@ func (s *Server) handleUpdateInstanceSettings(
 	ctx := r.Context()
 
 	var req struct {
-		InstanceName        *string `json:"instance_name"`
-		AllowPublicMementos *bool   `json:"allow_public_mementos"`
+		InstanceName          *string `json:"instance_name"`
+		AllowPublicMementos   *bool   `json:"allow_public_mementos"`
+		AllowCircleAppearance *bool   `json:"allow_circle_appearance"`
 	}
 
 	if err := readJSON(r, &req); err != nil {
@@ -387,6 +396,10 @@ func (s *Server) handleUpdateInstanceSettings(
 
 	if req.AllowPublicMementos != nil {
 		current.AllowPublicMementos = *req.AllowPublicMementos
+	}
+
+	if req.AllowCircleAppearance != nil {
+		current.AllowCircleAppearance = *req.AllowCircleAppearance
 	}
 
 	if err := s.store.UpdateInstanceSettings(ctx, current); err != nil {

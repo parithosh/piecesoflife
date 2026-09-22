@@ -20,7 +20,10 @@
       <div class="pl-loops-grid">
         {{range .Cards}}
         <button type="button" class="pl-loop-card {{if .Current}}is-current{{end}}"
-                data-group-id="{{.GroupID}}">
+                data-group-id="{{.GroupID}}"{{if .Dot}} style="--loop-main: {{.Dot}}"{{end}}>
+          {{if .PhotoURL}}
+          <img class="pl-loop-card-photo" src="{{.PhotoURL}}" alt="" style="object-position: {{.PhotoPos}}">
+          {{end}}
           <span class="pl-loop-card-name">{{.LoopName}}</span>
           {{if .Tagline}}<span class="pl-loop-card-tagline">{{.Tagline}}</span>{{end}}
           <span class="pl-loop-card-meta">
