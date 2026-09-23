@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,6 +47,82 @@ func TestCheckUploadIntegrityFindsOrphans(t *testing.T) {
 	require.Len(t, report.OrphanSample, 2)
 	assert.Contains(t, report.OrphanSample[0], "orphan-a.jpg")
 	assert.Contains(t, report.OrphanSample[1], "orphan-b.mp4")
+}
+
+// Circle photos live in settings.theme (and its restore point), not in a
+// media row; they must count as referenced or every circle photo would be
+// reported as an orphan.
+func TestCheckUploadIntegrityCountsCirclePhotos(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	uploads := t.TempDir()
+
+	photo := writeUploadFile(t, uploads, "branding/1/0123456789abcdef.jpg")
+	oldBanner := writeUploadFile(t, uploads, "branding/1/fedcba9876543210.jpg")
+	writeUploadFile(t, uploads, "branding/1/aaaaaaaaaaaaaaaa.jpg")
+
+	current := fmt.Sprintf(`{"v":1,"fabric":"coastal","photo":{"path":%q,"x":50,"y":50}}`, photo)
+	previous := fmt.Sprintf(`{"v":1,"fabric":"rani","banner":{"path":%q,"x":50,"y":50}}`, oldBanner)
+	require.NoError(t, st.PublishTheme(ctx, 1, nil, []byte(previous)))
+	require.NoError(t, st.PublishTheme(ctx, 1, []byte(previous), []byte(current)))
+
+	report, err := st.CheckUploadIntegrity(ctx, uploads)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, report.Referenced)
+	assert.Equal(t, 1, report.Orphaned)
+	assert.Zero(t, report.Missing)
+
+	// A corrupt restore point must not take the whole report down.
+	_, err = st.write.ExecContext(ctx, `UPDATE settings SET theme_previous = '{broken' WHERE group_id = 1`)
+	require.NoError(t, err)
+
+	report, err = st.CheckUploadIntegrity(ctx, uploads)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Referenced, "the published photo is still counted")
+}
+
+// Publishing is compare-and-swap and restore is an atomic swap, so two
+// racing edits can never record a restore point that wasn't actually
+// replaced.
+func TestPublishThemeIsCompareAndSwap(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	a, b, c := []byte(`{"fabric":"indigo"}`), []byte(`{"fabric":"kilim"}`), []byte(`{"fabric":"nordic"}`)
+
+	require.ErrorIs(t, st.RestoreTheme(ctx, 1), ErrNoRestorePoint)
+	require.NoError(t, st.PublishTheme(ctx, 1, nil, a))
+	require.NoError(t, st.PublishTheme(ctx, 1, a, b))
+
+	// A writer that read "a" loses: the look is already "b".
+	require.ErrorIs(t, st.PublishTheme(ctx, 1, a, c), ErrThemeChanged)
+
+	got, err := st.GetSettings(ctx, 1)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(b), string(got.Theme))
+	assert.JSONEq(t, string(a), string(got.ThemePrevious))
+
+	// Re-publishing the current look keeps the restore point.
+	require.NoError(t, st.PublishTheme(ctx, 1, b, b))
+	require.NoError(t, st.RestoreTheme(ctx, 1))
+	got, err = st.GetSettings(ctx, 1)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(a), string(got.Theme))
+	assert.JSONEq(t, string(b), string(got.ThemePrevious))
+
+	// Publishing the house look over a custom one keeps it restorable.
+	require.NoError(t, st.PublishTheme(ctx, 1, a, nil))
+	require.NoError(t, st.RestoreTheme(ctx, 1))
+	got, err = st.GetSettings(ctx, 1)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(a), string(got.Theme))
+	require.NoError(t, st.RestoreTheme(ctx, 1))
+	got, err = st.GetSettings(ctx, 1)
+	require.NoError(t, err)
+	assert.Nil(t, got.Theme, "restoring back to the house look")
+
+	assert.Error(t, st.PublishTheme(ctx, 1, nil, []byte(`{broken`)), "invalid JSON is rejected")
+	require.ErrorIs(t, st.PublishTheme(ctx, 99, nil, a), sql.ErrNoRows)
 }
 
 // TestCheckUploadIntegrityFindsMissingFiles covers the opposite failure: a

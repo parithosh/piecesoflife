@@ -1,6 +1,6 @@
 {{define "base"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{{with .Theme}} data-themed{{if .HasPhoto}} data-circle-photo{{end}}{{if .HasBanner}} data-banner{{end}}{{end}}>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -15,12 +15,10 @@
     <link rel="manifest" href="/static/manifest.json">
     <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/static/img/icon-192.png">
-    <meta name="theme-color" content="#7a0f38">
+    <meta name="theme-color" content="{{if .Theme}}{{.Theme.Main}}{{else}}#7a0f38{{end}}">
 
-    {{if and .Settings .Settings.AccentColor}}
-    <style>
-    :root { --accent: {{.Settings.AccentColor}}; }
-    </style>
+    {{with .Theme}}
+    <style id="pl-theme">:root{ {{- .CSS -}} }</style>
     {{end}}
 
     <script>
@@ -39,11 +37,112 @@
     {{block "head" .}}{{end}}
 </head>
 <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+        <defs>
+            <g id="pl-emblem-arm">
+                <path d="M60 58 C54 47 55 33 60 25 C65 33 66 47 60 58 Z" style="fill:var(--emblem-arm)"></path>
+                <path d="M60 40 C55 37 51 38 49 33 C54 32 58 35 60 40 Z" style="fill:var(--emblem-leaf)"></path>
+                <path d="M60 40 C65 37 69 38 71 33 C66 32 62 35 60 40 Z" style="fill:var(--emblem-leaf)"></path>
+                <circle cx="60" cy="21" r="2.4" style="fill:var(--emblem-pale)"></circle>
+                <circle cx="49" cy="30" r="1.5" style="fill:var(--emblem-bud)"></circle>
+                <circle cx="71" cy="30" r="1.5" style="fill:var(--emblem-bud)"></circle>
+            </g>
+            <g id="pl-emblem-floret">
+                <path d="M0 -7 C3 -4 3 4 0 7 C-3 4 -3 -4 0 -7 Z"></path>
+                <path d="M-7 0 C-4 3 4 3 7 0 C4 -3 -4 -3 -7 0 Z"></path>
+            </g>
+            <symbol id="pl-emblem" viewBox="0 0 120 120">
+                <rect x="0" y="0" width="120" height="120" rx="14" style="fill:var(--rani)"></rect>
+                <g style="fill:none;stroke:var(--emblem-line);stroke-linejoin:round">
+                    <path d="M60 11 L109 60 L60 109 L11 60 Z" stroke-width="2.4"></path>
+                    <path d="M60 22 L98 60 L60 98 L22 60 Z" stroke-width="1.5"></path>
+                </g>
+                <use href="#pl-emblem-arm"></use>
+                <use href="#pl-emblem-arm" transform="rotate(45 60 60)"></use>
+                <use href="#pl-emblem-arm" transform="rotate(90 60 60)"></use>
+                <use href="#pl-emblem-arm" transform="rotate(135 60 60)"></use>
+                <use href="#pl-emblem-arm" transform="rotate(180 60 60)"></use>
+                <use href="#pl-emblem-arm" transform="rotate(225 60 60)"></use>
+                <use href="#pl-emblem-arm" transform="rotate(270 60 60)"></use>
+                <use href="#pl-emblem-arm" transform="rotate(315 60 60)"></use>
+                <circle cx="60" cy="60" r="8" style="fill:var(--emblem-pale)"></circle>
+                <circle cx="60" cy="60" r="4.6" style="fill:var(--rani)"></circle>
+                <circle cx="60" cy="60" r="1.8" style="fill:var(--emblem-pale)"></circle>
+                <g style="fill:var(--emblem-bud)">
+                    <use href="#pl-emblem-floret" transform="translate(60 11)"></use>
+                    <use href="#pl-emblem-floret" transform="translate(109 60)"></use>
+                    <use href="#pl-emblem-floret" transform="translate(60 109)"></use>
+                    <use href="#pl-emblem-floret" transform="translate(11 60)"></use>
+                </g>
+                <g style="fill:var(--marigold)">
+                    <circle cx="22" cy="22" r="2.6"></circle>
+                    <circle cx="98" cy="22" r="2.6"></circle>
+                    <circle cx="98" cy="98" r="2.6"></circle>
+                    <circle cx="22" cy="98" r="2.6"></circle>
+                </g>
+            </symbol>
+            <pattern id="pl-ikat" x="0" patternTransform="translate(-28 0)" patternUnits="userSpaceOnUse" width="56" height="52">
+                <rect x="0" y="0" width="56" height="1.5" style="fill:var(--zari)"></rect>
+                <rect x="0" y="50.5" width="56" height="1.5" style="fill:var(--zari)"></rect>
+                <rect x="0" y="1.5" width="56" height="7.5" style="fill:var(--rani)"></rect>
+                <circle cx="4" cy="5.25" r="1.5" style="fill:var(--marigold)"></circle>
+                <circle cx="12" cy="5.25" r="1.5" style="fill:var(--marigold)"></circle>
+                <circle cx="20" cy="5.25" r="1.5" style="fill:var(--marigold)"></circle>
+                <circle cx="28" cy="5.25" r="1.5" style="fill:var(--marigold)"></circle>
+                <circle cx="36" cy="5.25" r="1.5" style="fill:var(--marigold)"></circle>
+                <circle cx="44" cy="5.25" r="1.5" style="fill:var(--marigold)"></circle>
+                <circle cx="52" cy="5.25" r="1.5" style="fill:var(--marigold)"></circle>
+                <rect x="0" y="9" width="56" height="1" opacity="0.8" style="fill:var(--ivory)"></rect>
+                <rect x="0" y="42" width="56" height="1" opacity="0.8" style="fill:var(--ivory)"></rect>
+                <rect x="0" y="10" width="56" height="32" style="fill:var(--rani)"></rect>
+                <rect x="25.7" y="13.0" width="4.8" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="20.5" y="15.0" width="15.4" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="19.2" y="17.0" width="18.8" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="23.0" y="19.0" width="10.7" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="16.7" y="21.0" width="22.8" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="13.5" y="23.0" width="29.7" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="13.2" y="25.0" width="31.0" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="13.5" y="27.0" width="29.4" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="16.7" y="29.0" width="22.8" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="23.0" y="31.0" width="10.7" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="19.2" y="33.0" width="18.8" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="20.5" y="35.0" width="15.4" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="25.7" y="37.0" width="4.8" height="2" style="fill:var(--marigold)"></rect>
+                <rect x="26.3" y="15.0" width="3.6" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="24.0" y="17.0" width="8.5" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="21.8" y="21.0" width="12.5" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="19.3" y="23.0" width="17.7" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="18.0" y="25.0" width="20.6" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="19.3" y="27.0" width="17.6" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="21.8" y="29.0" width="12.5" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="24.0" y="33.0" width="8.5" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="26.3" y="35.0" width="3.6" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="25.4" y="23.0" width="5.4" height="2" style="fill:var(--peacock)"></rect>
+                <rect x="23.8" y="25.0" width="8.8" height="2" style="fill:var(--peacock)"></rect>
+                <rect x="25.4" y="27.0" width="5.4" height="2" style="fill:var(--peacock)"></rect>
+                <rect x="-1.3" y="23.0" width="2.6" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="-4.2" y="25.0" width="8.5" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="-1.1" y="27.0" width="2.6" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="54.7" y="23.0" width="2.6" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="51.8" y="25.0" width="8.5" height="2" style="fill:var(--ivory)"></rect>
+                <rect x="54.9" y="27.0" width="2.6" height="2" style="fill:var(--ivory)"></rect>
+                <circle cx="0" cy="15" r="1.1" style="fill:var(--marigold)"></circle>
+                <circle cx="0" cy="37" r="1.1" style="fill:var(--marigold)"></circle>
+                <circle cx="56" cy="15" r="1.1" style="fill:var(--marigold)"></circle>
+                <circle cx="56" cy="37" r="1.1" style="fill:var(--marigold)"></circle>
+                <rect x="0" y="43" width="56" height="7.5" style="fill:var(--ivory)"></rect>
+                <rect x="5" y="44.75" width="4" height="4" transform="rotate(45 7 46.75)" style="fill:var(--sindoor)"></rect>
+                <rect x="19" y="44.75" width="4" height="4" transform="rotate(45 21 46.75)" style="fill:var(--sindoor)"></rect>
+                <rect x="33" y="44.75" width="4" height="4" transform="rotate(45 35 46.75)" style="fill:var(--sindoor)"></rect>
+                <rect x="47" y="44.75" width="4" height="4" transform="rotate(45 49 46.75)" style="fill:var(--sindoor)"></rect>
+            </pattern>
+        </defs>
+    </svg>
     {{block "nav" .}}
     {{if .Settings}}
     <nav class="pl-nav">
         <a href="/" class="pl-nav-brand">
-            <img src="/static/img/logo.svg" alt="" class="pl-nav-logo">
+            <svg class="pl-nav-logo" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><use href="#pl-emblem"></use></svg>
             <span class="pl-nav-wordmark">{{if .Settings.LoopName}}{{.Settings.LoopName}}{{else}}PiecesOfLife{{end}}</span>
         </a>
         {{if .User}}
@@ -66,7 +165,7 @@
                     <button type="button" class="pl-nav-loop {{if and $current (eq $current.ID .GroupID)}}is-current{{end}}"
                             data-group-id="{{.GroupID}}"
                             {{if and $current (eq $current.ID .GroupID)}}aria-current="true"{{end}}>
-                        <span class="pl-nav-loop-dot" aria-hidden="true"></span>
+                        <span class="pl-nav-loop-dot" aria-hidden="true"{{if .Dot}} style="--loop-main: {{.Dot}}"{{end}}></span>
                         {{.LoopName}}
                     </button>
                     {{end}}

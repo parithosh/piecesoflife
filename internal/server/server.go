@@ -42,6 +42,11 @@ type Server struct {
 	// handler tests) disables the liveness check.
 	schedulerLastTick func() time.Time
 
+	// brandingMu serialises every change to circle appearance state and
+	// photo files (publish, restore, draft delete, prune), so a cleanup
+	// never deletes a file another request is about to publish.
+	brandingMu sync.Mutex
+
 	// Embedded filesystems, injected from main.go where go:embed is valid.
 	staticFS    embed.FS
 	templatesFS embed.FS
@@ -117,8 +122,12 @@ type PageData struct {
 	Group           *store.Group
 	IsGroupAdmin    bool
 	IsInstanceAdmin bool
-	Loops           []store.UserGroup
+	Loops           []LoopEntry
 	MultiLoop       bool
+
+	// Theme is the circle's appearance for this page; nil renders the
+	// house look (no theme markup at all).
+	Theme *pageTheme
 }
 
 // LoginPageData is the template data for the login page.
@@ -253,10 +262,18 @@ func (s *Server) registerRoutes() {
 		adminMW(s.handleAdminMemberSubmission))
 	s.mux.Handle("GET /admin/questions", adminMW(s.handleAdminQuestions))
 	s.mux.Handle("GET /admin/settings", adminMW(s.handleAdminSettings))
+	s.mux.Handle("GET /admin/appearance", adminMW(s.handleAdminAppearance))
 	s.mux.Handle("GET /admin/setup", adminMW(s.handleAdminSetup))
 
 	// Authenticated file serving.
 	s.mux.Handle("GET /uploads/", authMW(s.handleUploadServe))
+
+	// Circle appearance API (admin; every call re-checks the instance switch).
+	s.mux.Handle("POST /api/admin/appearance/preview", adminMW(s.handleAppearancePreview))
+	s.mux.Handle("PUT /api/admin/appearance", adminMW(s.handlePublishAppearance))
+	s.mux.Handle("POST /api/admin/appearance/restore", adminMW(s.handleRestoreAppearance))
+	s.mux.Handle("POST /api/admin/appearance/photo", adminMW(s.handleUploadAppearancePhoto))
+	s.mux.Handle("DELETE /api/admin/appearance/photo/{file}", adminMW(s.handleDeleteAppearancePhoto))
 
 	// User API routes (auth required).
 	s.mux.Handle("GET /api/users", groupMW(s.handleListUsers))
@@ -537,17 +554,31 @@ func (s *Server) newPageData(r *http.Request) PageData {
 
 	pd.IsGroupAdmin = isGroupAdmin(r.Context())
 
+	var loops []store.UserGroup
 	if user != nil {
 		pd.IsInstanceAdmin = user.IsInstanceAdmin
 
-		loops, err := s.store.ListUserGroups(r.Context(), user.ID)
+		var err error
+		loops, err = s.store.ListUserGroups(r.Context(), user.ID)
 		if err != nil {
 			s.logger.ErrorContext(r.Context(), "Failed to list user loops",
 				slog.String("error", err.Error()))
-		} else {
-			pd.Loops = loops
-			pd.MultiLoop = len(loops) > 1
 		}
+	}
+
+	// Only consult the instance switch when some circle actually has a
+	// look: house-look installs pay nothing for the feature.
+	themed := pd.Settings != nil && pd.Settings.Theme != nil
+	for _, l := range loops {
+		themed = themed || l.Theme != nil
+	}
+	enabled := themed && s.appearanceEnabled(r.Context())
+
+	pd.Loops = s.loopEntries(loops, enabled)
+	pd.MultiLoop = len(loops) > 1
+
+	if enabled && pd.Settings != nil && pd.Settings.Theme != nil {
+		pd.Theme = s.resolveTheme(r.Context(), pd.Settings.GroupID, pd.Settings.Theme, true)
 	}
 
 	if pd.Settings == nil {

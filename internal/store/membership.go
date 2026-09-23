@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -43,12 +44,12 @@ type GroupMember struct {
 // UserGroup is one entry of a user's Loop list: the group plus its display
 // identity and the user's role in it. Powers the nav switcher and /loops.
 type UserGroup struct {
-	GroupID       int64   `json:"group_id"`
-	LoopName      string  `json:"loop_name"`
-	Tagline       *string `json:"tagline"`
-	AccentColor   string  `json:"accent_color"`
-	Role          string  `json:"role"`
-	SetupComplete bool    `json:"setup_complete"`
+	GroupID       int64           `json:"group_id"`
+	LoopName      string          `json:"loop_name"`
+	Tagline       *string         `json:"tagline"`
+	Theme         json.RawMessage `json:"-"`
+	Role          string          `json:"role"`
+	SetupComplete bool            `json:"setup_complete"`
 }
 
 // GetMembership returns a user's membership in a group.
@@ -180,7 +181,7 @@ func (s *Store) ListUserGroups(
 	ctx context.Context, userID int64,
 ) ([]UserGroup, error) {
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT g.id, st.loop_name, st.tagline, st.accent_color,
+		`SELECT g.id, st.loop_name, st.tagline, st.theme,
 		        m.role, st.setup_complete
 		 FROM memberships m
 		 JOIN groups g ON g.id = m.group_id
@@ -198,12 +199,14 @@ func (s *Store) ListUserGroups(
 
 	for rows.Next() {
 		var ug UserGroup
+		var theme sql.NullString
 
 		if err := rows.Scan(&ug.GroupID, &ug.LoopName, &ug.Tagline,
-			&ug.AccentColor, &ug.Role, &ug.SetupComplete,
+			&theme, &ug.Role, &ug.SetupComplete,
 		); err != nil {
 			return nil, fmt.Errorf("scanning user group: %w", err)
 		}
+		ug.Theme = rawJSON(theme)
 
 		groups = append(groups, ug)
 	}

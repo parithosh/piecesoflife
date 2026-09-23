@@ -86,26 +86,15 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		data.Error = "expired"
 	}
 
-	// The login page is Loop-agnostic: brand it with the instance name.
-	// On a single-Loop instance (every install pre-multi-group) the Loop's
-	// accent color carries over so the login page keeps its branding; with
-	// several Loops there is no single right accent, so the default stands.
+	// The login page is Loop-agnostic: brand it with the instance name and
+	// the house look. It precedes knowing the circle, so no circle theme
+	// (and never a circle photo) is shown here.
 	name := "PiecesOfLife"
 	if inst, err := s.store.GetInstanceSettings(r.Context()); err == nil {
 		name = inst.InstanceName
 	}
 
-	loginSettings := &store.Settings{LoopName: name}
-
-	if count, err := s.store.CountActiveGroups(r.Context()); err == nil && count == 1 {
-		if oldest, err := s.store.GetOldestActiveGroupID(r.Context()); err == nil {
-			if gs, err := s.store.GetSettings(r.Context(), oldest); err == nil {
-				loginSettings.AccentColor = gs.AccentColor
-			}
-		}
-	}
-
-	data.Settings = loginSettings
+	data.Settings = &store.Settings{LoopName: name}
 
 	s.renderPage(w, "login.html", data)
 }

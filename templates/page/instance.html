@@ -90,6 +90,17 @@
         public memento links, whatever its own setting says.</p>
       </div>
 
+      <div class="pl-form-field">
+        <label class="pl-login-label">
+          <input type="checkbox" id="instance-appearance"
+                 {{if .Instance.AllowCircleAppearance}}checked{{end}}>
+          Let circle superadmins choose their circle's look
+        </label>
+        <p class="pl-inst-meta">Fabrics, colours, a circle photo and a banner, set
+        from each circle's Admin → Appearance. When off, every circle shows the
+        house look; their choices are kept and come back when you turn this on.</p>
+      </div>
+
       <div class="pl-dialog-actions">
         <button type="button" id="save-instance-btn" class="pl-btn pl-btn--rani">Save instance settings</button>
       </div>
@@ -214,6 +225,7 @@ document.getElementById('save-instance-btn').addEventListener('click', async () 
         body: JSON.stringify({
             instance_name: document.getElementById('instance-name').value.trim(),
             allow_public_mementos: document.getElementById('instance-mementos').checked,
+            allow_circle_appearance: document.getElementById('instance-appearance').checked,
         }),
     });
     if (res.ok) { location.reload(); }

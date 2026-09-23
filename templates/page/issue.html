@@ -11,7 +11,7 @@
       <header class="pl-masthead">
         <div class="mango" aria-hidden="true"></div>
         <div class="pl-masthead-inner">
-          <img src="/static/img/logo.svg" alt="" class="pl-masthead-emblem">
+          <svg class="pl-masthead-emblem" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><use href="#pl-emblem"></use></svg>
           <p class="pl-eyebrow pl-eyebrow--peacock pl-masthead-eyebrow">Woven &amp; Posted</p>
           <h1 class="pl-masthead-month">
             {{if .Issue.Title}}{{.Issue.Title}}{{else}}{{.Issue.OpensAt | formatDate}}{{end}}
@@ -189,14 +189,14 @@
           <div class="published-question-inner">
             <p class="published-question-kicker">Between the issues</p>
             <h2 class="published-question-title" tabindex="-1">From the notebooks</h2>
-            <div class="ikat pl-notebook-band" role="presentation"></div>
+            <svg class="ikat pl-notebook-band" aria-hidden="true" focusable="false"><g style="transform:translateX(50%);transform-box:view-box;transform-origin:0 0"><rect x="-50%" width="100%" height="100%" fill="url(#pl-ikat)"></rect></g></svg>
             <p class="published-notebooks-standfirst">The small things everyone
             jotted down while the month was still happening — each notebook
             shared exactly as its owner chose to weave it in.</p>
 
             {{range $gi, $g := .DiaryGroups}}
             {{if gt $gi 0}}
-            <div class="ikat ikat--mini pl-notebook-divider" role="presentation"></div>
+            <svg class="ikat ikat--mini pl-notebook-divider" viewBox="0 0 336 52" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect width="100%" height="100%" fill="url(#pl-ikat)"></rect></svg>
             {{end}}
             <section class="pl-notebook" aria-label="From {{$g.UserName}}'s notebook">
               <div class="pl-notebook-head">

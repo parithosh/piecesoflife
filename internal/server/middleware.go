@@ -148,14 +148,16 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		"media-src 'self'; " +
 		"font-src 'self'; " +
 		"frame-src 'self' " + embedHosts + "; " +
+		"frame-ancestors 'self'; " +
 		"connect-src 'self'"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		// X-Frame-Options kept DENY — we iframe *others*, nobody should
-		// iframe *us*. CSP frame-ancestors would also work but XFO has
-		// better legacy-browser support.
-		w.Header().Set("X-Frame-Options", "DENY")
+		// Only we may frame our pages: the Appearance editor previews the
+		// circle's real issue in a same-origin iframe. Other origins stay
+		// blocked (clickjacking); XFO backs up frame-ancestors for legacy
+		// browsers.
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		if !s.config.DevMode {

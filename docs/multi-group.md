@@ -69,15 +69,16 @@ untouched.
 ## Settings: instance level vs group level
 
 - **Group settings** (`settings`, one row per Loop): loop name, tagline,
-  frequency, submission window, timezone, invite note, accent color,
+  frequency, submission window, timezone, invite note, appearance (theme),
   auto-create, questions per issue, public mementos — everything the admin
-  settings page shows today. Each Loop's admin owns them.
+  settings and appearance pages show. Each Loop's admin owns them.
 - **Instance settings** (`instance_settings`): `instance_name` (login page and
-  operator console branding) and `allow_public_mementos` as an **instance
-  policy**: a Loop can only expose public mementos if *both* the instance
-  policy and the Loop's own setting allow it (logical AND). This is the
-  override pattern for future policy-style settings: instance sets the
-  ceiling, groups opt in underneath it.
+  operator console branding), `allow_public_mementos` and
+  `allow_circle_appearance` as **instance policies**: a Loop can only expose
+  public mementos if *both* the instance policy and the Loop's own setting
+  allow it (logical AND), and a Loop's chosen appearance only renders while
+  the instance allows it. This is the override pattern for policy-style
+  settings: instance sets the ceiling, groups opt in underneath it.
 - New Loops are created with the same defaults a fresh install gets; their
   admin then runs the same setup wizard the first Loop used.
 

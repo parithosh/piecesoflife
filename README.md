@@ -47,6 +47,12 @@ host **several circles**, each with its own members, rounds, and settings,
 one login per person across all of them
 ([how that works](docs/multi-group.md)).
 
+Each circle can wear its own look, too: its superadmin picks a *fabric* (a
+curated, always-readable palette), adjusts up to three colours, and adds a
+circle photo and a masthead banner — once the instance operator switches
+circle appearance on in the Console. Off by default: an install looks
+exactly as shipped until someone opts in.
+
 ## Try it in two minutes
 
 Development mode needs no mail account and no secrets — outgoing email is

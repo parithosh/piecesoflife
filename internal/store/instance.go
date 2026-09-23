@@ -10,11 +10,15 @@ import (
 // on this instance. Policy fields act as ceilings: a Loop can only enable
 // the matching feature if the instance policy allows it too.
 type InstanceSettings struct {
-	ID                  int64     `json:"id"`
-	InstanceName        string    `json:"instance_name"`
-	AllowPublicMementos bool      `json:"allow_public_mementos"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                  int64  `json:"id"`
+	InstanceName        string `json:"instance_name"`
+	AllowPublicMementos bool   `json:"allow_public_mementos"`
+	// AllowCircleAppearance lets circle admins theme their circle (fabric,
+	// colours, photos). Off = every circle renders the house look; stored
+	// circle choices are kept and return when it is switched back on.
+	AllowCircleAppearance bool      `json:"allow_circle_appearance"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // GetInstanceSettings returns the single instance settings row.
@@ -22,10 +26,11 @@ func (s *Store) GetInstanceSettings(ctx context.Context) (*InstanceSettings, err
 	var st InstanceSettings
 
 	err := s.read.QueryRowContext(ctx,
-		`SELECT id, instance_name, allow_public_mementos, created_at, updated_at
+		`SELECT id, instance_name, allow_public_mementos, allow_circle_appearance,
+		        created_at, updated_at
 		 FROM instance_settings WHERE id = 1`,
 	).Scan(&st.ID, &st.InstanceName, &st.AllowPublicMementos,
-		&st.CreatedAt, &st.UpdatedAt)
+		&st.AllowCircleAppearance, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting instance settings: %w", err)
 	}
@@ -40,9 +45,10 @@ func (s *Store) UpdateInstanceSettings(
 	_, err := s.write.ExecContext(ctx,
 		`UPDATE instance_settings SET
 			instance_name = ?, allow_public_mementos = ?,
+			allow_circle_appearance = ?,
 			updated_at = CURRENT_TIMESTAMP
 		 WHERE id = 1`,
-		st.InstanceName, st.AllowPublicMementos,
+		st.InstanceName, st.AllowPublicMementos, st.AllowCircleAppearance,
 	)
 	if err != nil {
 		return fmt.Errorf("updating instance settings: %w", err)
