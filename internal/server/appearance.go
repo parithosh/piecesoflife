@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,15 +175,24 @@ func (s *Server) loopEntries(groups []store.UserGroup, enabled bool) []LoopEntry
 
 // appearanceState is the editor's JSON view of a config: photos travel as
 // bare file names plus URLs, never as server paths. GroupID names the
-// circle the editor was opened for; see requireEditorCircle.
+// circle the editor was opened for (see requireEditorCircle); Revision
+// identifies the stored look the editor started from, so publishing over
+// a look someone else saved in the meantime is refused, not silent.
 type appearanceState struct {
 	GroupID   int64                `json:"group_id,omitempty"`
+	Revision  string               `json:"revision"`
 	Fabric    string               `json:"fabric"`
 	Main      string               `json:"main"`
 	Highlight string               `json:"highlight"`
 	Second    string               `json:"second"`
 	Photo     *appearancePhotoJSON `json:"photo"`
 	Banner    *appearancePhotoJSON `json:"banner"`
+}
+
+// themeRevision is an opaque fingerprint of a stored look (NULL included).
+func themeRevision(raw json.RawMessage) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:8])
 }
 
 type appearancePhotoJSON struct {
@@ -201,16 +212,25 @@ type AppearancePageData struct {
 	PreviewURL  string
 }
 
-func (s *Server) stateFromConfig(groupID int64, cfg *theme.Config) appearanceState {
+// stateFor builds the editor state for a group's stored look. An
+// unreadable look opens as the house look but keeps its revision.
+func (s *Server) stateFor(ctx context.Context, groupID int64, raw json.RawMessage) appearanceState {
+	st := appearanceState{Revision: themeRevision(raw), Fabric: theme.DefaultFabric}
+
+	cfg, err := theme.ParseConfig(raw)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Unreadable stored theme; editor starts from the house look",
+			slog.Int64("group_id", groupID), slog.String("error", err.Error()))
+	}
 	if cfg == nil {
-		return appearanceState{Fabric: theme.DefaultFabric}
+		return st
 	}
 
-	return appearanceState{
-		Fabric: cfg.Fabric, Main: cfg.Main, Highlight: cfg.Highlight, Second: cfg.Second,
-		Photo:  s.photoJSON(groupID, cfg.Photo),
-		Banner: s.photoJSON(groupID, cfg.Banner),
-	}
+	st.Fabric, st.Main, st.Highlight, st.Second = cfg.Fabric, cfg.Main, cfg.Highlight, cfg.Second
+	st.Photo = s.photoJSON(groupID, cfg.Photo)
+	st.Banner = s.photoJSON(groupID, cfg.Banner)
+
+	return st
 }
 
 func (s *Server) photoJSON(groupID int64, p *theme.Photo) *appearancePhotoJSON {
@@ -229,13 +249,6 @@ func (s *Server) handleAdminAppearance(w http.ResponseWriter, r *http.Request) {
 	pd := s.newPageData(r)
 	groupID := currentGroupID(ctx)
 
-	cfg, err := theme.ParseConfig(pd.Settings.Theme)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Unreadable stored theme; editor starts from the house look",
-			slog.String("error", err.Error()))
-		cfg = nil
-	}
-
 	preview := "/issues"
 	if issue, err := s.store.GetLatestPublishedIssue(ctx, groupID); err == nil && issue != nil {
 		preview = issuePublicPath(issue)
@@ -245,7 +258,7 @@ func (s *Server) handleAdminAppearance(w http.ResponseWriter, r *http.Request) {
 		PageData:    pd,
 		Enabled:     s.appearanceEnabled(ctx),
 		Fabrics:     theme.Fabrics,
-		State:       s.stateFromConfig(groupID, cfg),
+		State:       s.stateFor(ctx, groupID, pd.Settings.Theme),
 		HasPrevious: pd.Settings.ThemePrevious != nil,
 		PreviewURL:  preview,
 	})
@@ -384,6 +397,15 @@ func (s *Server) handlePublishAppearance(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// The editor must have started from the look that is stored now;
+	// otherwise another admin published in between and we would silently
+	// overwrite their work. (PublishTheme's own compare-and-swap then
+	// covers the window between this read and the write.)
+	if req.Revision != themeRevision(settings.Theme) {
+		s.finishThemeChange(w, r, groupID, store.ErrThemeChanged)
+		return
+	}
+
 	err = s.store.PublishTheme(ctx, groupID, settings.Theme, raw)
 	s.finishThemeChange(w, r, groupID, err)
 }
@@ -442,9 +464,8 @@ func (s *Server) finishThemeChange(w http.ResponseWriter, r *http.Request, group
 
 	s.pruneBranding(ctx, groupID, settings, brandingDraftGrace)
 
-	cfg, _ := theme.ParseConfig(settings.Theme)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"state":        s.stateFromConfig(groupID, cfg),
+		"state":        s.stateFor(ctx, groupID, settings.Theme),
 		"has_previous": settings.ThemePrevious != nil,
 	})
 }

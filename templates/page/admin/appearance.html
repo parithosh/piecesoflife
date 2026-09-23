@@ -187,7 +187,6 @@
     let previewGeneration = 0;
     let busy = false;
     let editorBlocked = false;
-    let publishConflict = false;
     const uploadGeneration = { photo: 0, banner: 0 };
     const uploadedDrafts = new Set();
 
@@ -212,20 +211,24 @@
     };
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+    // Both conflicts mean this page's view of the circle is out of date:
+    // freeze every mutating control until the admin reloads.
+    function blockEditor(message) {
+        editorBlocked = true;
+        clearTimeout(timer);
+        ++previewGeneration;
+        for (const slot of slots) ++uploadGeneration[slot];
+        setStatus(message, false);
+        renderControls();
+    }
+
     function reportAPIError(err, localStatus) {
         if (err.code === 'wrong_circle') {
-            editorBlocked = true;
-            clearTimeout(timer);
-            ++previewGeneration;
-            for (const slot of slots) ++uploadGeneration[slot];
-            setStatus('You switched circles in another tab — reload this page to continue.', false);
-            renderControls();
+            blockEditor('You switched circles in another tab — reload this page to continue.');
             return;
         }
         if (err.code === 'appearance_changed') {
-            publishConflict = true;
-            setStatus('Someone else changed this circle’s look — reload to see it.', false);
-            renderControls();
+            blockEditor('Someone else changed this circle’s look — reload to see it.');
             return;
         }
         if (localStatus) localStatus.textContent = err.message;
@@ -237,7 +240,7 @@
     function updateDisabled(dirty) {
         const locked = busy || editorBlocked;
         form.querySelectorAll('input, button').forEach(control => { control.disabled = locked; });
-        if (!locked) publishBtn.disabled = !dirty || publishConflict;
+        if (!locked) publishBtn.disabled = !dirty;
         document.querySelectorAll('#appr-preview button').forEach(button => {
             button.disabled = editorBlocked;
         });
@@ -603,13 +606,18 @@
         state = structuredClone(published);
         restoreBtn.hidden = !data.has_previous;
         cleanupDraftUploads();
+        // The cached palette describes the draft we just left; drop it so
+        // the reloaded frame shows the saved look until a fresh preview
+        // for the adopted state arrives.
+        preview = null;
+        previewKey = '';
         original = null;
         frame.contentWindow?.location.reload();
         refresh();
     }
 
     publishBtn.addEventListener('click', async () => {
-        if (busy || editorBlocked || publishConflict) return;
+        if (busy || editorBlocked) return;
         const before = structuredClone(state);
         cancelUploads();
         busy = true;

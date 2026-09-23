@@ -165,7 +165,7 @@ func (p lch) rgb() rgb {
 // 8-bit colour that will actually be emitted, so hex rounding can never
 // tip a passing pair below the floor.
 func ensureContrast(c, bg rgb, min float64, darker bool) rgb {
-	c = quantize(c)
+	c, bg = quantize(c), quantize(bg)
 	if contrast(c, bg) >= min {
 		return c
 	}

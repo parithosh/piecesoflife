@@ -280,11 +280,16 @@ func imageOrientation(r io.ReadSeeker, format string) int {
 	return tiffOrientation(exif)
 }
 
+// readAtMost reads the first min(n, maxExifBytes) bytes of a metadata
+// block. Orientation lives in IFD0 near the start, so a large block (an
+// embedded thumbnail, maker notes) is parsed from its bounded prefix
+// rather than skipped. JPEG segments never exceed the cap, so the JPEG
+// scanner stays aligned on segment boundaries.
 func readAtMost(r io.Reader, n int64) []byte {
-	if n <= 0 || n > maxExifBytes {
+	if n <= 0 {
 		return nil
 	}
-	b := make([]byte, n)
+	b := make([]byte, min(n, maxExifBytes))
 	if _, err := io.ReadFull(r, b); err != nil {
 		return nil
 	}

@@ -91,7 +91,13 @@ func (s *Server) transcodeHEIC(ctx context.Context, path string) (string, error)
 
 	cmd := exec.CommandContext(runCtx, converter, "-q", "90", path, out)
 	if cmdOut, err := cmd.CombinedOutput(); err != nil {
+		// A multi-image file can fail after writing some numbered outputs
+		// (name-1.jpg, …); the stem is unique to this upload, so sweep them.
 		_ = os.Remove(out)
+		partial, _ := filepath.Glob(strings.TrimSuffix(out, ".jpg") + "-*.jpg")
+		for _, p := range partial {
+			_ = os.Remove(p)
+		}
 		return "", fmt.Errorf("converting HEIC: %w: %s", err, strings.TrimSpace(string(cmdOut)))
 	}
 

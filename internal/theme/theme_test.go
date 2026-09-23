@@ -98,6 +98,7 @@ func TestExtremePicksStayReadable(t *testing.T) {
 		{Fabric: "nordic", Main: "#6a6a6a", Highlight: "#000000"},
 		{Fabric: "kilim", Main: "#ffffff", Highlight: "#ffffff", Second: "#ffffff"},
 		{Fabric: "coastal", Main: "#000000", Highlight: "#000000", Second: "#000000"},
+		{Fabric: "kilim", Main: "#626160"}, // passes only before hex rounding of on-rani
 	} {
 		p, err := Resolve(&c)
 		require.NoError(t, err)

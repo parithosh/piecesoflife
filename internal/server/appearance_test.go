@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,8 +57,17 @@ func (f *appearanceFixture) setSwitch(t *testing.T, on bool) {
 	require.NoError(t, f.env.store.UpdateInstanceSettings(ctx, inst))
 }
 
+// call sends an appearance API request. Publishes (PUT) that don't name a
+// revision are sent as an editor that loaded the currently stored look —
+// what a real editor does; tests of stale editors pass one explicitly.
 func (f *appearanceFixture) call(t *testing.T, session *http.Cookie, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	if method == http.MethodPut && strings.HasPrefix(body, `{"group_id":1,`) && !strings.Contains(body, `"revision"`) {
+		settings, err := f.env.store.GetSettings(context.Background(), 1)
+		require.NoError(t, err)
+		body = fmt.Sprintf(`{"group_id":1,"revision":%q,`, themeRevision(settings.Theme)) +
+			strings.TrimPrefix(body, `{"group_id":1,`)
+	}
 	req := newJSONRequest(method, path, body)
 	req.AddCookie(session)
 	req.AddCookie(f.csrfCookie)
@@ -130,14 +140,18 @@ func jpegWithOrientation(t *testing.T, w, h, orientation int, fill ...byte) []by
 	return append(out, enc.Bytes()[2:]...)
 }
 
-// pngWithOrientation encodes a split PNG with an eXIf chunk after IHDR.
-func pngWithOrientation(t *testing.T, w, h, orientation int) []byte {
+// pngWithOrientation encodes a split PNG with an eXIf chunk after IHDR;
+// pad grows the chunk (like an embedded thumbnail would) past the orientation.
+func pngWithOrientation(t *testing.T, w, h, orientation int, pad ...int) []byte {
 	t.Helper()
 	var enc bytes.Buffer
 	require.NoError(t, png.Encode(&enc, splitImage(w, h)))
 	raw := enc.Bytes()
 
 	data := exifTIFF(orientation)
+	for _, n := range pad {
+		data = append(data, make([]byte, n)...)
+	}
 	chunk := binary.BigEndian.AppendUint32(nil, uint32(len(data)))
 	body := append([]byte("eXIf"), data...)
 	chunk = append(chunk, body...)
@@ -319,6 +333,36 @@ func TestAppearanceRejectsForeignPhotoReferences(t *testing.T) {
 	}
 }
 
+// Two editors open on the same look: the first publish wins, the second is
+// refused instead of silently overwriting it, and a fresh editor (the
+// state returned by the server) can publish again.
+func TestAppearanceStaleEditorCannotOverwrite(t *testing.T) {
+	f := newAppearanceFixture(t)
+	f.setSwitch(t, true)
+
+	opened := themeRevision(nil) // both editors loaded the house look
+	publish := func(rev, fabric string) *httptest.ResponseRecorder {
+		return f.call(t, f.admin, http.MethodPut, "/api/admin/appearance",
+			fmt.Sprintf(`{"group_id":1,"revision":%q,"fabric":%q}`, rev, fabric))
+	}
+
+	first := publish(opened, "indigo")
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+
+	stale := publish(opened, "kilim")
+	assert.Equal(t, http.StatusConflict, stale.Code)
+	assert.Contains(t, stale.Body.String(), "appearance_changed")
+
+	settings, err := f.env.store.GetSettings(context.Background(), 1)
+	require.NoError(t, err)
+	assert.Contains(t, string(settings.Theme), `"indigo"`, "the first publish survives")
+
+	var fresh struct{ State appearanceState }
+	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &fresh))
+	assert.Equal(t, http.StatusOK, publish(fresh.State.Revision, "kilim").Code,
+		"the revision handed back after publishing is current")
+}
+
 // Restore swaps the published look with the one it replaced, including
 // back to (and away from) the house look.
 func TestAppearanceRestoreSwapsLooks(t *testing.T) {
@@ -481,6 +525,7 @@ func TestAppearancePhotoOrientationAcrossFormats(t *testing.T) {
 
 	for name, src := range map[string][]byte{
 		"png eXIf":         pngWithOrientation(t, 120, 80, 6),
+		"png large eXIf":   pngWithOrientation(t, 120, 80, 6, 100<<10),
 		"jpeg fill bytes":  jpegWithOrientation(t, 120, 80, 6, 0xFF, 0xFF),
 		"jpeg plain APP1":  jpegWithOrientation(t, 120, 80, 6),
 		"jpeg rotate 180°": jpegWithOrientation(t, 120, 80, 3),
