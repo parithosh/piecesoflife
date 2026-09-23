@@ -1031,7 +1031,7 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 	// Mementos can be public: the circle's colours carry over, its photos
 	// never do (withPhotos=false keeps their URLs out of the page).
 	if settings.Theme != nil && s.appearanceEnabled(ctx) {
-		pd.Theme = s.resolveTheme(ctx, settings.Theme, false)
+		pd.Theme = s.resolveTheme(ctx, settings.GroupID, settings.Theme, false)
 	}
 
 	data := MementoPageData{

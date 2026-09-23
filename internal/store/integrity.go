@@ -96,16 +96,22 @@ func (s *Store) CheckUploadIntegrity(
 // answers, the photo dump, private rambles, notebook spreads, and circle
 // photos/banners (published look and its restore point).
 func (s *Store) referencedFilePaths(ctx context.Context) (map[string]struct{}, error) {
+	// A malformed theme value must not abort the whole report: only
+	// well-formed JSON objects are inspected for photo paths.
 	const query = `
+		WITH themes(t) AS (
+			SELECT theme FROM settings
+				WHERE CASE WHEN json_valid(theme) THEN json_type(theme) = 'object' ELSE 0 END
+			UNION ALL SELECT theme_previous FROM settings
+				WHERE CASE WHEN json_valid(theme_previous) THEN json_type(theme_previous) = 'object' ELSE 0 END
+		)
 		SELECT file_path FROM response_blocks WHERE file_path IS NOT NULL
 		UNION SELECT file_path FROM dump_items WHERE file_path IS NOT NULL
 		UNION SELECT file_path FROM ramble_blocks WHERE file_path IS NOT NULL
 		UNION SELECT file_path FROM diary_blocks WHERE file_path IS NOT NULL
 		UNION SELECT p FROM (
-			SELECT json_extract(theme, '$.photo.path') AS p FROM settings
-			UNION SELECT json_extract(theme, '$.banner.path') FROM settings
-			UNION SELECT json_extract(theme_previous, '$.photo.path') FROM settings
-			UNION SELECT json_extract(theme_previous, '$.banner.path') FROM settings
+			SELECT json_extract(t, '$.photo.path') AS p FROM themes
+			UNION SELECT json_extract(t, '$.banner.path') FROM themes
 		) WHERE p IS NOT NULL
 	`
 

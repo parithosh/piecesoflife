@@ -42,6 +42,11 @@ type Server struct {
 	// handler tests) disables the liveness check.
 	schedulerLastTick func() time.Time
 
+	// brandingMu serialises every change to circle appearance state and
+	// photo files (publish, restore, draft delete, prune), so a cleanup
+	// never deletes a file another request is about to publish.
+	brandingMu sync.Mutex
+
 	// Embedded filesystems, injected from main.go where go:embed is valid.
 	staticFS    embed.FS
 	templatesFS embed.FS
@@ -268,6 +273,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("PUT /api/admin/appearance", adminMW(s.handlePublishAppearance))
 	s.mux.Handle("POST /api/admin/appearance/restore", adminMW(s.handleRestoreAppearance))
 	s.mux.Handle("POST /api/admin/appearance/photo", adminMW(s.handleUploadAppearancePhoto))
+	s.mux.Handle("DELETE /api/admin/appearance/photo/{file}", adminMW(s.handleDeleteAppearancePhoto))
 
 	// User API routes (auth required).
 	s.mux.Handle("GET /api/users", groupMW(s.handleListUsers))
@@ -572,7 +578,7 @@ func (s *Server) newPageData(r *http.Request) PageData {
 	pd.MultiLoop = len(loops) > 1
 
 	if enabled && pd.Settings != nil && pd.Settings.Theme != nil {
-		pd.Theme = s.resolveTheme(r.Context(), pd.Settings.Theme, true)
+		pd.Theme = s.resolveTheme(r.Context(), pd.Settings.GroupID, pd.Settings.Theme, true)
 	}
 
 	if pd.Settings == nil {

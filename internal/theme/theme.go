@@ -49,15 +49,15 @@ var Fabrics = []Fabric{
 	{ID: "rani", Name: "Rani Ikat", Vibe: "The original: rani silk, marigold thread, peacock on ivory.",
 		Main: "#7a0f38", Highlight: "#e6b23c", Second: "#0e6b6b", Accent: "#c3362b", Paper: "#fbf4e3", Ink: "#2a0e15"},
 	{ID: "indigo", Name: "Indigo Quilt", Vibe: "Deep and literary, like a lamp-lit evening.",
-		Main: "#243b6b", Highlight: "#d4a843", Second: "#5b4a7a", Accent: "#b5523a", Paper: "#f6efdf", Ink: "#1c2233"},
+		Main: "#243b6b", Highlight: "#d4a843", Second: "#5b4a7a", Accent: "#b24f37", Paper: "#f6efdf", Ink: "#1c2233"},
 	{ID: "coastal", Name: "Coastal Weave", Vibe: "Airy navy, sea glass and coral on sand.",
-		Main: "#17435b", Highlight: "#e3b865", Second: "#2f6f6c", Accent: "#c85a45", Paper: "#f4ead8", Ink: "#13222b"},
+		Main: "#17435b", Highlight: "#e3b865", Second: "#2f6f6c", Accent: "#b44733", Paper: "#f4ead8", Ink: "#13222b"},
 	{ID: "nordic", Name: "Nordic Linen", Vibe: "Quiet slate and flax with a rust thread.",
-		Main: "#2e4549", Highlight: "#d4b676", Second: "#56694f", Accent: "#a65a43", Paper: "#f5f1e8", Ink: "#1f2628"},
+		Main: "#2e4549", Highlight: "#d4b676", Second: "#56694f", Accent: "#a45942", Paper: "#f5f1e8", Ink: "#1f2628"},
 	{ID: "meadow", Name: "Meadow Tapestry", Vibe: "Forest green, ochre and heather: soft and outdoorsy.",
-		Main: "#2c4a38", Highlight: "#dcb44e", Second: "#6b4f6e", Accent: "#b4533a", Paper: "#f5eedc", Ink: "#1d2a20"},
+		Main: "#2c4a38", Highlight: "#dcb44e", Second: "#6b4f6e", Accent: "#af4e36", Paper: "#f5eedc", Ink: "#1d2a20"},
 	{ID: "kilim", Name: "Autumn Kilim", Vibe: "Warm oxblood, amber and terracotta on oat.",
-		Main: "#5f2a25", Highlight: "#dea83e", Second: "#3f5f5a", Accent: "#b55f3d", Paper: "#f1e2c9", Ink: "#2b1a14"},
+		Main: "#5f2a25", Highlight: "#dea83e", Second: "#3f5f5a", Accent: "#a14d2b", Paper: "#f1e2c9", Ink: "#2b1a14"},
 }
 
 // FabricByID looks up a preset.
@@ -291,6 +291,9 @@ const (
 	minLedgerFg  = 4.4
 	minSmallMeta = 4.3
 	minQuietTag  = 3.0
+	// minWashLight keeps alert washes light: at 7:1 against black there is
+	// always an ink dark enough to reach AA on them. Rani's are ~18:1.
+	minWashLight = 7.0
 )
 
 // Resolve computes the full palette for a config (nil = house look).
@@ -328,18 +331,36 @@ func Resolve(c *Config) (Palette, error) {
 
 	// Knobs first: main and second must be dark enough for headings on
 	// paper and for light text on them; the highlight must be light
-	// enough to read on main and to carry ink.
+	// enough to read on main, to carry ink, and as small labels on the
+	// second colour's panels.
 	main := mustHex(seeds.Main)
 	main = ensureContrast(main, paper, minText, true)
 	main = ensureContrast(main, onRani, minText, true)
 
-	highlight := mustHex(seeds.Highlight)
-	highlight = ensureContrast(highlight, main, minText, false)
-	highlight = ensureContrast(highlight, ink, minText, false)
-
 	second := mustHex(seeds.Second)
 	second = ensureContrast(second, paper, minText, true)
 	second = ensureContrast(second, rgb{1, 1, 1}, minText, true)
+
+	// A very dark pick can satisfy one ground by being darker than it and
+	// then be lightened past it for the next; once it is lighter than all
+	// three dark grounds every further lightening only raises contrast, so
+	// a couple of passes reach a point where all guards hold together.
+	highlight := mustHex(seeds.Highlight)
+	for range 4 {
+		highlight = ensureContrast(highlight, main, minText, false)
+		highlight = ensureContrast(highlight, ink, minText, false)
+		highlight = ensureContrast(highlight, second, minQuietTag, false)
+		if contrast(highlight, main) >= minText && contrast(highlight, ink) >= minText {
+			break
+		}
+	}
+
+	// The accent is fabric-only (not a knob) but carries white button text
+	// and error text on paper; guard it like the knobs, silently.
+	accent := mustHex(seeds.Accent)
+	accent = ensureContrast(accent, rgb{1, 1, 1}, minText, true)
+	accent = ensureContrast(accent, paper, minText, true)
+	seeds.Accent = accent.hex()
 
 	var adjustments []Adjustment
 	for i, got := range []rgb{main, highlight, second} {
@@ -358,7 +379,7 @@ func Resolve(c *Config) (Palette, error) {
 		"rani":     main,
 		"marigold": highlight,
 		"peacock":  second,
-		"sindoor":  mustHex(seeds.Accent),
+		"sindoor":  accent,
 		"ivory":    paper,
 		"ink":      ink,
 	}
@@ -378,6 +399,11 @@ func Resolve(c *Config) (Palette, error) {
 	fix("on-peacock", second, minText, false)
 	fix("ledger-fg", second, minLedgerFg, false)
 	fix("ledger-wait", second, minQuietTag, false)
+	// Alert washes are light surfaces; a very dark seed would otherwise
+	// drag them to mid-grey where no ink can reach AA. Keep them light,
+	// then fit the ink.
+	fix("peacock-wash", rgb{}, minWashLight, false)
+	fix("sindoor-wash", rgb{}, minWashLight, false)
 	fix("peacock-ink", vals["peacock-wash"], minText, true)
 	fix("sindoor-ink", vals["sindoor-wash"], minText, true)
 	fix("zari-ink", vals["strip"], minSmallMeta, true)

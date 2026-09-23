@@ -161,8 +161,11 @@ func (p lch) rgb() rgb {
 
 // ensureContrast moves c's lightness (darker or lighter) until it reaches
 // min contrast against bg, keeping hue and as much chroma as fits. It
-// returns c unchanged when it already passes.
+// returns c unchanged when it already passes. Contrast is judged on the
+// 8-bit colour that will actually be emitted, so hex rounding can never
+// tip a passing pair below the floor.
 func ensureContrast(c, bg rgb, min float64, darker bool) rgb {
+	c = quantize(c)
 	if contrast(c, bg) >= min {
 		return c
 	}
@@ -177,10 +180,19 @@ func ensureContrast(c, bg rgb, min float64, darker bool) rgb {
 		if p.l <= 0 || p.l >= 1 {
 			break
 		}
-		if out := p.rgb(); contrast(out, bg) >= min {
+		if out := quantize(p.rgb()); contrast(out, bg) >= min {
 			return out
 		}
 	}
 
-	return p.rgb()
+	if darker {
+		return rgb{}
+	}
+
+	return rgb{1, 1, 1}
+}
+
+// quantize rounds c to the 8-bit sRGB colour its hex form encodes.
+func quantize(c rgb) rgb {
+	return mustHex(c.hex())
 }

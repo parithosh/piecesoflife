@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -75,23 +76,77 @@ func nullJSON(raw json.RawMessage) any {
 	return string(raw)
 }
 
-// UpdateTheme publishes a group's appearance, storing the look it replaces
-// as the restore point. nil theme = house look.
-func (s *Store) UpdateTheme(ctx context.Context, groupID int64, theme, previous json.RawMessage) error {
-	result, err := s.write.ExecContext(ctx,
-		`UPDATE settings SET theme = ?, theme_previous = ?, updated_at = CURRENT_TIMESTAMP
-		 WHERE group_id = ?`,
-		nullJSON(theme), nullJSON(previous), groupID,
-	)
-	if err != nil {
-		return fmt.Errorf("updating theme for group %d: %w", groupID, err)
+// ErrThemeChanged reports that a group's published look changed between
+// the caller reading it and trying to replace it.
+var ErrThemeChanged = errors.New("theme changed concurrently")
+
+// ErrNoRestorePoint reports a restore with no previous look to go back to.
+var ErrNoRestorePoint = errors.New("no previous theme to restore")
+
+// PublishTheme replaces a group's published appearance, but only if it is
+// still expected (compare-and-swap; ErrThemeChanged otherwise). The look it
+// replaces becomes the restore point, recorded as the JSON literal null
+// when that was the house look so "restore the house look" stays distinct
+// from "no restore point" (NULL). Re-publishing the current look is a
+// no-op that keeps the restore point. nil theme = house look.
+func (s *Store) PublishTheme(ctx context.Context, groupID int64, expected, theme json.RawMessage) error {
+	if theme != nil && !json.Valid(theme) {
+		return fmt.Errorf("theme for group %d is not valid JSON", groupID)
 	}
 
-	if n, err := result.RowsAffected(); err == nil && n == 0 {
+	next := nullJSON(theme)
+	result, err := s.write.ExecContext(ctx,
+		`UPDATE settings SET
+			theme_previous = CASE WHEN theme IS ? THEN theme_previous ELSE COALESCE(theme, 'null') END,
+			theme = ?,
+			updated_at = CURRENT_TIMESTAMP
+		 WHERE group_id = ? AND theme IS ?`,
+		next, next, groupID, nullJSON(expected),
+	)
+	if err != nil {
+		return fmt.Errorf("publishing theme for group %d: %w", groupID, err)
+	}
+
+	return s.themeRowsAffected(ctx, result, groupID, ErrThemeChanged)
+}
+
+// RestoreTheme atomically swaps a group's published look with its restore
+// point, so restoring twice is a redo. ErrNoRestorePoint when there is none.
+func (s *Store) RestoreTheme(ctx context.Context, groupID int64) error {
+	result, err := s.write.ExecContext(ctx,
+		`UPDATE settings SET
+			theme = CASE WHEN theme_previous = 'null' THEN NULL ELSE theme_previous END,
+			theme_previous = COALESCE(theme, 'null'),
+			updated_at = CURRENT_TIMESTAMP
+		 WHERE group_id = ? AND theme_previous IS NOT NULL`,
+		groupID,
+	)
+	if err != nil {
+		return fmt.Errorf("restoring theme for group %d: %w", groupID, err)
+	}
+
+	return s.themeRowsAffected(ctx, result, groupID, ErrNoRestorePoint)
+}
+
+// themeRowsAffected maps a zero-row theme update to ErrNoRows (no such
+// group) or the given condition error (row exists, guard failed).
+func (s *Store) themeRowsAffected(ctx context.Context, result sql.Result, groupID int64, guardErr error) error {
+	n, err := result.RowsAffected()
+	if err != nil || n > 0 {
+		return err
+	}
+
+	var exists bool
+	if err := s.read.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM settings WHERE group_id = ?)", groupID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("checking settings for group %d: %w", groupID, err)
+	}
+	if !exists {
 		return fmt.Errorf("settings for group %d: %w", groupID, sql.ErrNoRows)
 	}
 
-	return nil
+	return guardErr
 }
 
 // UpdateSettings writes all editable settings fields of st's group. A

@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"time"
 
 	"github.com/parithosh/piecesoflife/internal/auth"
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -52,8 +54,15 @@ const (
 	// maxBrandingUploadBytes bounds a circle photo upload: phone photos are
 	// a few MB; 30 MB leaves room for large PNGs.
 	maxBrandingUploadBytes = 30 << 20
-	circlePhotoEdge        = 640
-	bannerEdge             = 2400
+	// brandingFormMemory keeps multipart parsing from holding the photo in
+	// memory: anything larger spills to a temp file on disk.
+	brandingFormMemory = 1 << 20
+	circlePhotoEdge    = 640
+	bannerEdge         = 2400
+	// brandingDraftGrace is how long an uploaded-but-unpublished photo is
+	// safe from cleanup: an admin may still be editing in another tab.
+	// Drafts the editor discards are deleted immediately instead.
+	brandingDraftGrace = 24 * time.Hour
 )
 
 // appearanceEnabled reports the operator's instance switch.
@@ -68,15 +77,15 @@ func (s *Server) appearanceEnabled(ctx context.Context) bool {
 	return inst.AllowCircleAppearance
 }
 
-// resolveTheme turns a stored config into render data. withPhotos=false for
-// surfaces anonymous visitors can reach (public mementos): colours only, so
-// no private photo URL ever appears in the page. The caller has already
-// checked the instance switch.
-func (s *Server) resolveTheme(ctx context.Context, raw json.RawMessage, withPhotos bool) *pageTheme {
+// resolveTheme turns a group's stored config into render data. withPhotos
+// is false for surfaces anonymous visitors can reach (public mementos):
+// colours only, so no private photo URL ever appears in the page. The
+// caller has already checked the instance switch.
+func (s *Server) resolveTheme(ctx context.Context, groupID int64, raw json.RawMessage, withPhotos bool) *pageTheme {
 	cfg, err := theme.ParseConfig(raw)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Ignoring unreadable circle theme",
-			slog.String("error", err.Error()))
+			slog.Int64("group_id", groupID), slog.String("error", err.Error()))
 		return nil
 	}
 	if cfg == nil {
@@ -86,7 +95,7 @@ func (s *Server) resolveTheme(ctx context.Context, raw json.RawMessage, withPhot
 	pal, err := theme.Resolve(cfg)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Ignoring invalid circle theme",
-			slog.String("error", err.Error()))
+			slog.Int64("group_id", groupID), slog.String("error", err.Error()))
 		return nil
 	}
 
@@ -94,18 +103,19 @@ func (s *Server) resolveTheme(ctx context.Context, raw json.RawMessage, withPhot
 	decls := pal.Declarations()
 
 	if withPhotos {
-		if url := s.brandingURL(cfg.Photo); url != "" {
+		if url := s.brandingURL(groupID, cfg.Photo); url != "" {
 			pt.HasPhoto = true
 			decls += photoDecls("circle-photo", url, cfg.Photo)
 		}
-		if url := s.brandingURL(cfg.Banner); url != "" {
+		if url := s.brandingURL(groupID, cfg.Banner); url != "" {
 			pt.HasBanner = true
 			decls += photoDecls("banner", url, cfg.Banner)
 		}
 	}
 
-	// Safe: every value is engine-generated hex/rgb, and photo URLs are
-	// built from paths whose file name passed brandingFileRe.
+	// Safe: every palette value is engine-generated hex/rgb, and photo URLs
+	// are rebuilt by brandingURL from a numeric group id and a file name
+	// matching brandingFileRe — nothing from the stored path is echoed.
 	pt.CSS = template.CSS(decls) //nolint:gosec // see above
 
 	return pt
@@ -115,14 +125,23 @@ func photoDecls(name, url string, p *theme.Photo) string {
 	return fmt.Sprintf(`--%s:url("%s");--%s-pos:%d%% %d%%;`, name, url, name, p.X, p.Y)
 }
 
-// brandingURL returns the /uploads URL of a stored circle photo, or "" when
-// the reference is absent or doesn't have the shape the uploader produces.
-func (s *Server) brandingURL(p *theme.Photo) string {
-	if p == nil || !brandingFileRe.MatchString(filepath.Base(p.Path)) {
+// brandingURL returns the /uploads URL of a group's stored circle photo, or
+// "" unless the stored path is exactly a generated file inside that
+// group's own branding directory. The URL is built from the validated
+// parts, never from the stored string, so a tampered path cannot inject
+// markup into the page's <style>.
+func (s *Server) brandingURL(groupID int64, p *theme.Photo) string {
+	if p == nil {
 		return ""
 	}
 
-	return s.uploadURL(p.Path)
+	file := filepath.Base(p.Path)
+	if !brandingFileRe.MatchString(file) ||
+		filepath.Clean(p.Path) != filepath.Join(s.brandingDir(groupID), file) {
+		return ""
+	}
+
+	return fmt.Sprintf("/uploads/%s/%d/%s", brandingDirName, groupID, file)
 }
 
 // loopEntries decorates the user's circles with their appearance summary.
@@ -141,7 +160,7 @@ func (s *Server) loopEntries(groups []store.UserGroup, enabled bool) []LoopEntry
 		if pal, err := theme.Resolve(cfg); err == nil {
 			out[i].Dot = pal.Main
 		}
-		if url := s.brandingURL(cfg.Photo); url != "" {
+		if url := s.brandingURL(g.GroupID, cfg.Photo); url != "" {
 			out[i].PhotoURL = url
 			out[i].PhotoPos = fmt.Sprintf("%d%% %d%%", cfg.Photo.X, cfg.Photo.Y)
 		}
@@ -153,8 +172,10 @@ func (s *Server) loopEntries(groups []store.UserGroup, enabled bool) []LoopEntry
 // ---- Appearance page ------------------------------------------------------
 
 // appearanceState is the editor's JSON view of a config: photos travel as
-// bare file names plus URLs, never as server paths.
+// bare file names plus URLs, never as server paths. GroupID names the
+// circle the editor was opened for; see requireEditorCircle.
 type appearanceState struct {
+	GroupID   int64                `json:"group_id,omitempty"`
 	Fabric    string               `json:"fabric"`
 	Main      string               `json:"main"`
 	Highlight string               `json:"highlight"`
@@ -180,22 +201,20 @@ type AppearancePageData struct {
 	PreviewURL  string
 }
 
-func (s *Server) stateFromConfig(cfg *theme.Config) appearanceState {
+func (s *Server) stateFromConfig(groupID int64, cfg *theme.Config) appearanceState {
 	if cfg == nil {
 		return appearanceState{Fabric: theme.DefaultFabric}
 	}
 
-	st := appearanceState{
+	return appearanceState{
 		Fabric: cfg.Fabric, Main: cfg.Main, Highlight: cfg.Highlight, Second: cfg.Second,
+		Photo:  s.photoJSON(groupID, cfg.Photo),
+		Banner: s.photoJSON(groupID, cfg.Banner),
 	}
-	st.Photo = s.photoJSON(cfg.Photo)
-	st.Banner = s.photoJSON(cfg.Banner)
-
-	return st
 }
 
-func (s *Server) photoJSON(p *theme.Photo) *appearancePhotoJSON {
-	url := s.brandingURL(p)
+func (s *Server) photoJSON(groupID int64, p *theme.Photo) *appearancePhotoJSON {
+	url := s.brandingURL(groupID, p)
 	if url == "" {
 		return nil
 	}
@@ -208,6 +227,7 @@ func (s *Server) photoJSON(p *theme.Photo) *appearancePhotoJSON {
 func (s *Server) handleAdminAppearance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pd := s.newPageData(r)
+	groupID := currentGroupID(ctx)
 
 	cfg, err := theme.ParseConfig(pd.Settings.Theme)
 	if err != nil {
@@ -217,7 +237,7 @@ func (s *Server) handleAdminAppearance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	preview := "/issues"
-	if issue, err := s.store.GetLatestPublishedIssue(ctx, currentGroupID(ctx)); err == nil && issue != nil {
+	if issue, err := s.store.GetLatestPublishedIssue(ctx, groupID); err == nil && issue != nil {
 		preview = issuePublicPath(issue)
 	}
 
@@ -225,7 +245,7 @@ func (s *Server) handleAdminAppearance(w http.ResponseWriter, r *http.Request) {
 		PageData:    pd,
 		Enabled:     s.appearanceEnabled(ctx),
 		Fabrics:     theme.Fabrics,
-		State:       s.stateFromConfig(cfg),
+		State:       s.stateFromConfig(groupID, cfg),
 		HasPrevious: pd.Settings.ThemePrevious != nil,
 		PreviewURL:  preview,
 	})
@@ -244,6 +264,21 @@ func (s *Server) requireAppearance(w http.ResponseWriter, r *http.Request) bool 
 	return false
 }
 
+// requireEditorCircle rejects a request whose editor was opened for a
+// different circle than the session's current one. The current circle is
+// session state shared by every tab, so switching circles elsewhere must
+// not redirect this editor's uploads and publishes to the wrong circle.
+func requireEditorCircle(w http.ResponseWriter, r *http.Request, editorGroupID int64) bool {
+	if editorGroupID != 0 && editorGroupID == currentGroupID(r.Context()) {
+		return true
+	}
+
+	writeError(w, http.StatusConflict, "wrong_circle",
+		"You switched circles in another tab — reload this page before changing its appearance")
+
+	return false
+}
+
 // handleAppearancePreview resolves a draft palette for the live preview.
 // POST /api/admin/appearance/preview
 func (s *Server) handleAppearancePreview(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +287,7 @@ func (s *Server) handleAppearancePreview(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
+		GroupID   int64  `json:"group_id"`
 		Fabric    string `json:"fabric"`
 		Main      string `json:"main"`
 		Highlight string `json:"highlight"`
@@ -259,6 +295,9 @@ func (s *Server) handleAppearancePreview(w http.ResponseWriter, r *http.Request)
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+	if !requireEditorCircle(w, r, req.GroupID) {
 		return
 	}
 
@@ -293,13 +332,19 @@ func (s *Server) handlePublishAppearance(w http.ResponseWriter, r *http.Request)
 	}
 
 	ctx := r.Context()
-	groupID := currentGroupID(ctx)
 
 	var req appearanceState
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
 		return
 	}
+	if !requireEditorCircle(w, r, req.GroupID) {
+		return
+	}
+	groupID := req.GroupID
+
+	s.brandingMu.Lock()
+	defer s.brandingMu.Unlock()
 
 	cfg := theme.Config{Fabric: req.Fabric, Main: req.Main, Highlight: req.Highlight, Second: req.Second}
 	for _, slot := range []struct {
@@ -324,13 +369,6 @@ func (s *Server) handlePublishAppearance(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	settings, err := s.store.GetSettings(ctx, groupID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
-		return
-	}
-
 	var raw json.RawMessage
 	if normalized != nil {
 		if raw, err = json.Marshal(normalized); err != nil {
@@ -339,15 +377,15 @@ func (s *Server) handlePublishAppearance(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	previous := settings.ThemePrevious
-	if string(raw) != string(settings.Theme) {
-		// The replaced look becomes the restore point. The house look is
-		// recorded as JSON null so "restore the house look" stays possible
-		// and distinct from "no restore point" (NULL).
-		previous = orNullJSON(settings.Theme)
+	settings, err := s.store.GetSettings(ctx, groupID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to load settings", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
+		return
 	}
 
-	s.saveTheme(w, r, groupID, raw, previous)
+	err = s.store.PublishTheme(ctx, groupID, settings.Theme, raw)
+	s.finishThemeChange(w, r, groupID, err)
 }
 
 // handleRestoreAppearance swaps the published look with the one before it.
@@ -357,59 +395,64 @@ func (s *Server) handleRestoreAppearance(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := r.Context()
-	groupID := currentGroupID(ctx)
-
-	settings, err := s.store.GetSettings(ctx, groupID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load settings", slog.String("error", err.Error()))
-		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
+	var req struct {
+		GroupID int64 `json:"group_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+	if !requireEditorCircle(w, r, req.GroupID) {
 		return
 	}
 
-	if settings.ThemePrevious == nil {
+	s.brandingMu.Lock()
+	defer s.brandingMu.Unlock()
+
+	err := s.store.RestoreTheme(r.Context(), req.GroupID)
+	s.finishThemeChange(w, r, req.GroupID, err)
+}
+
+// finishThemeChange answers a publish/restore from the authoritative,
+// just-committed state and cleans up photos neither look uses. Callers
+// hold brandingMu.
+func (s *Server) finishThemeChange(w http.ResponseWriter, r *http.Request, groupID int64, err error) {
+	ctx := r.Context()
+
+	switch {
+	case errors.Is(err, store.ErrThemeChanged):
+		writeError(w, http.StatusConflict, "appearance_changed",
+			"Someone else changed this circle's look — reload to see it")
+		return
+	case errors.Is(err, store.ErrNoRestorePoint):
 		writeError(w, http.StatusConflict, "nothing_to_restore", "There is no previous look to restore")
 		return
-	}
-
-	restored := settings.ThemePrevious
-	if string(restored) == "null" {
-		restored = nil
-	}
-
-	s.saveTheme(w, r, groupID, restored, orNullJSON(settings.Theme))
-}
-
-func orNullJSON(raw json.RawMessage) json.RawMessage {
-	if raw == nil {
-		return json.RawMessage("null")
-	}
-
-	return raw
-}
-
-func (s *Server) saveTheme(w http.ResponseWriter, r *http.Request, groupID int64, current, previous json.RawMessage) {
-	ctx := r.Context()
-
-	if err := s.store.UpdateTheme(ctx, groupID, current, previous); err != nil {
+	case err != nil:
 		s.logger.ErrorContext(ctx, "Failed to save theme", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save appearance")
 		return
 	}
 
-	s.pruneBranding(ctx, groupID, current, previous)
+	settings, err := s.store.GetSettings(ctx, groupID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to reload settings", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
+		return
+	}
 
-	cfg, _ := theme.ParseConfig(current)
+	s.pruneBranding(ctx, groupID, settings, brandingDraftGrace)
+
+	cfg, _ := theme.ParseConfig(settings.Theme)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"state":        s.stateFromConfig(cfg),
-		"has_previous": previous != nil,
+		"state":        s.stateFromConfig(groupID, cfg),
+		"has_previous": settings.ThemePrevious != nil,
 	})
 }
 
 // ---- Circle photos --------------------------------------------------------
 
 func (s *Server) brandingDir(groupID int64) string {
-	return filepath.Join(s.config.UploadPath, brandingDirName, fmt.Sprint(groupID))
+	return filepath.Join(s.config.UploadPath, brandingDirName, strconv.FormatInt(groupID, 10))
 }
 
 // brandingPath maps an editor file name to its on-disk path, accepting only
@@ -427,28 +470,44 @@ func (s *Server) brandingPath(groupID int64, file string) (string, bool) {
 	return p, true
 }
 
-// pruneBranding deletes this circle's uploaded photos that neither the
-// published look nor the restore point uses (abandoned drafts, replaced
-// photos). Best-effort: a leftover file is harmless.
-func (s *Server) pruneBranding(ctx context.Context, groupID int64, looks ...json.RawMessage) {
+// brandingInUse lists the photo files a group's published look and restore
+// point reference.
+func brandingInUse(settings *store.Settings) map[string]bool {
 	keep := map[string]bool{}
-	for _, raw := range looks {
-		if cfg, err := theme.ParseConfig(raw); err == nil && cfg != nil {
-			for _, p := range []*theme.Photo{cfg.Photo, cfg.Banner} {
-				if p != nil {
-					keep[filepath.Base(p.Path)] = true
-				}
+	for _, raw := range []json.RawMessage{settings.Theme, settings.ThemePrevious} {
+		cfg, err := theme.ParseConfig(raw)
+		if err != nil || cfg == nil {
+			continue
+		}
+		for _, p := range []*theme.Photo{cfg.Photo, cfg.Banner} {
+			if p != nil {
+				keep[filepath.Base(p.Path)] = true
 			}
 		}
 	}
 
+	return keep
+}
+
+// pruneBranding deletes this circle's photos that neither the published
+// look nor the restore point uses and that are older than grace, judged
+// against the stored (authoritative) settings. Callers hold brandingMu.
+// Best-effort: a leftover file is harmless.
+func (s *Server) pruneBranding(ctx context.Context, groupID int64, settings *store.Settings, grace time.Duration) {
+	keep := brandingInUse(settings)
 	dir := s.brandingDir(groupID)
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
+
+	cutoff := time.Now().Add(-grace)
 	for _, e := range entries {
 		if e.IsDir() || keep[e.Name()] || !brandingFileRe.MatchString(e.Name()) {
+			continue
+		}
+		if info, err := e.Info(); err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
@@ -458,21 +517,68 @@ func (s *Server) pruneBranding(ctx context.Context, groupID int64, looks ...json
 	}
 }
 
+// handleDeleteAppearancePhoto deletes a draft photo the editor no longer
+// uses. Files the published look or restore point reference are kept, so
+// the call is always safe to make; the answer is 204 either way.
+// DELETE /api/admin/appearance/photo/{file}?group_id=N
+func (s *Server) handleDeleteAppearancePhoto(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAppearance(w, r) {
+		return
+	}
+
+	editorGroupID, _ := strconv.ParseInt(r.URL.Query().Get("group_id"), 10, 64)
+	if !requireEditorCircle(w, r, editorGroupID) {
+		return
+	}
+
+	file := r.PathValue("file")
+	if !brandingFileRe.MatchString(file) {
+		writeError(w, http.StatusNotFound, "not_found", "No such photo")
+		return
+	}
+
+	ctx := r.Context()
+
+	s.brandingMu.Lock()
+	defer s.brandingMu.Unlock()
+
+	settings, err := s.store.GetSettings(ctx, editorGroupID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to load settings", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Internal server error")
+		return
+	}
+
+	if !brandingInUse(settings)[file] {
+		err := os.Remove(filepath.Join(s.brandingDir(editorGroupID), file))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger.WarnContext(ctx, "Failed to delete draft circle photo",
+				slog.String("file", file), slog.String("error", err.Error()))
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleUploadAppearancePhoto stores a circle photo or banner as a
 // metadata-free, downsized JPEG. The editor holds the returned file name in
 // its draft; nothing is visible to members until the look is published.
-// POST /api/admin/appearance/photo  (multipart: photo, slot=photo|banner)
+// POST /api/admin/appearance/photo  (multipart: photo, slot=photo|banner, group_id)
 func (s *Server) handleUploadAppearancePhoto(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAppearance(w, r) {
 		return
 	}
 
 	ctx := r.Context()
-	groupID := currentGroupID(ctx)
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrandingUploadBytes)
-	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
+	if err := r.ParseMultipartForm(brandingFormMemory); err != nil {
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large", "That photo is too large (30 MB max)")
+		return
+	}
+
+	editorGroupID, _ := strconv.ParseInt(r.FormValue("group_id"), 10, 64)
+	if !requireEditorCircle(w, r, editorGroupID) {
 		return
 	}
 
@@ -493,7 +599,7 @@ func (s *Server) handleUploadAppearancePhoto(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	dir := s.brandingDir(groupID)
+	dir := s.brandingDir(editorGroupID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		s.logger.ErrorContext(ctx, "Failed to create branding directory", slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to save photo")
@@ -504,18 +610,17 @@ func (s *Server) handleUploadAppearancePhoto(w http.ResponseWriter, r *http.Requ
 	dst := filepath.Join(dir, name)
 
 	if err := s.storeBrandingImage(ctx, file, edge, dst); err != nil {
-		msg := "Couldn't read that photo — try a JPEG, PNG, WebP or HEIC"
 		var bad badImageError
 		if errors.As(err, &bad) {
-			msg = bad.msg
-		} else {
-			s.logger.ErrorContext(ctx, "Failed to process circle photo", slog.String("error", err.Error()))
+			writeError(w, http.StatusUnprocessableEntity, "unsupported_image", bad.msg)
+			return
 		}
-		writeError(w, http.StatusUnprocessableEntity, "unsupported_image", msg)
+		s.logger.ErrorContext(ctx, "Failed to store circle photo", slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Couldn't save the photo — please try again")
 		return
 	}
 
 	writeJSON(w, http.StatusCreated, appearancePhotoJSON{
-		File: name, URL: s.uploadURL(dst), X: 50, Y: 50,
+		File: name, URL: fmt.Sprintf("/uploads/%s/%d/%s", brandingDirName, editorGroupID, name), X: 50, Y: 50,
 	})
 }

@@ -4285,17 +4285,14 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 [data-circle-photo] :is(.pl-nav-logo, .pl-masthead-emblem) use { display: none; }
 [data-circle-photo] .pl-masthead-emblem { box-shadow: 0 0 0 3px var(--marigold), 0 0 0 7px rgba(var(--marigold-rgb), 0.28); }
 
-/* the banner sits behind the masthead and the "Open now" panel, under a
- * wash of the main colour that keeps light titles readable on any photo */
-[data-banner] .pl-masthead {
-    background:
-        linear-gradient(180deg, rgba(var(--rani-rgb), 0.5) 0%, rgba(var(--rani-rgb), 0.84) 100%),
-        var(--banner) var(--banner-pos, 50% 50%) / cover no-repeat;
-}
-[data-banner] .pl-current {
-    background:
-        linear-gradient(90deg, rgba(var(--rani-rgb), 0.92) 0%, rgba(var(--rani-rgb), 0.7) 100%),
-        var(--banner) var(--banner-pos, 50% 50%) / cover no-repeat;
+/* the banner sits behind the masthead and the "Open now" panel, multiplied
+ * onto the main colour: multiply can only darken, so every pixel of the
+ * result is at most as light as --rani and the titles on it keep at least
+ * the on-rani/marigold-on-rani contrast the theme engine guarantees — no
+ * photo, however bright, can wash them out. */
+[data-banner] :is(.pl-masthead, .pl-current) {
+    background: var(--banner) var(--banner-pos, 50% 50%) / cover no-repeat, var(--rani);
+    background-blend-mode: multiply;
 }
 [data-banner] :is(.pl-masthead, .pl-current) > .mango { display: none; }
 [data-banner] :is(.pl-masthead-month, .pl-masthead-meta) {
@@ -4483,6 +4480,8 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 .pl-appr-photo-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; font: 14px/1.4 var(--font-read); color: var(--ink-soft); }
 .pl-appr-photo-text b { font: 700 13px var(--font-ui); color: var(--ink); }
 .pl-appr-upload { cursor: pointer; }
+.pl-appr-upload:focus-within { outline: 3px solid var(--marigold); outline-offset: 2px; }
+.pl-appr-photo-frame:focus-visible { outline: 3px solid var(--marigold); outline-offset: 2px; }
 .pl-appr-actions {
     position: sticky;
     bottom: 0;

@@ -55,6 +55,7 @@ func TestFabricsPassUnadjusted(t *testing.T) {
 			assert.Equal(t, f.Main, m["rani"])
 			assert.Equal(t, f.Highlight, m["marigold"])
 			assert.Equal(t, f.Second, m["peacock"])
+			assert.Equal(t, f.Accent, m["sindoor"])
 			assertReadable(t, m)
 		})
 	}
@@ -77,12 +78,31 @@ func assertReadable(t *testing.T, m map[string]string) {
 		{"peacock-ink", "peacock-wash", minText},
 		{"sindoor-ink", "sindoor-wash", minText},
 		{"ink-soft", "ivory", minSmallMeta},
+		{"marigold", "peacock", minQuietTag},
+		{"sindoor", "ivory", minText},
 	}
 	for _, pr := range pairs {
 		got := contrast(mustHex(m[pr.fg]), mustHex(m[pr.bg]))
 		assert.GreaterOrEqual(t, got, pr.min, "%s on %s", pr.fg, pr.bg)
 	}
-	assert.GreaterOrEqual(t, contrast(rgb{1, 1, 1}, mustHex(m["peacock"])), minText, "white on peacock")
+	white := rgb{1, 1, 1}
+	assert.GreaterOrEqual(t, contrast(white, mustHex(m["peacock"])), minText, "white on peacock")
+	assert.GreaterOrEqual(t, contrast(white, mustHex(m["sindoor"])), minText, "white on sindoor")
+}
+
+// Adversarial pick combinations that each satisfy some guards by being on
+// the "wrong side" of a ground must still come out readable everywhere.
+func TestExtremePicksStayReadable(t *testing.T) {
+	for _, c := range []Config{
+		{Fabric: "rani", Main: "#000000", Highlight: "#8f8f8f", Second: "#555555"},
+		{Fabric: "nordic", Main: "#6a6a6a", Highlight: "#000000"},
+		{Fabric: "kilim", Main: "#ffffff", Highlight: "#ffffff", Second: "#ffffff"},
+		{Fabric: "coastal", Main: "#000000", Highlight: "#000000", Second: "#000000"},
+	} {
+		p, err := Resolve(&c)
+		require.NoError(t, err)
+		assertReadable(t, tokenMap(p))
+	}
 }
 
 // Picks that would be unreadable are corrected, reported, and the result
