@@ -342,6 +342,9 @@
             el.dataset.lightboxWired = '1';
             el.style.cursor = isCovered(el) ? 'pointer' : 'zoom-in';
             el.addEventListener('click', function(ev) {
+                // Dump figures wrap their comment thread; clicks there (typing,
+                // Post, Reply) belong to the comments, not the photo.
+                if (ev.target.closest('.comments-panel')) return;
                 ev.preventDefault();
                 if (isCovered(el)) {
                     revealCoveredPhoto(el);
