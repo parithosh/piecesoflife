@@ -47,6 +47,11 @@ type Config struct {
 	// docker-compose env var (SESSION_SECRET).
 	SessionSecret string
 
+	// GiphyAPIKey enables GIF search in comment composers. Optional: empty
+	// hides the GIF button. GIPHY requires searches to run in the browser,
+	// so the key is shown to signed-in readers of an issue.
+	GiphyAPIKey string
+
 	// Logging
 	LogLevel  string
 	LogFormat string
@@ -78,6 +83,8 @@ func Load() (*Config, error) {
 
 		AdminEmail:    os.Getenv("ADMIN_EMAIL"),
 		SessionSecret: os.Getenv("SESSION_SECRET"),
+
+		GiphyAPIKey: os.Getenv("GIPHY_API_KEY"),
 	}
 
 	if err := cfg.validate(); err != nil {

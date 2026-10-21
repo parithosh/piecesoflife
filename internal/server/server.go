@@ -416,6 +416,7 @@ func (s *Server) loadTemplates() {
 		"dict":          dict,
 		"linkEmbed":     linkEmbed,
 		"assetVersion":  func() string { return assetVersion },
+		"giphyKey":      func() string { return s.config.GiphyAPIKey },
 	}
 
 	var tmplFS fs.FS

@@ -134,6 +134,8 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 	//     render without whitelisting each one.
 	//   - frame-src allows a fixed allowlist of embed providers to match
 	//     linkEmbed() in embed.go. Keep the two in sync.
+	//   - connect-src allows api.giphy.com: the comment GIF picker searches
+	//     GIPHY from the browser, as GIPHY's API terms require.
 	//   - script-src allows the inline theme-boot snippet in base.html via
 	//     'unsafe-inline' — without it the FOUC avoidance would have to
 	//     become an external file, which defeats the purpose.
@@ -149,7 +151,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		"font-src 'self'; " +
 		"frame-src 'self' " + embedHosts + "; " +
 		"frame-ancestors 'self'; " +
-		"connect-src 'self'"
+		"connect-src 'self' https://api.giphy.com"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")

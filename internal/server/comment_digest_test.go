@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -172,4 +173,18 @@ func TestCommentDigestNotifiesThreadParticipants(t *testing.T) {
 
 	assert.ElementsMatch(t, []int64{arun.ID, bala.ID}, recipientsOf(meeraReply),
 		"owner's own reply notifies participants but never the owner")
+}
+
+// TestCommentExcerptNamesGIFs pins how a GIF comment reads in the digest
+// email: as "[GIF]", never its long GIPHY URL — and that URL must not eat
+// the excerpt's length budget and truncate the words around it.
+func TestCommentExcerptNamesGIFs(t *testing.T) {
+	gif := "![Happy Dance](https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjEx/" +
+		"giphy.webp?cid=790b7611&rid=giphy.webp&ct=g)"
+
+	assert.Equal(t, "[GIF]", commentExcerpt(gif))
+
+	words := strings.TrimSpace(strings.Repeat("so good ", 25)) // under the cut
+	assert.Equal(t, words+"\n\n[GIF]",
+		commentExcerpt(words+"\n\n"+gif))
 }

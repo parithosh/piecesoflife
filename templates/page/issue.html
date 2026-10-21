@@ -461,6 +461,8 @@
 // Who's reading — social.js shows edit affordances on this member's own
 // comments.
 {{if .User}}window.POLUserID = {{.User.ID}};{{end}}
+// GIF search in comment composers; absent when GIPHY_API_KEY is unset.
+{{with giphyKey}}window.POLGiphyKey = {{.}};{{end}}
 
 // Suggest-a-question for the upcoming round (card only renders while its
 // pre-created draft still accepts suggestions).

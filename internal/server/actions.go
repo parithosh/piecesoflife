@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1161,22 +1162,10 @@ func (s *Server) sendCommentDigest(
 			anyOwned = true
 		}
 
-		excerpt := p.Body
-		if len(excerpt) > 240 {
-			// Cut on a rune boundary — a byte slice mid-character would
-			// put a � in the email.
-			cut := 240
-			for cut > 0 && !utf8.RuneStart(excerpt[cut]) {
-				cut--
-			}
-
-			excerpt = strings.TrimSpace(excerpt[:cut]) + "…"
-		}
-
 		items = append(items, digestItem{
 			Commenter: p.CommenterName,
 			Context:   label,
-			Excerpt:   excerpt,
+			Excerpt:   commentExcerpt(p.Body),
 		})
 	}
 
@@ -1246,6 +1235,28 @@ func (s *Server) sendCommentDigest(
 	}
 
 	return true
+}
+
+// markdownImage matches a Markdown image — in comments, a GIF picked from
+// GIPHY — so digest emails can say "[GIF]" instead of quoting its URL.
+var markdownImage = regexp.MustCompile(`!\[[^\]]*\]\([^)\s]*\)`)
+
+// commentExcerpt is the digest-email quote of a comment body: GIFs become
+// "[GIF]" and long bodies are cut to 240 bytes.
+func commentExcerpt(body string) string {
+	excerpt := strings.TrimSpace(markdownImage.ReplaceAllString(body, "[GIF]"))
+	if len(excerpt) > 240 {
+		// Cut on a rune boundary — a byte slice mid-character would
+		// put a � in the email.
+		cut := 240
+		for cut > 0 && !utf8.RuneStart(excerpt[cut]) {
+			cut--
+		}
+
+		excerpt = strings.TrimSpace(excerpt[:cut]) + "…"
+	}
+
+	return excerpt
 }
 
 // commentContextLabel describes what a queued comment landed on — phrased

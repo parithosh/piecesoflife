@@ -15,6 +15,15 @@
         '.comments-panel[data-response-id], .comments-panel[data-diary-block-id], ' +
         '.comments-panel[data-diary-day-id], .comments-panel[data-dump-item-id]';
 
+    // Set by the issue page when the server has GIPHY_API_KEY; without it
+    // composers have no GIF button.
+    const GIPHY_KEY = window.POLGiphyKey || '';
+
+    function gifButtonHTML() {
+        if (!GIPHY_KEY) return '';
+        return '<button type="button" class="comment-gif-btn" aria-expanded="false">GIF</button>';
+    }
+
     function commentsEndpoint(panel) {
         if (panel.dataset.responseId) {
             return `/api/responses/${panel.dataset.responseId}/comments`;
@@ -54,7 +63,10 @@
                               rows="1" maxlength="4000"></textarea>
                     <div class="comment-form-actions">
                         <span class="comment-status"></span>
-                        <button type="submit" disabled>Post</button>
+                        <span>
+                            ${gifButtonHTML()}
+                            <button type="submit" disabled>Post</button>
+                        </span>
                     </div>
                 </form>
             </div>
@@ -237,6 +249,7 @@
                 <span class="comment-status"></span>
                 <span>
                     <button type="button" class="comment-reply-cancel">Cancel</button>
+                    ${gifButtonHTML()}
                     <button type="submit" disabled>Reply</button>
                 </span>
             </div>
@@ -287,7 +300,7 @@
         const textarea = form.querySelector('.comment-body-input');
         const status = form.querySelector('.comment-status');
         const submit = form.querySelector('button[type="submit"]');
-        const body = textarea.value.trim();
+        const body = commentBodyFor(form);
         if (!body) return;
 
         status.textContent = 'Posting...';
@@ -307,7 +320,7 @@
 
             if (res.ok) {
                 textarea.value = '';
-                form.classList.remove('has-content');
+                detachGif(form);
                 status.textContent = '';
                 status.dataset.state = '';
                 await loadComments(panel);
@@ -321,8 +334,144 @@
             status.textContent = 'Network error';
             status.dataset.state = 'error';
         } finally {
-            submit.disabled = textarea.value.trim().length === 0;
+            syncFormState(form);
         }
+    }
+
+    // syncFormState keeps a composer's has-content class (which keeps it
+    // expanded) and its submit button in step with its text and GIF.
+    function syncFormState(form) {
+        const textarea = form.querySelector('.comment-body-input');
+        const hasContent = textarea.value.trim().length > 0 || Boolean(form.dataset.gifUrl);
+        form.classList.toggle('has-content', hasContent);
+        const submit = form.querySelector('button[type="submit"]');
+        if (submit) submit.disabled = !hasContent;
+    }
+
+    // commentBodyFor is the Markdown a composer posts: its text, then the
+    // attached GIF as an image on its own paragraph.
+    function commentBodyFor(form) {
+        const text = form.querySelector('.comment-body-input').value.trim();
+        const url = form.dataset.gifUrl;
+        if (!url) return text;
+
+        const alt = (form.dataset.gifTitle || '').replace(/[[\]\\\r\n]/g, '').trim() || 'GIF';
+        // Percent-encode what would end a Markdown link target early.
+        const target = url.replace(/[()\s]/g, c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+        const gif = `![${alt}](${target})`;
+        return text ? `${text}\n\n${gif}` : gif;
+    }
+
+    function toggleGifPicker(form, btn) {
+        if (form.querySelector('.gif-picker')) {
+            closeGifPicker(form);
+            return;
+        }
+
+        const picker = document.createElement('div');
+        picker.className = 'gif-picker';
+        picker.innerHTML = `
+            <input type="search" class="gif-search" placeholder="Search GIPHY…"
+                   aria-label="Search GIFs" maxlength="50" autocomplete="off">
+            <div class="gif-results"></div>
+            <p class="gif-attribution">Powered by GIPHY</p>
+        `;
+        form.querySelector('.comment-form-actions').before(picker);
+        btn.setAttribute('aria-expanded', 'true');
+        picker.querySelector('.gif-search').focus();
+    }
+
+    function closeGifPicker(form) {
+        form.querySelector('.gif-picker')?.remove();
+        form.querySelector('.comment-gif-btn')?.setAttribute('aria-expanded', 'false');
+    }
+
+    function gifNote(text) {
+        return `<p class="gif-note">${escapeHtml(text)}</p>`;
+    }
+
+    // searchGifs queries GIPHY from the browser, as GIPHY requires. Each
+    // search is numbered so a slow earlier response can't replace newer
+    // results.
+    async function searchGifs(picker) {
+        const q = picker.querySelector('.gif-search').value.trim();
+        const results = picker.querySelector('.gif-results');
+        const seq = String(Number(picker.dataset.seq || 0) + 1);
+        picker.dataset.seq = seq;
+
+        if (q.length < 2) {
+            results.innerHTML = '';
+            return;
+        }
+
+        results.innerHTML = gifNote('Searching…');
+
+        const params = new URLSearchParams({
+            api_key: GIPHY_KEY, q, limit: '12', rating: 'pg-13',
+        });
+        let html;
+        try {
+            const res = await fetch(`https://api.giphy.com/v1/gifs/search?${params}`, {
+                referrerPolicy: 'no-referrer',
+            });
+            if (res.status === 429) {
+                html = gifNote('That’s a lot of GIF searches this hour — try again later.');
+            } else if (!res.ok) {
+                throw new Error(`GIPHY search failed: ${res.status}`);
+            } else {
+                const data = await res.json();
+                html = (data.data || []).map(gifResultHTML).join('') || gifNote('No GIFs found.');
+            }
+        } catch {
+            html = gifNote('GIF search isn’t available right now.');
+        }
+
+        if (picker.dataset.seq === seq) results.innerHTML = html;
+    }
+
+    // gifResultHTML shows a small rendition in the picker; the comment gets
+    // the 200px-tall one. WebP where GIPHY has it — far smaller than GIF.
+    function gifResultHTML(g) {
+        const full = g.images?.fixed_height;
+        const thumb = g.images?.fixed_width_small || full;
+        const url = full?.webp || full?.url;
+        const preview = thumb?.webp || thumb?.url;
+        if (!isGiphyMediaURL(url) || !isGiphyMediaURL(preview)) return '';
+
+        const title = g.title || 'GIF';
+        return `
+            <button type="button" class="gif-result" title="${escapeHtml(title)}"
+                    data-gif-url="${escapeHtml(url)}" data-gif-title="${escapeHtml(title)}">
+                <img src="${escapeHtml(preview)}" alt="${escapeHtml(title)}"
+                     loading="lazy" referrerpolicy="no-referrer">
+            </button>
+        `;
+    }
+
+    function attachGif(form, result) {
+        form.dataset.gifUrl = result.dataset.gifUrl;
+        form.dataset.gifTitle = result.dataset.gifTitle;
+        closeGifPicker(form);
+
+        form.querySelector('.gif-attached')?.remove();
+        const attached = document.createElement('div');
+        attached.className = 'gif-attached';
+        attached.innerHTML = `
+            <img src="${escapeHtml(form.dataset.gifUrl)}" alt="${escapeHtml(form.dataset.gifTitle)}"
+                 referrerpolicy="no-referrer">
+            <button type="button" class="gif-remove" aria-label="Remove GIF">×</button>
+        `;
+        form.querySelector('.comment-form-actions').before(attached);
+        syncFormState(form);
+        form.querySelector('.comment-body-input')?.focus();
+    }
+
+    function detachGif(form) {
+        delete form.dataset.gifUrl;
+        delete form.dataset.gifTitle;
+        form.querySelector('.gif-attached')?.remove();
+        closeGifPicker(form);
+        syncFormState(form);
     }
 
     function escapeHtml(s) {
@@ -351,6 +500,11 @@
             }
 
             const tag = node.tagName.toLowerCase();
+            if (tag === 'img') {
+                sanitizeCommentImage(node);
+                return;
+            }
+
             if (!ALLOWED_COMMENT_TAGS.has(tag)) {
                 node.replaceWith(document.createTextNode(node.textContent || ''));
                 return;
@@ -371,6 +525,34 @@
 
             sanitizeCommentFragment(node);
         });
+    }
+
+    // Comment images exist only as GIFs from the picker, so only GIPHY's
+    // media hosts may supply one; anything else is dropped. Survivors keep
+    // just src and alt, and don't tell GIPHY which site they're on.
+    function sanitizeCommentImage(img) {
+        const src = img.getAttribute('src') || '';
+        if (!isGiphyMediaURL(src)) {
+            img.remove();
+            return;
+        }
+
+        const alt = img.getAttribute('alt') || 'GIF';
+        Array.from(img.attributes).forEach(attr => img.removeAttribute(attr.name));
+        img.setAttribute('src', src);
+        img.setAttribute('alt', alt);
+        img.setAttribute('class', 'comment-gif');
+        img.setAttribute('loading', 'lazy');
+        img.setAttribute('referrerpolicy', 'no-referrer');
+    }
+
+    function isGiphyMediaURL(src) {
+        try {
+            const url = new URL(src);
+            return url.protocol === 'https:' && /^(media\d*|i)\.giphy\.com$/.test(url.hostname);
+        } catch {
+            return false;
+        }
     }
 
     function isSafeCommentHref(href) {
@@ -406,6 +588,26 @@
     }
 
     document.addEventListener('click', ev => {
+        const gifBtn = ev.target.closest('.comment-gif-btn');
+        if (gifBtn) {
+            toggleGifPicker(gifBtn.closest('.comment-form'), gifBtn);
+            return;
+        }
+
+        const gifResult = ev.target.closest('.gif-result');
+        if (gifResult) {
+            attachGif(gifResult.closest('.comment-form'), gifResult);
+            return;
+        }
+
+        const gifRemove = ev.target.closest('.gif-remove');
+        if (gifRemove) {
+            const form = gifRemove.closest('.comment-form');
+            detachGif(form);
+            form.querySelector('.comment-body-input')?.focus();
+            return;
+        }
+
         const editBtn = ev.target.closest('.comment-edit-btn');
         if (editBtn) {
             const panel = editBtn.closest(PANEL_SELECTOR);
@@ -438,14 +640,37 @@
     });
 
     document.addEventListener('input', ev => {
-        const textarea = ev.target.closest('.comment-body-input');
-        if (!textarea) return;
+        const search = ev.target.closest('.gif-search');
+        if (search) {
+            // Wait for a pause in typing: the free GIPHY key allows only
+            // 100 searches an hour for the whole circle.
+            const picker = search.closest('.gif-picker');
+            clearTimeout(picker.searchTimer);
+            picker.searchTimer = setTimeout(() => searchGifs(picker), 400);
+            return;
+        }
 
-        const form = textarea.closest('.comment-form');
-        const hasContent = textarea.value.trim().length > 0;
-        form?.classList.toggle('has-content', hasContent);
-        const submit = form?.querySelector('button[type="submit"]');
-        if (submit) submit.disabled = !hasContent;
+        const form = ev.target.closest('.comment-body-input')?.closest('.comment-form');
+        if (form) syncFormState(form);
+    });
+
+    document.addEventListener('keydown', ev => {
+        const search = ev.target.closest?.('.gif-search');
+        if (!search) return;
+
+        const picker = search.closest('.gif-picker');
+        if (ev.key === 'Enter') {
+            // Search now instead of submitting the comment.
+            ev.preventDefault();
+            clearTimeout(picker.searchTimer);
+            searchGifs(picker);
+        } else if (ev.key === 'Escape') {
+            // Back to the text box: an empty composer collapses its
+            // buttons once focus leaves the form.
+            const form = picker.closest('.comment-form');
+            closeGifPicker(form);
+            form.querySelector('.comment-body-input')?.focus();
+        }
     });
 
     document.addEventListener('submit', function(ev) {
