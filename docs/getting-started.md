@@ -63,6 +63,7 @@ Point your reverse proxy at the app port, and open your `BASE_URL`.
 | `SMTP_HOST/PORT/USER/PASS` | smtp | port `465` | Implicit-TLS SMTP submission |
 | `JMAP_SESSION_URL` | jmap | Fastmail's | JMAP session endpoint |
 | `JMAP_API_TOKEN` | jmap | — | Bearer token ([guide](fastmail-jmap.md)) |
+| `GIPHY_API_KEY` | | — | Enables GIF search in comments; visible to signed-in members |
 | `LOG_LEVEL` / `LOG_FORMAT` | | `info` / `json` | Logging |
 
 Uploads are capped at 200 MB per file.

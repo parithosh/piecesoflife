@@ -30,6 +30,8 @@ services:
       FROM_NAME: "PiecesOfLife Dev"
       ADMIN_EMAIL: "admin@example.com"
       SESSION_SECRET: "dev-only-change-me"
+      # Optional: export GIPHY_API_KEY to try GIF search in comments.
+      GIPHY_API_KEY: "${GIPHY_API_KEY:-}"
       LOG_LEVEL: "info"
       LOG_FORMAT: "json"
     volumes:

@@ -30,6 +30,8 @@ services:
       FROM_NAME: "${FROM_NAME:-}"
       ADMIN_EMAIL: "${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}"
       SESSION_SECRET: "${SESSION_SECRET:?set SESSION_SECRET in .env (long random string)}"
+      # Optional: enables GIF search in comments (see .env.example).
+      GIPHY_API_KEY: "${GIPHY_API_KEY:-}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       LOG_FORMAT: "json"
     volumes:
