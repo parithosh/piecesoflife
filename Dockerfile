@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26.10-alpine AS builder
+FROM golang:1.26.11-alpine AS builder
 
 WORKDIR /src
 
@@ -12,13 +12,13 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /bin/piecesoflife .
 
 # Runtime stage
-FROM alpine:3.21
+FROM alpine:3.24
 
 # ffmpeg remuxes browser-recorded WebM uploads (MediaRecorder output has no
 # duration/seek cues, which breaks playback in some contexts).
 # libheif-tools provides heif-convert, which transcodes HEIC and AVIF photo
 # uploads (default camera formats on iPhones and many Androids) to JPEG.
-# This image's ffmpeg 6.1 cannot decode tiled HEIC, so it is not a
+# Alpine 3.21's ffmpeg 6.1 could not decode tiled HEIC, so it is not a
 # substitute.
 RUN apk add --no-cache ca-certificates tzdata ffmpeg libheif-tools
 
