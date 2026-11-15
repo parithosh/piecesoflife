@@ -92,6 +92,26 @@
                 <span class="error" data-error="start_datetime"></span>
             </div>
         </div>
+
+        {{if .Fabrics}}
+        <fieldset class="field wizard-look">
+            <legend>Look</legend>
+            <span class="helper">The colours everyone sees in this circle. You can fine-tune them or add photos later under Appearance.</span>
+            <div class="pl-appr-fabrics" role="radiogroup" aria-label="Look">
+                {{range .Fabrics}}
+                <label class="pl-appr-fabric">
+                    <input type="radio" name="fabric" value="{{.ID}}" {{if eq .ID $.Fabric}}checked{{end}}>
+                    <span class="pl-appr-swatches" aria-hidden="true">
+                        <span style="background: {{.Main}}"></span><span style="background: {{.Highlight}}"></span><span style="background: {{.Second}}"></span><span style="background: {{.Paper}}"></span>
+                    </span>
+                    <span class="pl-appr-fabric-name">{{.Name}}</span>
+                    <span class="pl-appr-fabric-vibe">{{.Vibe}}</span>
+                </label>
+                {{end}}
+            </div>
+            <span class="error" data-error="fabric"></span>
+        </fieldset>
+        {{end}}
     </section>
 
     <!-- Step 3: Questions -->
@@ -356,7 +376,7 @@
         // Jump to step that owns the first failing field.
         const stepOf = {
             admin_name: 1,
-            loop_name: 2, frequency: 2, submission_window_days: 2, start_datetime: 2,
+            loop_name: 2, frequency: 2, submission_window_days: 2, start_datetime: 2, fabric: 2,
             questions: 3, questions_per_issue: 3,
         };
         const firstField = Object.keys(fields)[0];
@@ -407,6 +427,7 @@
             questions,
             invite_emails: inviteEmails,
             invite_note: document.getElementById('invite-note').value.trim() || null,
+            fabric: document.querySelector('input[name="fabric"]:checked')?.value || '',
         };
 
         try {
