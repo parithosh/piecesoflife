@@ -956,6 +956,10 @@ input.pl-field::placeholder,
     color: var(--ink);
     padding: 0;
     box-shadow: var(--pl-shadow);
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 .record-dialog::backdrop {
     background: rgba(var(--ink-rgb), 0.34);
@@ -1368,6 +1372,12 @@ input.pl-field::placeholder,
 }
 .pl-stat:last-child { border-right: none; }
 .pl-stat--wide { min-width: 280px; }
+/* Phones: one stat per row — side by side they wrapped "November 2026"
+ * onto two lines, and the 280px progress stat overflowed small screens. */
+@media (max-width: 520px) {
+    .pl-frame-head { padding: 20px; }
+    .pl-stat { flex-basis: 100%; min-width: 0; padding: 18px 20px; border-right: none; }
+}
 .pl-stat-big { display: flex; align-items: baseline; gap: 6px; }
 .pl-stat-big .pl-num { font-family: var(--font-display); font-weight: 400; font-size: 46px; line-height: 1; color: var(--ink); }
 .pl-stat-big .pl-denom { font-family: var(--font-display); font-weight: 400; font-size: 24px; color: var(--stone); }
@@ -1520,6 +1530,38 @@ input.pl-field::placeholder,
 
 @media (max-width: 480px) {
     .pl-nav-wordmark { display: none; }
+    nav.pl-nav { gap: 10px; padding: 0 12px; }
+    .pl-nav-brand { flex: none; }
+    /* An admin's links (plus Console and the circle switcher) are wider
+     * than a small phone, which pushed Console and the profile avatar off
+     * screen. Let the row scroll sideways; base.html adds .has-more to
+     * fade the right edge while links are still hidden there. */
+    .pl-nav-links {
+        gap: 12px;
+        min-width: 0;
+        align-self: stretch;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+    .pl-nav-links::-webkit-scrollbar { display: none; }
+    .pl-nav-links > * { flex: none; white-space: nowrap; }
+    /* A sticky gradient rather than a mask: a mask would also clip the
+     * circle menu below. */
+    .pl-nav-links.has-more::after {
+        content: "";
+        position: sticky;
+        right: 0;
+        flex: none;
+        align-self: stretch;
+        width: 28px;
+        margin-left: -28px;
+        background: linear-gradient(to right, transparent, var(--rani));
+        pointer-events: none;
+    }
+    /* the scrolling row would clip the absolute circle menu */
+    nav.pl-nav .pl-nav-loops-menu { position: fixed; top: 58px; right: 12px; }
     .mango { opacity: 0.12 !important; }
 }
 
@@ -2599,6 +2641,12 @@ input.pl-field::placeholder,
     }
 }
 
+/* Smallest phones: the "The dump · 7 of 7" label beside the dots wrapped
+ * onto three lines; the dots already show the position. */
+@media (max-width: 360px) {
+    .published-dot-pager::before { content: none; }
+}
+
 /* === Archive (Pallu) ============================================== *
  * Issue archive: a shelf of woven magazine issues plus the current
  * issue's call-to-action card.                                        */
@@ -3315,6 +3363,13 @@ nav.pl-tabs {
     color: var(--ink);
     padding: 0;
     box-shadow: var(--pl-shadow);
+    /* oat's base dialog clips at 85vh with overflow hidden, which cut off
+     * tall dialogs (the schedule editor) on phones with no way to reach
+     * their buttons. Fit the screen and scroll inside instead. */
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 .pl-dialog::backdrop { background: rgba(var(--ink-rgb), 0.34); }
 .pl-dialog-body { padding: 26px; }
@@ -3351,6 +3406,14 @@ nav.pl-tabs {
     width: min(480px, calc(100vw - 32px));
     padding: 24px 26px;
 }
+/* oat pads the header/section/footer inside as well; on a phone the doubled
+ * gutter squeezes the fields, so keep only the dialog's own padding. */
+@media (max-width: 520px) {
+    .pl-dialog--publish { padding: 20px 18px; }
+    .pl-dialog--publish > header,
+    .pl-dialog--publish > section,
+    .pl-dialog--publish > footer { padding-inline: 0; }
+}
 .pl-dialog--publish .card--quiet {
     background: var(--ivory-2);
     border: 1px solid var(--line);
@@ -3374,6 +3437,12 @@ nav.pl-tabs {
  * Settings form on the admin card: Marcellus section headings over
  * hairline-separated sections, Mukta labels + ivory .pl-field inputs. */
 .pl-settings { max-width: 560px; }
+
+/* The email log's four columns don't fit the smallest phones; scroll the
+ * table sideways instead of letting the card clip the Status column. */
+@media (max-width: 400px) {
+    #email-log table { display: block; overflow-x: auto; }
+}
 
 .pl-settings-section + .pl-settings-section {
     margin-top: 28px;
@@ -3431,6 +3500,12 @@ select.pl-field {
 .pl-dq-row:last-child { border-bottom: 0; }
 .pl-dq-check { flex: 1; min-height: 40px; }
 .pl-dq-row .pl-qadmin-actions { flex: none; }
+/* Phones: the four buttons leave the question a one-word column, so put
+ * them on their own line under the text. */
+@media (max-width: 520px) {
+    .pl-dq-row { flex-wrap: wrap; row-gap: 4px; padding: 6px 0 10px; }
+    .pl-dq-check { flex-basis: 100%; }
+}
 
 .pl-settings .pl-form-actions {
     margin-top: 28px;
@@ -3467,7 +3542,16 @@ a.pl-member-row:focus-visible {
 
 @media (max-width: 720px) {
     .pl-members-head .pl-btn { width: 100%; }
-    a.pl-member-row { flex-wrap: wrap; row-gap: 6px; }
+}
+
+/* Members and "who has responded" rows: on a phone the name/email take the
+ * line beside the avatar and the pills/nudge button drop below, aligned
+ * under the name, instead of the email running underneath the pills. */
+.pl-member-email { overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+    .pl-member-row { flex-wrap: wrap; row-gap: 8px; }
+    .pl-member-main { flex-basis: calc(100% - 48px); }
+    .pl-member-main + * { margin-left: 48px; }
 }
 
 /* === Admin question bank (Pallu) ================================== *
@@ -3856,6 +3940,13 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 }
 .pl-inst-meta { font: 500 13px var(--font-ui); color: var(--ink-soft); }
 .pl-inst-actions { display: flex; align-items: center; gap: 8px; }
+/* Phones: name and meta get the full width; status pill and buttons wrap
+ * underneath instead of squeezing the name into a one-word column. */
+@media (max-width: 520px) {
+    .pl-inst-row { flex-wrap: wrap; row-gap: 10px; padding: 14px 4px; }
+    .pl-inst-main { flex-basis: 100%; }
+    .pl-inst-actions { margin-left: auto; }
+}
 
 /* Info popover — a small "i" beside a control that explains what it does.
    The popover drops downward inside the card, so .pl-card's
@@ -3898,7 +3989,7 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 }
 @media (max-width: 720px) {
     .pl-info { width: 100%; }
-    .pl-info .pl-btn { flex: 1; }
+    .pl-info .pl-btn { flex: 1; min-width: 0; white-space: normal; }
 }
 
 /* ================================================================== *

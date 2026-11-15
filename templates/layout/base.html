@@ -216,6 +216,25 @@
                 a.setAttribute('aria-current', 'page');
             }
         });
+
+        /* On small phones the link row scrolls sideways (pallu.css): keep
+           the current section in view and fade the right edge while more
+           links are hidden there. */
+        var links = document.querySelector('nav.pl-nav .pl-nav-links');
+        if (!links) return;
+        var active = links.querySelector('a.is-active');
+        if (active) {
+            var hidden = active.getBoundingClientRect().right - links.getBoundingClientRect().right;
+            if (hidden > 0) links.scrollLeft += hidden + 24;
+        }
+        function updateFade() {
+            links.classList.toggle('has-more',
+                links.scrollLeft + links.clientWidth < links.scrollWidth - 2);
+        }
+        links.addEventListener('scroll', updateFade, { passive: true });
+        window.addEventListener('resize', updateFade);
+        if (document.fonts) document.fonts.ready.then(updateFade);
+        updateFade();
     })();
     </script>
     <script type="speculationrules">

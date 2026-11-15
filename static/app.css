@@ -680,6 +680,22 @@ dialog footer {
     cursor: default;
 }
 
+/* Phones: a long category plus "☆ default ↑ ↓" was wider than the card
+ * and pushed the whole setup page sideways. Truncate the category and let
+ * the tools keep their size. */
+.question-pick > div { min-width: 0; }
+.question-pick .q-cat {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.question-pick .q-tools { flex: none; }
+@media (max-width: 400px) {
+    .question-pick { padding: var(--space-3); }
+    .question-pick input[type="checkbox"] { margin-right: 0; }
+}
+
 /* ----------------------------------------------------------------- *
  * Dashboard hero (admin)
  * ----------------------------------------------------------------- */
@@ -1307,10 +1323,22 @@ a.member-row:hover {
 @media (max-width: 640px) {
     .grid-2 { grid-template-columns: 1fr; }
 }
+/* date/time inputs have a wide intrinsic size that otherwise pokes out of
+ * the card on small phones (setup wizard step 2) */
+.grid-2 > * { min-width: 0; }
+.grid-2 input { min-width: 0; max-width: 100%; }
 
 /* ----------------------------------------------------------------- *
  * Mobile audit (Phase 6)
  * ----------------------------------------------------------------- */
+
+/* Touch screens can't hover, so oat's title tooltips never show there —
+ * but their hidden, nowrap text still takes up layout space and pushed
+ * pages (setup wizard step 3) sideways near the right edge. */
+@media (hover: none), (pointer: coarse) {
+    [data-tooltip]::before,
+    [data-tooltip]::after { display: none; }
+}
 
 @media (max-width: 640px) {
     main { padding: var(--space-5) var(--space-4); }
