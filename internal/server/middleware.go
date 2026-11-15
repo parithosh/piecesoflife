@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -546,7 +547,7 @@ func (s *Server) handleAuthParam(
 		}
 
 		http.Redirect(w, r,
-			"/login?email="+user.Email+"&expired=1", http.StatusSeeOther)
+			"/login?email="+url.QueryEscape(user.Email)+"&expired=1", http.StatusSeeOther)
 
 		return
 	}

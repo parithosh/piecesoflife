@@ -1423,3 +1423,107 @@ func TestAnswerPhotoUploadLimits(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, overAudio.Code)
 	assert.Contains(t, overAudio.Body.String(), "Maximum of 100 audio uploads")
 }
+
+// TestUploadServeRefusesDirectories verifies /uploads/ serves files but never
+// lists a directory, which would expose every Loop's and every journal's
+// upload names to any signed-in user.
+func TestUploadServeRefusesDirectories(t *testing.T) {
+	env := newIntegrationEnv(t)
+
+	dir := filepath.Join(env.srv.config.UploadPath, "2026", "11")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "0123456789abcdef_secret.jpg"), []byte("jpeg"), 0o644))
+
+	user := env.createUser(t, "Lia", "lia@example.com")
+	session := env.sessionCookie(t, user.ID)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(session)
+
+		return env.do(t, req)
+	}
+
+	for _, path := range []string{"/uploads/", "/uploads/2026/", "/uploads/2026/11/", "/uploads/2026/11"} {
+		rr := get(path)
+		assert.Equal(t, http.StatusNotFound, rr.Code, path)
+		assert.NotContains(t, rr.Body.String(), "secret.jpg", path)
+	}
+
+	rr := get("/uploads/2026/11/0123456789abcdef_secret.jpg")
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "jpeg", rr.Body.String())
+}
+
+// TestResponsesAndEmailsHiddenFromMembers verifies members can't read
+// answers before publication and never see other members' email addresses
+// through the JSON APIs; admins still can.
+func TestResponsesAndEmailsHiddenFromMembers(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	admin := env.createUserWithRole(t, "Ada", "ada-admin@example.com", "admin")
+	member := env.createUser(t, "Mo", "mo-member@example.com")
+	writer := env.createUser(t, "Wren", "wren-writer@example.com")
+
+	collectingID, collectingQs := env.seedIssue(t, "collecting", 5, 2026, 1)
+	publishedID, publishedQs := env.seedIssue(t, "published", 4, 2026, 1)
+
+	for _, qID := range []int64{collectingQs[0], publishedQs[0]} {
+		respID, err := env.store.CreateResponse(ctx, writer.ID, qID)
+		require.NoError(t, err)
+		require.NoError(t, env.store.SubmitResponse(ctx, respID))
+	}
+
+	get := func(userID int64, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(env.sessionCookie(t, userID))
+
+		return env.do(t, req)
+	}
+
+	collecting := fmt.Sprintf("/api/issues/%d/responses", collectingID)
+	assert.Equal(t, http.StatusNotFound, get(member.ID, collecting).Code,
+		"members must not read answers before publication")
+	assert.Equal(t, http.StatusOK, get(admin.ID, collecting).Code)
+
+	paths := []string{
+		fmt.Sprintf("/api/issues/%d/responses", publishedID),
+		fmt.Sprintf("/api/issues/%d/progress", collectingID),
+		"/api/users",
+	}
+
+	for _, path := range paths {
+		rr := get(member.ID, path)
+		require.Equal(t, http.StatusOK, rr.Code, path)
+		assert.Contains(t, rr.Body.String(), "Wren", path)
+		assert.NotContains(t, rr.Body.String(), "wren-writer@example.com", path)
+
+		rr = get(admin.ID, path)
+		require.Equal(t, http.StatusOK, rr.Code, path)
+		assert.Contains(t, rr.Body.String(), "wren-writer@example.com", path)
+	}
+}
+
+// TestExpiredLinkRedirectEscapesEmail verifies the address is query-escaped
+// in the expired-link redirect, so it can't inject extra parameters.
+func TestExpiredLinkRedirectEscapesEmail(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	user := env.createUser(t, "Amp", "a+b&error=x@example.com")
+
+	raw, hash, err := auth.GenerateRandomToken(32)
+	require.NoError(t, err)
+	require.NoError(t, env.store.CreateAuthToken(
+		ctx, user.ID, hash, "login", time.Now().Add(-time.Minute)))
+
+	rr := env.do(t, httptest.NewRequest(http.MethodGet, "/auth/verify?token="+raw, nil))
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "a+b&error=x@example.com", loc.Query().Get("email"))
+	assert.Empty(t, loc.Query().Get("error"))
+}

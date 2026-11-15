@@ -73,3 +73,37 @@ func TestSelectRandomUnusedQuestions_CategorySpread(t *testing.T) {
 	assert.GreaterOrEqual(t, len(seen), 3,
 		"with 7 categories and picking 5 we expect at least 3 distinct categories")
 }
+
+// TestMarkBankQuestionUsedScopedToGroup guards the onboarding wizard, which
+// passes client-supplied bank IDs: another Loop's ID must not be marked used.
+func TestMarkBankQuestionUsedScopedToGroup(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	otherGroup, err := s.CreateGroup(ctx, "Other Loop", nil)
+	require.NoError(t, err)
+
+	id, err := s.CreateBankQuestion(ctx, 1, "Scoped question?", "memories")
+	require.NoError(t, err)
+
+	isUsed := func() bool {
+		items, _, err := s.ListQuestionBank(ctx, 1, nil, nil, 1, 1000)
+		require.NoError(t, err)
+
+		for _, q := range items {
+			if q.ID == id {
+				return q.Used
+			}
+		}
+
+		t.Fatalf("bank question %d not found", id)
+
+		return false
+	}
+
+	require.NoError(t, s.MarkBankQuestionUsed(ctx, otherGroup, id))
+	assert.False(t, isUsed(), "another Loop must not mark this question used")
+
+	require.NoError(t, s.MarkBankQuestionUsed(ctx, 1, id))
+	assert.True(t, isUsed())
+}

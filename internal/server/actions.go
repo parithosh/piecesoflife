@@ -729,7 +729,7 @@ func (s *Server) openIssueForCollectingWithTransition(
 						slog.String("error", err.Error()))
 					continue
 				}
-				if err := s.store.MarkBankQuestionUsed(ctx, bq.ID); err != nil {
+				if err := s.store.MarkBankQuestionUsed(ctx, issue.GroupID, bq.ID); err != nil {
 					s.logger.WarnContext(ctx, "Failed to mark bank question used",
 						slog.Int64("bank_question_id", bq.ID),
 						slog.String("error", err.Error()))

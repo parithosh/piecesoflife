@@ -182,13 +182,16 @@ func (s *Server) loadOwnedResponse(
 		return nil, false
 	}
 
-	if requireEditable {
-		issue, err := s.store.GetIssueByResponseID(r.Context(), id)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "not_found", "Issue not found")
-			return nil, false
-		}
+	// The response must belong to the current Loop, which authMiddleware
+	// only resolves for active memberships — so someone removed from a Loop
+	// can't keep editing (or submitting into) its open issue.
+	issue, err := s.store.GetIssueByResponseID(r.Context(), id)
+	if err != nil || issue.GroupID != currentGroupID(r.Context()) {
+		writeError(w, http.StatusNotFound, "not_found", "Response not found")
+		return nil, false
+	}
 
+	if requireEditable {
 		if issue.Status != "collecting" {
 			writeError(w, http.StatusConflict, "not_collecting",
 				"This issue is no longer accepting changes")

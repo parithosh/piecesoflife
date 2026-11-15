@@ -288,7 +288,7 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	// Step 3: Mark chosen bank questions as used. Idempotent (UPDATE WHERE id=).
 	for _, q := range req.Questions {
 		if q.BankID != nil {
-			if err := s.store.MarkBankQuestionUsed(ctx, *q.BankID); err != nil {
+			if err := s.store.MarkBankQuestionUsed(ctx, groupID, *q.BankID); err != nil {
 				s.logger.ErrorContext(ctx, "Failed to mark bank question used",
 					slog.Int64("bank_id", *q.BankID),
 					slog.String("error", err.Error()))
