@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -322,7 +323,7 @@ func (s *Server) handleVerifyToken(w http.ResponseWriter, r *http.Request) {
 		}
 
 		http.Redirect(w, r,
-			"/login?email="+user.Email+"&expired=1", http.StatusSeeOther)
+			"/login?email="+url.QueryEscape(user.Email)+"&expired=1", http.StatusSeeOther)
 		return
 	}
 

@@ -308,7 +308,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if markErr := s.store.MarkBankQuestionUsed(r.Context(), bq.ID); markErr != nil {
+		if markErr := s.store.MarkBankQuestionUsed(r.Context(), groupID, bq.ID); markErr != nil {
 			s.logger.ErrorContext(r.Context(), "Failed to mark bank question as used",
 				slog.Int64("bank_question_id", bq.ID),
 				slog.String("error", markErr.Error()))
@@ -803,6 +803,13 @@ func (s *Server) handleGetProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Member emails are an admin-only view.
+	if !isGroupAdmin(r.Context()) {
+		for i := range progress.Members {
+			progress.Members[i].User.Email = ""
+		}
+	}
+
 	writeJSON(w, http.StatusOK, progress)
 }
 
@@ -858,7 +865,16 @@ func (s *Server) handleListResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.requireIssue(w, r, issueID); !ok {
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
+		return
+	}
+
+	// Answers stay hidden from members until the issue is published, the
+	// same rule the issue page enforces.
+	admin := isGroupAdmin(r.Context())
+	if issue.Status != "published" && !admin {
+		s.writeNotFound(w, r, "Issue not found")
 		return
 	}
 
@@ -880,6 +896,12 @@ func (s *Server) handleListResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to load responses")
 
 		return
+	}
+
+	if !admin {
+		for i := range enriched {
+			enriched[i].User.Email = ""
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"responses": enriched})

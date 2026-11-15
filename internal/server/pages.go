@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -708,6 +709,14 @@ func (s *Server) handleUploadServe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Serve files only: http.ServeFile renders an index for directories,
+	// which would hand every upload name (all Loops, private Ramble media)
+	// to any signed-in user.
+	if fi, err := os.Stat(cleanPath); err != nil || fi.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+
 	http.ServeFile(w, r, cleanPath)
 }
 
@@ -722,6 +731,12 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to list users")
 		return
+	}
+
+	if !isGroupAdmin(ctx) {
+		for i := range users {
+			users[i].Email = ""
+		}
 	}
 
 	writeJSON(w, http.StatusOK, ListResponse[store.GroupMember]{

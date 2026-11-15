@@ -234,10 +234,11 @@ func (s *Store) SelectRandomUnusedQuestions(
 	return selectRandomUnusedQuestions(ctx, s.read, groupID, count)
 }
 
-// MarkBankQuestionUsed marks a question bank entry as used.
-func (s *Store) MarkBankQuestionUsed(ctx context.Context, id int64) error {
+// MarkBankQuestionUsed marks one of a Loop's question bank entries as used.
+// IDs from another Loop are a no-op.
+func (s *Store) MarkBankQuestionUsed(ctx context.Context, groupID, id int64) error {
 	_, err := s.write.ExecContext(ctx,
-		"UPDATE question_bank SET used = 1 WHERE id = ?", id,
+		"UPDATE question_bank SET used = 1 WHERE id = ? AND group_id = ?", id, groupID,
 	)
 	if err != nil {
 		return fmt.Errorf("marking bank question %d as used: %w", id, err)

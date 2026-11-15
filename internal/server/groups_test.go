@@ -519,3 +519,38 @@ func TestSetupGateForMembers(t *testing.T) {
 	assert.Equal(t, http.StatusOK, keeperRR.Code,
 		"the keeper reaches the wizard for their Loop")
 }
+
+// TestRemovedMemberCannotEditOldLoopResponse verifies that someone removed
+// from a Loop can't keep writing into its open issue from another Loop.
+func TestRemovedMemberCannotEditOldLoopResponse(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	groupB := weaveSecondLoop(t, env, "Loop B")
+	_, questionB := seedIssueInGroup(t, env, groupB, "collecting")
+
+	user := env.createUser(t, "Uma", "uma@example.com")
+	require.NoError(t, env.store.CreateMembership(ctx, groupB, user.ID, "member"))
+
+	responseID, err := env.store.CreateResponse(ctx, user.ID, questionB)
+	require.NoError(t, err)
+
+	require.NoError(t, env.store.SetMembershipActive(ctx, groupB, user.ID, false))
+
+	// Still an active member of Loop 1, which is the session's Loop.
+	session := env.sessionCookie(t, user.ID)
+	csrfCookie, csrfHeader := csrfPair()
+
+	req := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/responses/%d/submit", responseID), nil)
+	req.AddCookie(session)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfHeader)
+
+	rr := env.do(t, req)
+	assert.Equal(t, http.StatusNotFound, rr.Code, "body: %s", rr.Body.String())
+
+	resp, err := env.store.GetResponseByID(ctx, responseID)
+	require.NoError(t, err)
+	assert.True(t, resp.IsDraft, "response must stay a draft")
+}
