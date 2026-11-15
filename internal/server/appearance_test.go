@@ -557,3 +557,52 @@ func TestAppearanceRejectsOversizedHEICBeforeConverting(t *testing.T) {
 	rr = f.upload(t, "photo", heifDeclaring(0, 0)[:40])
 	assert.Equal(t, http.StatusUnprocessableEntity, rr.Code, "no readable size → refused")
 }
+
+// The setup wizard offers the fabrics as a new circle's starting look only
+// while the instance allows circle appearance, and launching publishes the
+// chosen one.
+func TestOnboardingStartingLook(t *testing.T) {
+	f := newAppearanceFixture(t)
+	ctx := context.Background()
+
+	adminID := f.env.createUserWithRole(t, "Pari", "pari@example.com", "admin").ID
+	groupID, err := f.env.store.CreateGroup(ctx, "Chaos Crew", nil)
+	require.NoError(t, err)
+	require.NoError(t, f.env.store.CreateMembership(ctx, groupID, adminID, "admin"))
+	session := f.env.sessionCookieForGroup(t, adminID, groupID)
+
+	launch := func(fabric string) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{
+			"admin_name": "Pari", "loop_name": "Chaos Crew", "frequency": "monthly",
+			"submission_window_days": 7, "start_datetime": "2026-12-01T09:00",
+			"timezone": "Europe/Berlin", "fabric": %q,
+			"questions": [{"text": "What made you laugh?", "bank_id": null}]
+		}`, fabric)
+		req := newJSONRequest(http.MethodPost, "/api/onboarding/complete", body)
+		req.AddCookie(session)
+		req.AddCookie(f.csrfCookie)
+		req.Header.Set("X-CSRF-Token", f.csrfHeader)
+
+		return f.env.do(t, req)
+	}
+
+	f.setSwitch(t, false)
+	assert.NotContains(t, f.page(t, session, "/admin/setup"), `value="meadow"`,
+		"no picker while appearance is switched off")
+
+	f.setSwitch(t, true)
+	page := f.page(t, session, "/admin/setup")
+	assert.Contains(t, page, `value="meadow"`)
+	assert.Contains(t, page, `value="rani" checked`, "house look preselected")
+
+	rr := launch("tartan")
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), `"fabric"`)
+
+	rr = launch("meadow")
+	require.Equal(t, http.StatusOK, rr.Code, "onboarding: %s", rr.Body.String())
+
+	settings, err := f.env.store.GetSettings(ctx, groupID)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"v":1,"fabric":"meadow"}`, string(settings.Theme))
+}

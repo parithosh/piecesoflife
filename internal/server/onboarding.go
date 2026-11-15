@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/parithosh/piecesoflife/internal/store"
+	"github.com/parithosh/piecesoflife/internal/theme"
 )
 
 // SetupWizardData is the template data for the onboarding setup page.
@@ -20,6 +22,10 @@ type SetupWizardData struct {
 	// DefaultQuestions are the prompts stitched into every issue; the wizard
 	// offers the same global on/off switches as the settings page.
 	DefaultQuestions []store.DefaultQuestion
+	// Fabrics are offered as the circle's starting look when the instance
+	// allows circle appearance (nil otherwise); Fabric is the preselected one.
+	Fabrics []theme.Fabric
+	Fabric  string
 }
 
 // handleAdminSetup renders the onboarding wizard page.
@@ -74,6 +80,11 @@ func (s *Server) handleAdminSetup(w http.ResponseWriter, r *http.Request) {
 		DefaultQuestions:   defaultQuestions,
 	}
 
+	if s.appearanceEnabled(r.Context()) {
+		data.Fabrics = theme.Fabrics
+		data.Fabric = s.stateFor(r.Context(), groupID, settings.Theme).Fabric
+	}
+
 	s.renderPage(w, "setup.html", data)
 }
 
@@ -91,6 +102,9 @@ type onboardingRequest struct {
 	Questions            []onboardingQuestion        `json:"questions"`
 	InviteEmails         []string                    `json:"invite_emails"`
 	InviteNote           *string                     `json:"invite_note"`
+	// Fabric is the circle's starting look (a theme.Fabrics ID); empty
+	// leaves the look unchanged.
+	Fabric string `json:"fabric"`
 }
 
 type onboardingQuestion struct {
@@ -163,6 +177,10 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 
 	if len(req.Questions) == 0 {
 		validationErrs["questions"] = "At least one question is required"
+	}
+
+	if _, ok := theme.FabricByID(req.Fabric); req.Fabric != "" && !ok {
+		validationErrs["fabric"] = "Pick one of the looks shown"
 	}
 
 	if len(validationErrs) > 0 {
@@ -255,6 +273,14 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update settings")
 		return
+	}
+
+	// Step 2a: Publish the starting look. Idempotent: re-publishing the
+	// stored look is a no-op. Skipped while the operator has appearance
+	// switched off; a failure only costs the look, so it doesn't block the
+	// launch (the admin can still pick one under Appearance).
+	if req.Fabric != "" && s.appearanceEnabled(ctx) {
+		s.publishStartingLook(ctx, groupID, req.Fabric)
 	}
 
 	// Step 2b: Apply the wizard's default-question switches so the first
@@ -480,6 +506,38 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 	)
 
 	writeJSON(w, http.StatusOK, map[string]string{"redirect": "/admin"})
+}
+
+// publishStartingLook replaces a circle's look with a plain fabric (house
+// look for the default fabric). The fabric is already validated.
+func (s *Server) publishStartingLook(ctx context.Context, groupID int64, fabric string) {
+	s.brandingMu.Lock()
+	defer s.brandingMu.Unlock()
+
+	err := func() error {
+		cfg, err := theme.Config{Fabric: fabric}.Normalize()
+		if err != nil {
+			return err
+		}
+
+		var raw json.RawMessage
+		if cfg != nil {
+			if raw, err = json.Marshal(cfg); err != nil {
+				return err
+			}
+		}
+
+		current, err := s.store.GetSettings(ctx, groupID)
+		if err != nil {
+			return err
+		}
+
+		return s.store.PublishTheme(ctx, groupID, current.Theme, raw)
+	}()
+	if err != nil {
+		s.logger.WarnContext(ctx, "Failed to apply the wizard's starting look",
+			slog.String("fabric", fabric), slog.String("error", err.Error()))
+	}
 }
 
 // getOrCreateSetupIssue returns the issue for (month, year) if one already

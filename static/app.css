@@ -599,6 +599,29 @@ dialog footer {
 
 .wizard-nav .spacer { flex: 1; }
 
+/* Starting-look picker: the Appearance page's fabric cards. */
+.wizard-look {
+    border: 0;
+    padding: 0;
+    margin: var(--space-2) 0 0;
+    min-width: 0;
+}
+
+.wizard-look legend {
+    padding: 0;
+    margin-bottom: var(--space-1);
+    color: var(--foreground);
+}
+
+.wizard-look .pl-appr-fabrics { margin-top: var(--space-3); }
+
+/* .field label would make the cards block; keep pallu's stacked card. */
+.wizard-look .pl-appr-fabric {
+    display: flex;
+    margin-bottom: 0;
+    font-weight: normal;
+}
+
 /* Question picker checklist */
 .question-pick {
     display: block;
