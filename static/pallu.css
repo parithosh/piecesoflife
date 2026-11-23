@@ -4914,3 +4914,436 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
     padding-top: 14px;
 }
 
+/* =====================================================================
+ * "Unseen comments" reading tab & "Photos from one year ago" throwback
+ * ===================================================================== */
+
+.published-mode-toggle button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.published-mode-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--rani);
+    color: var(--marigold);
+    font: 700 10px/1 var(--font-ui);
+    letter-spacing: 0;
+}
+.published-mode-toggle button.is-active .published-mode-badge {
+    background: var(--marigold);
+    color: var(--rani);
+}
+
+.published-issue.is-unseen .published-spread,
+.published-issue.is-unseen .published-pager,
+.published-issue.is-unseen .published-strip-progress {
+    display: none;
+}
+
+.published-unseen {
+    padding: 40px 44px 48px;
+}
+.published-unseen[hidden] {
+    display: none;
+}
+.pl-unseen-empty {
+    margin: 34px auto 12px;
+    max-width: 460px;
+    padding: 26px 24px;
+    text-align: center;
+    border: 1px dashed var(--line);
+    border-radius: 6px;
+    background: var(--ivory-2);
+    font-family: var(--font-body);
+    font-size: 16px;
+    color: var(--muted);
+}
+.pl-unseen-list {
+    margin-top: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+.pl-unseen-card {
+    padding: 22px 24px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--ivory-2);
+}
+.pl-unseen-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.pl-unseen-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.pl-unseen-section {
+    font: 700 11px var(--font-ui);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--peacock);
+}
+.pl-unseen-count {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--rani);
+    color: var(--marigold);
+    font: 700 10px/1.4 var(--font-ui);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.pl-unseen-jump {
+    min-height: 0;
+    padding: 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--ivory);
+    color: var(--ink-soft);
+    font: 600 11px var(--font-ui);
+    letter-spacing: 0.03em;
+    cursor: pointer;
+}
+.pl-unseen-jump:hover {
+    border-color: var(--rani);
+    color: var(--rani);
+}
+.pl-unseen-context {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+}
+.pl-unseen-thumb {
+    width: 68px;
+    height: 68px;
+    flex: none;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+}
+.pl-unseen-context-body {
+    min-width: 0;
+    flex: 1;
+}
+.pl-unseen-title {
+    margin: 0 0 4px;
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 20px;
+    line-height: 1.25;
+    color: var(--ink);
+}
+.pl-unseen-byline {
+    margin: 0;
+    font: 600 12px var(--font-ui);
+    color: var(--muted);
+}
+.pl-unseen-excerpt {
+    margin: 8px 0 0;
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--ink-soft);
+}
+.pl-unseen-comments {
+    margin-top: 12px;
+}
+.comment-item.is-unseen {
+    border-left: 3px solid var(--peacock);
+    padding-left: 10px;
+}
+.comment-new-badge {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--peacock);
+    color: var(--ivory);
+    font: 700 10px/1.4 var(--font-ui);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+/* "Photos from one year ago" closing spread */
+.pl-throwback-issue-link {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.pl-throwback-issue-link:hover {
+    color: var(--rani);
+}
+.pl-throwback-grid {
+    margin-top: 28px;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 16px;
+}
+.pl-throwback-item {
+    margin: 0;
+    grid-column: span 3;
+    display: flex;
+    flex-direction: column;
+    cursor: pointer;
+}
+.pl-throwback-grid--1 .pl-throwback-item {
+    grid-column: 2 / span 4;
+}
+.pl-throwback-grid--3 .pl-throwback-item {
+    grid-column: span 2;
+}
+.pl-throwback-grid--5 .pl-throwback-item:nth-child(n+3) {
+    grid-column: span 2;
+}
+.pl-throwback-frame {
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--ivory-2);
+}
+.pl-throwback-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.25s ease;
+}
+.pl-throwback-item:hover .pl-throwback-frame img {
+    transform: scale(1.02);
+}
+.pl-throwback-caption {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 1.4;
+}
+.pl-throwback-author {
+    font-weight: 600;
+    color: var(--ink);
+}
+.pl-throwback-note {
+    color: var(--muted);
+}
+
+@media (max-width: 720px) {
+    .published-unseen {
+        padding: 28px 18px 34px;
+    }
+    .pl-unseen-card {
+        padding: 16px;
+    }
+    .pl-throwback-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+    .pl-throwback-item,
+    .pl-throwback-grid--1 .pl-throwback-item,
+    .pl-throwback-grid--3 .pl-throwback-item,
+    .pl-throwback-grid--5 .pl-throwback-item:nth-child(n+3) {
+        grid-column: span 1;
+    }
+    .pl-throwback-grid--1 .pl-throwback-item,
+    .pl-throwback-grid--5 .pl-throwback-item:first-child {
+        grid-column: span 2;
+    }
+}
+
+/* =====================================================================
+ * Heart likes (answers & comments) + pop/burst animation
+ * ===================================================================== */
+
+.pl-answer-actions {
+    margin: 12px 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.comment-actions-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+}
+.comment-actions-row .comment-reply-btn {
+    margin-top: 0;
+}
+
+.like-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 0;
+    padding: 4px 10px 4px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--ivory);
+    color: var(--muted);
+    font: 600 12px/1 var(--font-ui);
+    cursor: pointer;
+    transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+}
+.like-btn:hover {
+    border-color: var(--rani);
+    color: var(--rani);
+}
+.like-btn.is-liked {
+    border-color: rgba(164, 36, 59, 0.35);
+    background: rgba(164, 36, 59, 0.08);
+    color: var(--rani);
+}
+.like-btn--comment {
+    padding: 2px 7px 2px 5px;
+    font-size: 11px;
+    border-color: transparent;
+    background: transparent;
+}
+.like-btn--comment:hover {
+    border-color: var(--line);
+    background: var(--ivory);
+}
+.like-btn--comment.is-liked {
+    border-color: transparent;
+    background: rgba(164, 36, 59, 0.08);
+}
+
+.like-heart-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+}
+.like-btn--comment .like-heart-wrap {
+    width: 14px;
+    height: 14px;
+}
+
+.like-heart-icon {
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linejoin: round;
+    transform-origin: center;
+    transition: fill 0.18s ease, stroke 0.18s ease;
+}
+.like-btn.is-liked .like-heart-icon {
+    fill: var(--rani);
+    stroke: var(--rani);
+}
+
+.like-count:empty {
+    display: none;
+}
+
+.like-burst {
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 4px;
+    height: 4px;
+    margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0;
+}
+
+.like-float-heart {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) scale(0.5);
+    font-size: 11px;
+    line-height: 1;
+    color: var(--rani);
+    pointer-events: none;
+    opacity: 0;
+}
+
+.like-btn.is-popping .like-heart-icon {
+    animation: like-heart-pop 0.42s cubic-bezier(0.22, 1.35, 0.36, 1) forwards;
+}
+.like-btn.is-popping .like-burst {
+    animation: like-spark-burst 0.46s ease-out forwards;
+}
+.like-btn.is-popping .like-float-heart {
+    animation: like-float-up 0.5s ease-out forwards;
+}
+
+@keyframes like-heart-pop {
+    0%   { transform: scale(1); }
+    22%  { transform: scale(0.76); }
+    52%  { transform: scale(1.34); }
+    78%  { transform: scale(0.94); }
+    100% { transform: scale(1); }
+}
+
+@keyframes like-spark-burst {
+    0% {
+        opacity: 0.95;
+        box-shadow:
+            0 -6px 0 0 var(--rani),
+            6px -3px 0 0 var(--marigold),
+            6px 4px 0 0 var(--rani),
+            0 6px 0 0 var(--marigold),
+            -6px 4px 0 0 var(--rani),
+            -6px -3px 0 0 var(--marigold);
+    }
+    100% {
+        opacity: 0;
+        box-shadow:
+            0 -15px 0 -1.5px var(--rani),
+            13px -8px 0 -1.5px var(--marigold),
+            13px 9px 0 -1.5px var(--rani),
+            0 15px 0 -1.5px var(--marigold),
+            -13px 9px 0 -1.5px var(--rani),
+            -13px -8px 0 -1.5px var(--marigold);
+    }
+}
+
+@keyframes like-float-up {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -40%) scale(0.55);
+    }
+    25% {
+        opacity: 0.95;
+        transform: translate(-50%, -95%) scale(1.05);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -185%) scale(0.85);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .like-btn.is-popping .like-heart-icon,
+    .like-btn.is-popping .like-burst,
+    .like-btn.is-popping .like-float-heart {
+        animation: none;
+    }
+}
+
+

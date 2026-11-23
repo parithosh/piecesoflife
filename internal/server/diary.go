@@ -317,13 +317,7 @@ func (s *Server) handleListDiaryComments(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	out := make([]commentResponse, 0, len(comments))
-	for _, c := range comments {
-		out = append(out, commentResponse{
-			CommentWithUser: c,
-			BodyHTML:        renderCommentBody(c.Body),
-		})
-	}
+	out := s.buildCommentResponses(r.Context(), comments)
 
 	writeJSON(w, http.StatusOK, map[string]any{"comments": out})
 }
@@ -437,13 +431,7 @@ func (s *Server) handleListDiaryBlockComments(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	out := make([]commentResponse, 0, len(comments))
-	for _, c := range comments {
-		out = append(out, commentResponse{
-			CommentWithUser: c,
-			BodyHTML:        renderCommentBody(c.Body),
-		})
-	}
+	out := s.buildCommentResponses(r.Context(), comments)
 
 	writeJSON(w, http.StatusOK, map[string]any{"comments": out})
 }

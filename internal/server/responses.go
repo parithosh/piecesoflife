@@ -133,11 +133,55 @@ type autosaveRequest struct {
 }
 
 // commentResponse is the wire shape for comments returned from the API:
-// the stored comment plus the server-rendered Markdown HTML.
+// the stored comment plus the server-rendered Markdown HTML and like state.
 type commentResponse struct {
 	store.CommentWithUser
 
-	BodyHTML template.HTML `json:"body_html"`
+	BodyHTML     template.HTML `json:"body_html"`
+	LikeCount    int           `json:"like_count"`
+	LikedByMe    bool          `json:"liked_by_me"`
+	LikedByNames []string      `json:"liked_by_names,omitempty"`
+}
+
+func (s *Server) buildCommentResponses(
+	ctx context.Context, comments []store.CommentWithUser,
+) []commentResponse {
+	out := make([]commentResponse, 0, len(comments))
+	if len(comments) == 0 {
+		return out
+	}
+
+	var viewerID int64
+	if u := UserFromContext(ctx); u != nil {
+		viewerID = u.ID
+	}
+
+	ids := make([]int64, len(comments))
+	for i := range comments {
+		ids[i] = comments[i].ID
+	}
+
+	likes, err := s.store.ListCommentLikesByIDs(ctx, ids, viewerID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "Failed to load comment likes",
+			slog.String("error", err.Error()))
+		likes = nil
+	}
+
+	for _, c := range comments {
+		cr := commentResponse{
+			CommentWithUser: c,
+			BodyHTML:        renderCommentBody(c.Body),
+		}
+		if lk, ok := likes[c.ID]; ok {
+			cr.LikeCount = lk.Count
+			cr.LikedByMe = lk.Liked
+			cr.LikedByNames = lk.Names
+		}
+		out = append(out, cr)
+	}
+
+	return out
 }
 
 // handleCreateResponse creates a new draft response for a question.
@@ -860,13 +904,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := make([]commentResponse, 0, len(comments))
-	for _, c := range comments {
-		out = append(out, commentResponse{
-			CommentWithUser: c,
-			BodyHTML:        renderCommentBody(c.Body),
-		})
-	}
+	out := s.buildCommentResponses(r.Context(), comments)
 
 	writeJSON(w, http.StatusOK, map[string]any{"comments": out})
 }
@@ -997,6 +1035,120 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMarkIssueCommentsSeen records that the signed-in member has opened the
+// "Unseen comments" tab on a published issue, updating their per-issue read
+// watermark so already-viewed comments don't reappear on future visits.
+// POST /api/issues/{id}/comments/mark-seen
+func (s *Server) handleMarkIssueCommentsSeen(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
+	issueID, ok := s.parseIDParam(w, r, "id", "issue ID")
+	if !ok {
+		return
+	}
+
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
+		return
+	}
+
+	if issue.Status != "published" {
+		writeError(w, http.StatusForbidden, "not_published",
+			"Comments can only be marked seen on published issues")
+		return
+	}
+
+	if err := s.store.MarkIssueCommentsSeen(ctx, user.ID, issue.ID, time.Now().UTC()); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to mark issue comments seen",
+			slog.Int64("issue_id", issue.ID),
+			slog.Int64("user_id", user.ID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to mark comments seen")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleToggleResponseLike toggles the signed-in member's like on a published
+// answer (shared question or The hot seat).
+// POST /api/responses/{id}/like
+func (s *Server) handleToggleResponseLike(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
+	responseID, ok := s.parseIDParam(w, r, "id", "response ID")
+	if !ok {
+		return
+	}
+
+	resp, err := s.store.GetResponseByID(ctx, responseID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Response not found")
+		return
+	}
+
+	issue, err := s.store.GetIssueByResponseID(ctx, responseID)
+	if err != nil || issue.GroupID != currentGroupID(ctx) {
+		writeError(w, http.StatusNotFound, "not_found", "Response not found")
+		return
+	}
+
+	if issue.Status != "published" || resp.IsDraft {
+		writeError(w, http.StatusForbidden, "not_published",
+			"Likes are only available on published answers")
+		return
+	}
+
+	summary, err := s.store.ToggleResponseLike(ctx, user.ID, responseID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to toggle response like",
+			slog.Int64("response_id", responseID),
+			slog.Int64("user_id", user.ID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update like")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, summary)
+}
+
+// handleToggleCommentLike toggles the signed-in member's like on a comment in
+// the current Loop.
+// POST /api/comments/{id}/like
+func (s *Server) handleToggleCommentLike(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
+	commentID, ok := s.parseIDParam(w, r, "id", "comment ID")
+	if !ok {
+		return
+	}
+
+	comment, err := s.store.GetCommentByID(ctx, commentID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Comment not found")
+		return
+	}
+
+	if _, ok := s.requireCommentInGroup(w, r, comment); !ok {
+		return
+	}
+
+	summary, err := s.store.ToggleCommentLike(ctx, user.ID, commentID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to toggle comment like",
+			slog.Int64("comment_id", commentID),
+			slog.Int64("user_id", user.ID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Failed to update like")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, summary)
 }
 
 // handleEditComment updates the body of the caller's own comment — admins

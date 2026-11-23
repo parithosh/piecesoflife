@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -260,6 +262,119 @@ func (s *Store) listCommentsByTarget(
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating comments: %w", err)
+	}
+
+	return comments, nil
+}
+
+// GetIssueCommentRead returns when userID last marked comments seen on issueID,
+// or (nil, nil) if they haven't yet.
+func (s *Store) GetIssueCommentRead(
+	ctx context.Context, userID, issueID int64,
+) (*time.Time, error) {
+	var seenAt time.Time
+
+	err := s.read.QueryRowContext(ctx,
+		`SELECT last_seen_at FROM issue_comment_reads
+		 WHERE user_id = ? AND issue_id = ?`,
+		userID, issueID,
+	).Scan(&seenAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting issue comment read for user %d issue %d: %w",
+			userID, issueID, err)
+	}
+
+	return &seenAt, nil
+}
+
+// MarkIssueCommentsSeen records that userID has caught up on comments for
+// issueID up to seenAt.
+func (s *Store) MarkIssueCommentsSeen(
+	ctx context.Context, userID, issueID int64, seenAt time.Time,
+) error {
+	ts := seenAt.UTC().Format(time.DateTime)
+
+	_, err := s.write.ExecContext(ctx,
+		`INSERT INTO issue_comment_reads (user_id, issue_id, last_seen_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(user_id, issue_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
+		userID, issueID, ts,
+	)
+	if err != nil {
+		return fmt.Errorf("marking issue %d comments seen for user %d: %w",
+			issueID, userID, err)
+	}
+
+	return nil
+}
+
+// ListRecentIssueComments returns comments on any target belonging to issueID
+// (responses, notebook blocks, legacy notebook days, and dump items) whose
+// created_at or edited_at is strictly after since, authored by someone other
+// than excludeUserID. Ordered newest-activity first.
+func (s *Store) ListRecentIssueComments(
+	ctx context.Context, issueID, excludeUserID int64, since time.Time,
+) ([]CommentWithUser, error) {
+	// Prefilter generously by 1 second in SQL to avoid timestamp-format edge
+	// cases between SQLite's "YYYY-MM-DD HH:MM:SS" and Go's sub-second times,
+	// then enforce the exact time.Time.After(since) comparison in Go below.
+	sqlFloor := since.UTC().Add(-time.Second).Format(time.DateTime)
+
+	rows, err := s.read.QueryContext(ctx,
+		`SELECT c.id, c.user_id, c.response_id, c.diary_day_id,
+		        c.diary_block_id, c.dump_item_id,
+		        c.parent_id, c.body, c.edited_at, c.created_at,
+		        u.name, u.avatar_url
+		 FROM comments c
+		 JOIN users u ON u.id = c.user_id
+		 LEFT JOIN responses r ON r.id = c.response_id
+		 LEFT JOIN questions q ON q.id = r.question_id
+		 LEFT JOIN diary_blocks db ON db.id = c.diary_block_id
+		 LEFT JOIN diary_days dbd ON dbd.id = db.diary_day_id
+		 LEFT JOIN diary_sections dbs ON dbs.id = dbd.section_id
+		 LEFT JOIN diary_days dd ON dd.id = c.diary_day_id
+		 LEFT JOIN diary_sections ds ON ds.id = dd.section_id
+		 LEFT JOIN dump_items di ON di.id = c.dump_item_id
+		 WHERE COALESCE(q.issue_id, dbs.issue_id, ds.issue_id, di.issue_id) = ?
+		   AND c.user_id != ?
+		   AND datetime(COALESCE(c.edited_at, c.created_at)) >= datetime(?)
+		 ORDER BY datetime(COALESCE(c.edited_at, c.created_at)) DESC, c.id DESC`,
+		issueID, excludeUserID, sqlFloor,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing recent comments for issue %d: %w", issueID, err)
+	}
+	defer rows.Close()
+
+	comments := make([]CommentWithUser, 0)
+
+	for rows.Next() {
+		var c CommentWithUser
+
+		err := rows.Scan(&c.ID, &c.UserID, &c.ResponseID, &c.DiaryDayID,
+			&c.DiaryBlockID, &c.DumpItemID, &c.ParentID, &c.Body,
+			&c.EditedAt, &c.CreatedAt,
+			&c.AuthorName, &c.AuthorAvatarURL)
+		if err != nil {
+			return nil, fmt.Errorf("scanning recent issue comment: %w", err)
+		}
+
+		activity := c.CreatedAt
+		if c.EditedAt != nil && c.EditedAt.After(activity) {
+			activity = *c.EditedAt
+		}
+		if !activity.After(since) {
+			continue
+		}
+
+		comments = append(comments, c)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating recent issue comments: %w", err)
 	}
 
 	return comments, nil

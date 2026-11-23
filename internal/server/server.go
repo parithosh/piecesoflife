@@ -347,13 +347,16 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("DELETE /api/dump/{id}", groupMW(s.handleDumpDelete))
 	s.mux.Handle("PUT /api/responses/{id}/autosave", groupMW(s.handleAutosave))
 
-	// Comment routes.
+	// Comment & like routes.
 	s.mux.Handle("GET /api/responses/{id}/comments", groupMW(s.handleListComments))
 	s.mux.Handle("POST /api/responses/{id}/comments", groupMW(s.handleAddComment))
+	s.mux.Handle("POST /api/responses/{id}/like", groupMW(s.handleToggleResponseLike))
 	s.mux.Handle("PATCH /api/comments/{id}", groupMW(s.handleEditComment))
 	s.mux.Handle("DELETE /api/comments/{id}", groupMW(s.handleDeleteComment))
+	s.mux.Handle("POST /api/comments/{id}/like", groupMW(s.handleToggleCommentLike))
 	s.mux.Handle("GET /api/dump/{id}/comments", groupMW(s.handleListDumpComments))
 	s.mux.Handle("POST /api/dump/{id}/comments", groupMW(s.handleAddDumpComment))
+	s.mux.Handle("POST /api/issues/{id}/comments/mark-seen", groupMW(s.handleMarkIssueCommentsSeen))
 
 	// Ramble — the private journal. Person-scoped: authMW only, no Loop
 	// context required.

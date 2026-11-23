@@ -95,30 +95,67 @@
         }
     }
 
-    function commentItemHTML(c, replies) {
+    function commentActivityMs(c) {
+        const raw = c.edited_at || c.created_at;
+        const ms = Date.parse(raw);
+        return Number.isFinite(ms) ? ms : 0;
+    }
+
+    function commentLikeHTML(c) {
+        const count = Number(c.like_count || 0);
+        const liked = Boolean(c.liked_by_me);
+        const names = Array.isArray(c.liked_by_names) && c.liked_by_names.length
+            ? `Liked by ${c.liked_by_names.join(', ')}`
+            : '';
+        return `
+            <button type="button"
+                    class="like-btn like-btn--comment${liked ? ' is-liked' : ''}"
+                    data-like-comment="${c.id}"
+                    data-like-count="${count}"
+                    aria-pressed="${liked ? 'true' : 'false'}"
+                    aria-label="${liked ? 'Unlike' : 'Like'} ${escapeHtml(c.author_name)}'s comment"
+                    ${names ? `title="${escapeHtml(names)}"` : ''}>
+                <span class="like-heart-wrap" aria-hidden="true">
+                    <svg class="like-heart-icon" viewBox="0 0 24 24" width="13" height="13">
+                        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                    </svg>
+                    <span class="like-burst"></span>
+                    <span class="like-float-heart">♥</span>
+                </span>
+                <span class="like-count">${count > 0 ? count : ''}</span>
+            </button>
+        `;
+    }
+
+    function commentItemHTML(c, replies, unseenSinceMs) {
         // Replies always target the top-level comment so the thread stays
         // one level deep no matter which comment the user replies to.
         const replyTarget = c.parent_id || c.id;
         const mine = window.POLUserID && c.user_id === window.POLUserID;
+        const isUnseen = Number.isFinite(unseenSinceMs) && !mine && commentActivityMs(c) > unseenSinceMs;
         return `
-            <li class="comment-item" data-comment-id="${c.id}"
+            <li class="comment-item${isUnseen ? ' is-unseen' : ''}" data-comment-id="${c.id}"
                 data-raw-body="${escapeHtml(c.body || '')}">
                 <div class="comment-meta">
                     <strong>${escapeHtml(c.author_name)}</strong>
                     <span>${formatTimestamp(c.created_at)}</span>
                     ${c.edited_at ? '<span class="comment-edited">(edited)</span>' : ''}
+                    ${isUnseen ? '<span class="comment-new-badge">New</span>' : ''}
                 </div>
                 <div class="comment-body">${safeCommentHTML(c)}</div>
-                <button type="button" class="comment-reply-btn"
-                        data-reply-to="${replyTarget}"
-                        aria-label="Reply to ${escapeHtml(c.author_name)}">↳ reply</button>
-                ${mine ? `
-                <button type="button" class="comment-reply-btn comment-edit-btn"
-                        data-edit-comment="${c.id}"
-                        aria-label="Edit your comment">✎ edit</button>` : ''}
+                <div class="comment-actions-row">
+                    ${commentLikeHTML(c)}
+                    <button type="button" class="comment-reply-btn"
+                            data-reply-to="${replyTarget}"
+                            aria-label="Reply to ${escapeHtml(c.author_name)}">↳ reply</button>
+                    ${mine ? `
+                    <button type="button" class="comment-reply-btn comment-edit-btn"
+                            data-edit-comment="${c.id}"
+                            aria-label="Edit your comment">✎ edit</button>` : ''}
+                </div>
                 ${replies && replies.length ? `
                 <ul class="comment-replies">
-                    ${replies.map(r => commentItemHTML(r, null)).join('')}
+                    ${replies.map(r => commentItemHTML(r, null, unseenSinceMs)).join('')}
                 </ul>` : ''}
             </li>
         `;
@@ -217,12 +254,27 @@
             if (!topLevel.some(c => c.id === parentID)) topLevel.push(...orphans);
         });
 
-        list.innerHTML = topLevel.map(c =>
-            commentItemHTML(c, byParent.get(c.id))
+        const unseenSinceMs = panel.dataset.unseenSince
+            ? Date.parse(panel.dataset.unseenSince)
+            : NaN;
+        let visibleTop = topLevel;
+        if (Number.isFinite(unseenSinceMs)) {
+            visibleTop = topLevel.filter(c => {
+                if (commentActivityMs(c) > unseenSinceMs) return true;
+                const kids = byParent.get(c.id) || [];
+                return kids.some(r => commentActivityMs(r) > unseenSinceMs);
+            });
+        }
+
+        list.innerHTML = visibleTop.map(c =>
+            commentItemHTML(c, byParent.get(c.id), unseenSinceMs)
         ).join('');
 
-        panel.dataset.commentCount = String(comments.length);
-        updateToggle(panel, comments.length);
+        const shownCount = Number.isFinite(unseenSinceMs)
+            ? visibleTop.reduce((sum, c) => sum + 1 + (byParent.get(c.id)?.length || 0), 0)
+            : comments.length;
+        panel.dataset.commentCount = String(shownCount);
+        updateToggle(panel, shownCount);
     }
 
     function removeReplyForm(scope) {
@@ -587,7 +639,86 @@
         scope.querySelectorAll(PANEL_SELECTOR).forEach(setupPanel);
     }
 
+    function applyLikeState(btn, liked, count, names, animate) {
+        btn.classList.toggle('is-liked', liked);
+        btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
+        btn.dataset.likeCount = String(count);
+
+        const countEl = btn.querySelector('.like-count');
+        if (countEl) {
+            countEl.textContent = count > 0 ? String(count) : '';
+        }
+
+        if (Array.isArray(names) && names.length) {
+            btn.title = `Liked by ${names.join(', ')}`;
+        } else {
+            btn.removeAttribute('title');
+        }
+
+        if (animate && liked) {
+            btn.classList.remove('is-popping');
+            // Force reflow so rapid re-likes replay the animation cleanly.
+            void btn.offsetWidth;
+            btn.classList.add('is-popping');
+            clearTimeout(btn._popTimer);
+            btn._popTimer = setTimeout(() => btn.classList.remove('is-popping'), 520);
+        } else if (!liked) {
+            btn.classList.remove('is-popping');
+        }
+    }
+
+    async function toggleLike(btn) {
+        if (btn.dataset.pending === '1') return;
+
+        const isComment = btn.dataset.likeComment !== undefined;
+        const id = isComment ? btn.dataset.likeComment : btn.dataset.likeResponse;
+        if (!id) return;
+
+        const selector = isComment
+            ? `[data-like-comment="${CSS.escape(id)}"]`
+            : `[data-like-response="${CSS.escape(id)}"]`;
+        const peers = Array.from(document.querySelectorAll(selector));
+
+        const prevLiked = btn.classList.contains('is-liked');
+        const prevCount = Number(btn.dataset.likeCount || 0);
+        const nextLiked = !prevLiked;
+        const nextCount = Math.max(0, prevCount + (nextLiked ? 1 : -1));
+
+        peers.forEach(el => {
+            el.dataset.pending = '1';
+            applyLikeState(el, nextLiked, nextCount, null, el === btn && nextLiked);
+        });
+
+        const url = isComment
+            ? `/api/comments/${encodeURIComponent(id)}/like`
+            : `/api/responses/${encodeURIComponent(id)}/like`;
+
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: apiHeaders(),
+            });
+            if (!res.ok) throw new Error(`like failed: ${res.status}`);
+            const data = await res.json();
+            peers.forEach(el => {
+                applyLikeState(el, Boolean(data.liked), Number(data.count || 0), data.names || [], false);
+            });
+        } catch {
+            peers.forEach(el => {
+                applyLikeState(el, prevLiked, prevCount, null, false);
+            });
+        } finally {
+            peers.forEach(el => { delete el.dataset.pending; });
+        }
+    }
+
     document.addEventListener('click', ev => {
+        const likeBtn = ev.target.closest('[data-like-response], [data-like-comment]');
+        if (likeBtn) {
+            toggleLike(likeBtn);
+            return;
+        }
+
         const gifBtn = ev.target.closest('.comment-gif-btn');
         if (gifBtn) {
             toggleGifPicker(gifBtn.closest('.comment-form'), gifBtn);
