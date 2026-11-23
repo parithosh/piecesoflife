@@ -111,7 +111,7 @@
             <div class="pl-qadmin-main">
               <p class="pl-qadmin-text" data-q-text>{{$q.Text}}</p>
               <p class="pl-qadmin-meta">
-                {{if eq $q.Source "friend"}}member suggestion{{else}}{{$q.Source}}{{end}}{{if gt $n 0}} · <b>{{$n}} member{{if ne $n 1}}s{{end}} already answered</b>{{end}}
+                {{if $q.TargetUserName}}for <b>{{$q.TargetUserName}}</b> · {{end}}{{if eq $q.Source "friend"}}member suggestion{{else}}{{$q.Source}}{{end}}{{if gt $n 0}} · <b>{{$n}} member{{if ne $n 1}}s{{end}} already answered</b>{{end}}
               </p>
             </div>
             <div class="pl-qadmin-actions">
@@ -281,7 +281,7 @@
             <span class="pl-qadmin-num" aria-hidden="true">{{printf "%02d" (add $idx 1)}}</span>
             <div class="pl-qadmin-main">
               <p class="pl-qadmin-text" data-q-text>{{$q.Text}}</p>
-              <p class="pl-qadmin-meta">{{if eq $q.Source "friend"}}member suggestion{{else}}{{$q.Source}}{{end}}</p>
+              <p class="pl-qadmin-meta">{{if $q.TargetUserName}}for <b>{{$q.TargetUserName}}</b> · {{end}}{{if eq $q.Source "friend"}}member suggestion{{else}}{{$q.Source}}{{end}}</p>
             </div>
             <div class="pl-qadmin-actions">
               <button type="button" class="pl-btn pl-btn--outline" data-move="up" aria-label="Move question up" {{if eq $idx 0}}disabled{{end}}>↑</button>
@@ -313,7 +313,7 @@
             <span class="pl-qadmin-num" aria-hidden="true">{{printf "%02d" (add $idx 1)}}</span>
             <div class="pl-qadmin-main">
               <p class="pl-qadmin-text">{{$q.Text}}</p>
-              <p class="pl-qadmin-meta">member suggestion</p>
+              <p class="pl-qadmin-meta">{{if $q.TargetUserName}}for <b>{{$q.TargetUserName}}</b> · {{end}}member suggestion</p>
             </div>
           </div>
           {{end}}

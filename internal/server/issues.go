@@ -789,7 +789,24 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// While collecting, hide questions directed at other members from non-admins
+	// so each member only sees circle-wide prompts plus any aimed at them.
+	if issue.Status == "collecting" && !isGroupAdmin(r.Context()) {
+		user := UserFromContext(r.Context())
+		filtered := make([]store.Question, 0, len(questions))
+		for _, q := range questions {
+			if user != nil && questionVisibleToMember(q, user.ID) {
+				filtered = append(filtered, q)
+			}
+		}
+		questions = filtered
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"questions": questions})
+}
+
+func questionVisibleToMember(q store.Question, userID int64) bool {
+	return q.TargetUserID == nil || *q.TargetUserID == userID
 }
 
 // handleGetProgress returns submission progress for an issue.
@@ -1276,9 +1293,10 @@ func (s *Server) handleDeleteQuestion(w http.ResponseWriter, r *http.Request) {
 
 // friendSubmitQuestionRequest is the expected JSON body for POST /api/questions/submit.
 type friendSubmitQuestionRequest struct {
-	IssueID  int64   `json:"issue_id"`
-	Text     string  `json:"text"`
-	Category *string `json:"category"`
+	IssueID      int64   `json:"issue_id"`
+	Text         string  `json:"text"`
+	Category     *string `json:"category"`
+	TargetUserID *int64  `json:"target_user_id"`
 }
 
 // handleFriendSubmitQuestion allows a member to submit a custom question for an issue.
@@ -1302,7 +1320,8 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 		validationErrs["issue_id"] = "Valid issue_id is required"
 	}
 
-	if strings.TrimSpace(req.Text) == "" {
+	trimmedText := strings.TrimSpace(req.Text)
+	if trimmedText == "" {
 		validationErrs["text"] = "Question text is required"
 	}
 
@@ -1327,8 +1346,23 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// When directed to a specific member, verify they are an active member of
+	// this circle (never allow targeting outsiders or deactivated accounts).
+	if req.TargetUserID != nil {
+		if *req.TargetUserID <= 0 {
+			writeValidationError(w, map[string]string{"target_user_id": "Selected person is not in this circle"})
+			return
+		}
+		m, mErr := s.store.GetMembership(r.Context(), issue.GroupID, *req.TargetUserID)
+		targetUser, uErr := s.store.GetUserByID(r.Context(), *req.TargetUserID)
+		if mErr != nil || !m.IsActive || uErr != nil || !targetUser.IsActive {
+			writeValidationError(w, map[string]string{"target_user_id": "Selected person is not in this circle"})
+			return
+		}
+	}
+
 	questionID, err := s.store.CreateSuggestedQuestion(
-		r.Context(), issue.GroupID, issue.ID, user.ID, req.Text, req.Category,
+		r.Context(), issue.GroupID, issue.ID, user.ID, trimmedText, req.Category, req.TargetUserID,
 	)
 	if err != nil {
 		if errors.Is(err, store.ErrIssueNotAcceptingSuggestions) {

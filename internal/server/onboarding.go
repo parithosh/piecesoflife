@@ -667,7 +667,11 @@ func (s *Server) sendIssueOpenEmail(
 
 	questionTexts := make([]string, 0, len(questions))
 	for _, q := range questions {
-		questionTexts = append(questionTexts, q.Text)
+		if q.TargetUserID == nil {
+			questionTexts = append(questionTexts, q.Text)
+		} else if *q.TargetUserID == user.ID {
+			questionTexts = append(questionTexts, "[Just for you] "+q.Text)
+		}
 	}
 
 	subject := fmt.Sprintf("%s — %s is open!", settings.LoopName, monthStr)

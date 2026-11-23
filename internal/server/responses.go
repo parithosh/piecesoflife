@@ -188,6 +188,12 @@ func (s *Server) handleCreateResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if question.TargetUserID != nil && *question.TargetUserID != user.ID {
+		writeError(w, http.StatusForbidden, "forbidden",
+			"This question is directed to another member")
+		return
+	}
+
 	// Return existing response if one already exists — idempotent on retry.
 	if existing, err := s.store.GetUserResponse(r.Context(), user.ID, req.QuestionID); err == nil {
 		writeJSON(w, http.StatusOK, existing)

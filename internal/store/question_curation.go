@@ -73,20 +73,23 @@ func (s *Store) PrepareDraftQuestions(
 	}
 
 	var (
-		questionCount int
-		hasDefaults   bool
+		totalCount  int
+		sharedCount int
+		hasDefaults bool
 	)
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*), EXISTS(
-		     SELECT 1 FROM questions WHERE issue_id = ? AND source = 'default'
-		 )
+		`SELECT COUNT(*),
+		        COALESCE(SUM(CASE WHEN target_user_id IS NULL THEN 1 ELSE 0 END), 0),
+		        EXISTS(
+		            SELECT 1 FROM questions WHERE issue_id = ? AND source = 'default'
+		        )
 		 FROM questions WHERE issue_id = ?`,
 		issueID, issueID,
-	).Scan(&questionCount, &hasDefaults); err != nil {
+	).Scan(&totalCount, &sharedCount, &hasDefaults); err != nil {
 		return fmt.Errorf("counting issue %d questions: %w", issueID, err)
 	}
 
-	nextOrder := questionCount
+	nextOrder := totalCount
 	if !hasDefaults {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT text FROM default_questions
@@ -123,10 +126,14 @@ func (s *Store) PrepareDraftQuestions(
 				return fmt.Errorf("adding default to issue %d: %w", issueID, err)
 			}
 			nextOrder++
+			sharedCount++
 		}
 	}
 
-	if need := target - nextOrder; need > 0 {
+	// Only circle-wide (undirected) questions count toward the target;
+	// questions directed at one member are bonus prompts and never shrink
+	// everyone else's set.
+	if need := target - sharedCount; need > 0 {
 		bankQuestions, err := selectRandomUnusedQuestions(ctx, tx, groupID, need)
 		if err != nil {
 			return fmt.Errorf("selecting bank questions for issue %d: %w", issueID, err)
@@ -181,21 +188,23 @@ func (s *Store) PrepareDraftQuestions(
 // CreateSuggestedQuestion inserts a member suggestion only while the issue is
 // an upcoming, uncurated draft. The state predicate and insert share one SQL
 // statement so curation cannot race a late, unreviewed suggestion into the set.
+// When targetUserID is non-nil the question is directed exclusively to that
+// circle member.
 func (s *Store) CreateSuggestedQuestion(
 	ctx context.Context, groupID, issueID, userID int64,
-	text string, category *string,
+	text string, category *string, targetUserID *int64,
 ) (int64, error) {
 	now := time.Now().UTC()
 	result, err := s.write.ExecContext(ctx,
 		`INSERT INTO questions
-		 (issue_id, text, category, source, submitted_by, sort_order)
-		 SELECT i.id, ?, ?, 'friend', ?,
+		 (issue_id, text, category, source, submitted_by, target_user_id, sort_order)
+		 SELECT i.id, ?, ?, 'friend', ?, ?,
 		        COALESCE((SELECT MAX(q.sort_order) + 1
 		                  FROM questions q WHERE q.issue_id = i.id), 0)
 		 FROM issues i
 		 WHERE i.id = ? AND i.group_id = ? AND i.status = 'draft'
 		   AND i.opens_at > ? AND i.questions_curated_at IS NULL`,
-		text, category, userID, issueID, groupID, now,
+		text, category, userID, targetUserID, issueID, groupID, now,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("creating suggested question: %w", err)

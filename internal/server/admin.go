@@ -384,7 +384,14 @@ func (s *Server) handleAdminMemberSubmission(
 			answers[resp.QuestionID] = MemberAnswer{Response: resp, Blocks: blocks}
 		}
 
-		data.Questions = questions
+		filtered := make([]store.Question, 0, len(questions))
+		for _, q := range questions {
+			if questionVisibleToMember(q, memberID) {
+				filtered = append(filtered, q)
+			}
+		}
+
+		data.Questions = filtered
 		data.Answers = answers
 	}
 

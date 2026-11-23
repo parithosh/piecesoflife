@@ -690,20 +690,27 @@ func (s *Server) openIssueForCollectingWithTransition(
 		}
 
 		hasDefaults := false
+		sharedCount := 0
 
 		for _, q := range existing {
 			if q.Source == "default" {
 				hasDefaults = true
-				break
+			}
+			if q.TargetUserID == nil {
+				sharedCount++
 			}
 		}
 
 		nextOrder := len(existing)
 		if !hasDefaults {
-			nextOrder += s.insertDefaultQuestions(ctx, issue.GroupID, issue.ID, nextOrder)
+			added := s.insertDefaultQuestions(ctx, issue.GroupID, issue.ID, nextOrder)
+			nextOrder += added
+			sharedCount += added
 		}
 
-		if need := questionTarget(settings, questionCount) - nextOrder; need > 0 {
+		// Directed questions (target_user_id != nil) are bonus prompts for
+		// one member and never shrink the circle-wide question set.
+		if need := questionTarget(settings, questionCount) - sharedCount; need > 0 {
 			bankQuestions, err := s.store.SelectRandomUnusedQuestions(ctx, issue.GroupID, need)
 			if err != nil {
 				s.logger.WarnContext(ctx, "Failed to select bank questions for issue open",

@@ -15,15 +15,27 @@ import (
 	"github.com/parithosh/piecesoflife/internal/store"
 )
 
+// SuggestMember is the minimal member payload passed to the question
+// suggestion box's @mention picker (intentionally omits email addresses).
+type SuggestMember struct {
+	ID        int64   `json:"id"`
+	Name      string  `json:"name"`
+	AvatarURL *string `json:"avatar_url,omitempty"`
+}
+
 // IssueArchiveData is the template data for the issue archive page.
 type IssueArchiveData struct {
 	PageData
 	CurrentIssue *CurrentIssueCard
 	Issues       []IssueArchiveCard
 	// NextIssueOpens is the pre-formatted local time the next round opens
-	// (from the pending create_next_issue event). Empty when an issue is
-	// open now or nothing is scheduled.
+	// (from the pending create_next_issue event or upcoming draft). Empty
+	// when an issue is open now or nothing is scheduled.
 	NextIssueOpens string
+	// NextIssue is the pre-created upcoming draft (nil when none). When
+	// uncurated, members can suggest questions right from the archive page.
+	NextIssue      *store.Issue
+	SuggestMembers []SuggestMember
 }
 
 // IssueArchiveCard bundles an issue with a small set of photo paths used to
@@ -75,19 +87,26 @@ type IssuePageData struct {
 	DumpCommentCounts       map[int64]int
 	PageCount               int
 	DiaryIdx                int
+	DirectedIdx             int
 	DumpIdx                 int
+	// DirectedQuestions are questions aimed at a single member (@mentioned),
+	// aggregated into "The hot seat" spread below the notebooks.
+	DirectedQuestions []store.Question
 	// NextIssue is the pre-created upcoming round (nil when none). Members
 	// can send it question suggestions until it opens at NextIssueOpens.
 	NextIssue      *store.Issue
 	NextIssueOpens string
+	SuggestMembers []SuggestMember
 }
 
 // RespondPageData is the template data for the response editor page.
 type RespondPageData struct {
 	PageData
-	Issue     store.Issue
-	Questions []store.Question
-	Responses map[int64]*store.ResponseWithBlocks
+	Issue             store.Issue
+	Questions         []store.Question
+	DirectedQuestions []store.Question
+	PromptCount       int
+	Responses         map[int64]*store.ResponseWithBlocks
 	// Progress powers the "in this round" ledger; may be nil if it could
 	// not be loaded. Answered/DaysLeft drive the ledger's segmented bar and
 	// closing-soon copy.
@@ -203,17 +222,39 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		visibleCount := 0
+		for _, q := range questions {
+			if questionVisibleToMember(q, user.ID) {
+				visibleCount++
+			}
+		}
+
 		currentCard = &CurrentIssueCard{
 			Issue:         *currentIssue,
-			QuestionCount: len(questions),
+			QuestionCount: visibleCount,
 			AnsweredCount: len(userResponses),
 			Submitted:     submitted,
 		}
 	}
 
 	var nextIssueOpens string
+	var nextIssue *store.Issue
+	var suggestMembers []SuggestMember
 	if currentCard == nil {
 		nextIssueOpens = s.nextIssueOpensLabel(ctx, settings)
+		if draft, dErr := s.store.GetUpcomingDraftIssue(ctx, currentGroupID(ctx)); dErr != nil {
+			s.logger.WarnContext(ctx, "Failed to look up upcoming draft for archive page",
+				slog.String("error", dErr.Error()))
+		} else if draft != nil {
+			nextIssue = draft
+			if nextIssueOpens == "" {
+				loc := s.settingsLocation(ctx, settings)
+				nextIssueOpens = draft.OpensAt.In(loc).Format("Monday, 2 Jan at 3:04 PM")
+			}
+			if draft.QuestionsCuratedAt == nil {
+				suggestMembers = s.loadSuggestMembers(ctx, currentGroupID(ctx))
+			}
+		}
 	}
 
 	data := IssueArchiveData{
@@ -221,9 +262,31 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 		CurrentIssue:   currentCard,
 		Issues:         cards,
 		NextIssueOpens: nextIssueOpens,
+		NextIssue:      nextIssue,
+		SuggestMembers: suggestMembers,
 	}
 
 	s.renderPage(w, "issues_archive.html", data)
+}
+
+func (s *Server) loadSuggestMembers(ctx context.Context, groupID int64) []SuggestMember {
+	members, err := s.store.ListActiveGroupMembers(ctx, groupID)
+	if err != nil {
+		s.logger.WarnContext(ctx, "Failed to list members for suggestion picker",
+			slog.Int64("group_id", groupID),
+			slog.String("error", err.Error()))
+		return nil
+	}
+
+	out := make([]SuggestMember, 0, len(members))
+	for i := range members {
+		out = append(out, SuggestMember{
+			ID:        members[i].ID,
+			Name:      members[i].Name,
+			AvatarURL: members[i].AvatarURL,
+		})
+	}
+	return out
 }
 
 // publishedBlockRank orders answer blocks for the reading view: prose first,
@@ -440,10 +503,24 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Partition circle-wide questions from directed (@mentioned) questions so
+	// directed Q&As aggregate into "The hot seat" spread below Ramble
+	// rather than occupying solo single-answer pages.
+	sharedQuestions := make([]store.Question, 0, len(questions))
+	directedQuestions := make([]store.Question, 0)
+	for _, q := range questions {
+		if q.TargetUserID != nil {
+			directedQuestions = append(directedQuestions, q)
+		} else {
+			sharedQuestions = append(sharedQuestions, q)
+		}
+	}
+
 	// Surface the pre-created next round so readers can send it question
 	// suggestions while the current issue is fresh in their minds.
 	var nextIssue *store.Issue
 	var nextIssueOpens string
+	var suggestMembers []SuggestMember
 	if draft, dErr := s.store.GetUpcomingDraftIssue(ctx, currentGroupID(ctx)); dErr != nil {
 		s.logger.WarnContext(ctx, "Failed to look up upcoming draft for issue page",
 			slog.String("error", dErr.Error()))
@@ -451,17 +528,26 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		nextIssue = draft
 		loc := s.settingsLocation(ctx, settings)
 		nextIssueOpens = draft.OpensAt.In(loc).Format("Monday, 2 Jan")
+		if draft.QuestionsCuratedAt == nil {
+			suggestMembers = s.loadSuggestMembers(ctx, currentGroupID(ctx))
+		}
 	}
 
 	// Honor ?q=N deep links server-side so the correct question renders
 	// (and the pager links are right) before any JavaScript runs. Extra
-	// pages come after the questions: the notebooks spread (when anyone
-	// wove theirs in), then the dump collage as the closer.
-	pageCount := len(questions)
-	diaryIdx, dumpIdx := -1, -1
+	// pages come after the shared questions: the notebooks spread (when anyone
+	// wove theirs in), The hot seat (when any questions were directed to
+	// specific members), and the dump collage as the closer.
+	pageCount := len(sharedQuestions)
+	diaryIdx, directedIdx, dumpIdx := -1, -1, -1
 
 	if len(diaryGroups) > 0 {
 		diaryIdx = pageCount
+		pageCount++
+	}
+
+	if len(directedQuestions) > 0 {
+		directedIdx = pageCount
 		pageCount++
 	}
 
@@ -481,7 +567,8 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	data := IssuePageData{
 		PageData:                s.newPageData(r),
 		Issue:                   *targetIssue,
-		Questions:               questions,
+		Questions:               sharedQuestions,
+		DirectedQuestions:       directedQuestions,
 		Responses:               responses,
 		CommentCounts:           commentCounts,
 		PeopleCount:             len(people),
@@ -496,9 +583,11 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		DiaryBlockCommentCounts: diaryBlockCommentCounts,
 		PageCount:               pageCount,
 		DiaryIdx:                diaryIdx,
+		DirectedIdx:             directedIdx,
 		DumpIdx:                 dumpIdx,
 		NextIssue:               nextIssue,
 		NextIssueOpens:          nextIssueOpens,
+		SuggestMembers:          suggestMembers,
 	}
 
 	s.renderPage(w, "issue.html", data)
@@ -529,13 +618,23 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	questions, err := s.store.ListQuestionsByIssue(ctx, issueID)
+	allQuestions, err := s.store.ListQuestionsByIssue(ctx, issueID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to list questions",
 			slog.Int64("issue_id", issueID),
 			slog.String("error", err.Error()))
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
+	}
+
+	sharedQuestions := make([]store.Question, 0, len(allQuestions))
+	directedQuestions := make([]store.Question, 0)
+	for _, q := range allQuestions {
+		if q.TargetUserID == nil {
+			sharedQuestions = append(sharedQuestions, q)
+		} else if *q.TargetUserID == user.ID {
+			directedQuestions = append(directedQuestions, q)
+		}
 	}
 
 	// Load the current user's responses for this issue.
@@ -605,15 +704,17 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := RespondPageData{
-		PageData:  s.newPageData(r),
-		Issue:     *issue,
-		Questions: questions,
-		Responses: responseMap,
-		Progress:  progress,
-		Answered:  answered,
-		DaysLeft:  daysLeft,
-		Submitted: submitted,
-		DumpItems: dumpItems,
+		PageData:          s.newPageData(r),
+		Issue:             *issue,
+		Questions:         sharedQuestions,
+		DirectedQuestions: directedQuestions,
+		PromptCount:       len(sharedQuestions) + len(directedQuestions),
+		Responses:         responseMap,
+		Progress:          progress,
+		Answered:          answered,
+		DaysLeft:          daysLeft,
+		Submitted:         submitted,
+		DumpItems:         dumpItems,
 	}
 
 	s.loadRespondDiary(ctx, issue, user.ID, &data)
