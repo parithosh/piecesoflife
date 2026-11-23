@@ -854,10 +854,7 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 			monthStr = formatDate(issue.OpensAt)
 		}
 
-		questionTexts := make([]string, 0, len(questions))
-		for _, q := range questions {
-			questionTexts = append(questionTexts, q.Text)
-		}
+		questionTexts := emailQuestionTextsForUser(questions, user.ID)
 
 		subject = fmt.Sprintf("%s — %s is open!", settings.LoopName, monthStr)
 		body = s.renderIssueOpenEmail(settings.LoopName, user.Name, monthStr, questionTexts, authURL)

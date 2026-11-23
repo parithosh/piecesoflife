@@ -252,7 +252,7 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 				nextIssueOpens = draft.OpensAt.In(loc).Format("Monday, 2 Jan at 3:04 PM")
 			}
 			if draft.QuestionsCuratedAt == nil {
-				suggestMembers = s.loadSuggestMembers(ctx, currentGroupID(ctx))
+				suggestMembers = s.loadSuggestMembers(ctx, currentGroupID(ctx), user.ID)
 			}
 		}
 	}
@@ -269,7 +269,7 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "issues_archive.html", data)
 }
 
-func (s *Server) loadSuggestMembers(ctx context.Context, groupID int64) []SuggestMember {
+func (s *Server) loadSuggestMembers(ctx context.Context, groupID, excludeUserID int64) []SuggestMember {
 	members, err := s.store.ListActiveGroupMembers(ctx, groupID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "Failed to list members for suggestion picker",
@@ -280,6 +280,9 @@ func (s *Server) loadSuggestMembers(ctx context.Context, groupID int64) []Sugges
 
 	out := make([]SuggestMember, 0, len(members))
 	for i := range members {
+		if members[i].ID == excludeUserID {
+			continue
+		}
 		out = append(out, SuggestMember{
 			ID:        members[i].ID,
 			Name:      members[i].Name,
@@ -505,12 +508,20 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 
 	// Partition circle-wide questions from directed (@mentioned) questions so
 	// directed Q&As aggregate into "The hot seat" spread below Ramble
-	// rather than occupying solo single-answer pages.
+	// rather than occupying solo single-answer pages. Only answered directed
+	// questions are published so nobody is called out for skipping a round.
+	answeredQuestionIDs := make(map[int64]bool, len(responses))
+	for i := range responses {
+		answeredQuestionIDs[responses[i].Response.QuestionID] = true
+	}
+
 	sharedQuestions := make([]store.Question, 0, len(questions))
 	directedQuestions := make([]store.Question, 0)
 	for _, q := range questions {
 		if q.TargetUserID != nil {
-			directedQuestions = append(directedQuestions, q)
+			if answeredQuestionIDs[q.ID] {
+				directedQuestions = append(directedQuestions, q)
+			}
 		} else {
 			sharedQuestions = append(sharedQuestions, q)
 		}
@@ -529,7 +540,11 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		loc := s.settingsLocation(ctx, settings)
 		nextIssueOpens = draft.OpensAt.In(loc).Format("Monday, 2 Jan")
 		if draft.QuestionsCuratedAt == nil {
-			suggestMembers = s.loadSuggestMembers(ctx, currentGroupID(ctx))
+			var viewerID int64
+			if u := UserFromContext(ctx); u != nil {
+				viewerID = u.ID
+			}
+			suggestMembers = s.loadSuggestMembers(ctx, currentGroupID(ctx), viewerID)
 		}
 	}
 

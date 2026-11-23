@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/parithosh/piecesoflife/internal/email"
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -67,6 +68,10 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
+	questions = filterQuestionsForViewer(
+		questions, issue.Status, UserFromContext(r.Context()), isGroupAdmin(r.Context()),
+	)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issue":     issue,
@@ -789,24 +794,53 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// While collecting, hide questions directed at other members from non-admins
-	// so each member only sees circle-wide prompts plus any aimed at them.
-	if issue.Status == "collecting" && !isGroupAdmin(r.Context()) {
-		user := UserFromContext(r.Context())
-		filtered := make([]store.Question, 0, len(questions))
-		for _, q := range questions {
-			if user != nil && questionVisibleToMember(q, user.ID) {
-				filtered = append(filtered, q)
-			}
-		}
-		questions = filtered
-	}
+	questions = filterQuestionsForViewer(
+		questions, issue.Status, UserFromContext(r.Context()), isGroupAdmin(r.Context()),
+	)
 
 	writeJSON(w, http.StatusOK, map[string]any{"questions": questions})
 }
 
 func questionVisibleToMember(q store.Question, userID int64) bool {
 	return q.TargetUserID == nil || *q.TargetUserID == userID
+}
+
+// filterQuestionsForViewer enforces directed-question privacy for non-admins:
+// while collecting, hides questions targeted at other members; and strips
+// submitted_by so member-suggested / hot-seat askers stay anonymous.
+func filterQuestionsForViewer(
+	questions []store.Question, issueStatus string, user *store.User, isAdmin bool,
+) []store.Question {
+	if isAdmin {
+		return questions
+	}
+
+	filtered := make([]store.Question, 0, len(questions))
+	for _, q := range questions {
+		if issueStatus == "collecting" {
+			if user == nil || !questionVisibleToMember(q, user.ID) {
+				continue
+			}
+		}
+		q.SubmittedBy = nil
+		filtered = append(filtered, q)
+	}
+	return filtered
+}
+
+// emailQuestionTextsForUser builds the per-recipient question list for open
+// and reminder emails, omitting prompts directed to other members and marking
+// the recipient's own hot-seat prompts with "[Just for you] ".
+func emailQuestionTextsForUser(questions []store.Question, userID int64) []string {
+	out := make([]string, 0, len(questions))
+	for _, q := range questions {
+		if q.TargetUserID == nil {
+			out = append(out, q.Text)
+		} else if *q.TargetUserID == userID {
+			out = append(out, "[Just for you] "+q.Text)
+		}
+	}
+	return out
 }
 
 // handleGetProgress returns submission progress for an issue.
@@ -1323,6 +1357,12 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 	trimmedText := strings.TrimSpace(req.Text)
 	if trimmedText == "" {
 		validationErrs["text"] = "Question text is required"
+	} else if utf8.RuneCountInString(trimmedText) > 500 {
+		validationErrs["text"] = "Question must be 500 characters or fewer"
+	}
+
+	if req.TargetUserID != nil && *req.TargetUserID == user.ID {
+		validationErrs["target_user_id"] = "Pick someone else in the circle"
 	}
 
 	if len(validationErrs) > 0 {

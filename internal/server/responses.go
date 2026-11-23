@@ -189,8 +189,7 @@ func (s *Server) handleCreateResponse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if question.TargetUserID != nil && *question.TargetUserID != user.ID {
-		writeError(w, http.StatusForbidden, "forbidden",
-			"This question is directed to another member")
+		writeError(w, http.StatusNotFound, "not_found", "Question not found")
 		return
 	}
 

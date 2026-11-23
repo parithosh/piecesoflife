@@ -16,6 +16,7 @@
         const statusEl = form.querySelector('[data-suggest-status]');
         const menuEl = form.querySelector('[data-mention-menu]');
         const triggerBtn = form.querySelector('[data-mention-trigger]');
+        const submitBtn = form.querySelector('button[type="submit"]');
         if (!textEl || !statusEl) return;
 
         let members = [];
@@ -25,10 +26,36 @@
             members = [];
         }
 
-        let pickedMember = null; // last member picked via dropdown
+        let pickedMember = null; // explicitly chosen from the @ picker
         let mentionRange = null; // { start, end } in textEl.value
         let filtered = [];
         let activeIdx = 0;
+        let blurTimer = null;
+        let submitting = false;
+        let showingTargetHint = false;
+
+        function escapeRegExp(s) {
+            return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // Unicode-aware boundary so "@Priya's", "@Priya)", "@Priya…", etc.
+        // all match cleanly without swallowing prefixes of longer words.
+        function mentionPatternFor(name, leadingOnly) {
+            const prefix = leadingOnly ? '^' : '(^|\\s)';
+            return new RegExp(prefix + '@' + escapeRegExp(name) + '(?=$|[^\\p{L}\\p{N}])', 'iu');
+        }
+
+        function updateTargetHint() {
+            const res = resolveMention(textEl.value.trim());
+            if (res.target && !res.error) {
+                statusEl.style.color = 'var(--peacock)';
+                statusEl.textContent = `Only ${res.target.name} will answer — read by everyone in The hot seat`;
+                showingTargetHint = true;
+            } else if (showingTargetHint) {
+                statusEl.textContent = '';
+                showingTargetHint = false;
+            }
+        }
 
         function closeMenu() {
             mentionRange = null;
@@ -80,6 +107,7 @@
                 btn.append(ava, label);
                 btn.addEventListener('mousedown', (ev) => {
                     ev.preventDefault();
+                    clearTimeout(blurTimer);
                     pickMember(m);
                 });
                 menuEl.appendChild(btn);
@@ -94,7 +122,7 @@
                 const before = textEl.value.slice(0, mentionRange.start);
                 const after = textEl.value.slice(mentionRange.end);
                 const mention = '@' + member.name;
-                const spacer = after.startsWith(' ') || after.startsWith(',') || after.startsWith('?') ? '' : ' ';
+                const spacer = after.startsWith(' ') || /^[,;.!?')\]—–-]/.test(after) ? '' : ' ';
                 const nextVal = before + mention + spacer + after;
                 const caret = (before + mention + spacer).length;
                 textEl.value = nextVal;
@@ -102,10 +130,21 @@
             }
             pickedMember = member;
             closeMenu();
+            updateTargetHint();
             textEl.focus();
         }
 
+        function syncPickedMember() {
+            if (!pickedMember) return;
+            const name = (pickedMember.name || '').trim();
+            if (!name || !mentionPatternFor(name, false).test(textEl.value)) {
+                pickedMember = null;
+            }
+        }
+
         function detectMention() {
+            syncPickedMember();
+            updateTargetHint();
             if (!members.length || !menuEl) return;
             const pos = textEl.selectionStart;
             if (pos == null || pos !== textEl.selectionEnd) {
@@ -115,7 +154,8 @@
 
             const before = textEl.value.slice(0, pos);
             // Match "@" at start or after whitespace, followed by up to 40 chars
-            // without another "@" or newline.
+            // without another "@" or newline (allows spaces for multi-word names
+            // only while filtering if no member was already finalized).
             const m = before.match(/(^|\s)@([^\s@\n]{0,40})$/);
             if (!m) {
                 closeMenu();
@@ -135,8 +175,9 @@
         textEl.addEventListener('input', detectMention);
         textEl.addEventListener('click', detectMention);
         textEl.addEventListener('blur', () => {
-            // Defer slightly so mousedown on a menu option runs first.
-            setTimeout(closeMenu, 120);
+            clearTimeout(blurTimer);
+            // Defer slightly so mousedown on a menu option or trigger runs first.
+            blurTimer = setTimeout(closeMenu, 120);
         });
 
         textEl.addEventListener('keydown', (ev) => {
@@ -162,7 +203,13 @@
         });
 
         if (triggerBtn && members.length) {
+            // Prevent blur timer from collapsing the menu right after opening.
+            triggerBtn.addEventListener('mousedown', (ev) => {
+                ev.preventDefault();
+                clearTimeout(blurTimer);
+            });
             triggerBtn.addEventListener('click', () => {
+                clearTimeout(blurTimer);
                 textEl.focus();
                 const pos = textEl.selectionStart ?? textEl.value.length;
                 const before = textEl.value.slice(0, pos);
@@ -176,60 +223,107 @@
             });
         }
 
-        function escapeRegExp(s) {
-            return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        }
-
-        // Resolve an inline "@Name" mention anywhere in the question text.
-        // Leading "@Name " is stripped from the stored question text (since
-        // The hot seat already labels it "For Name"), while mid-sentence
-        // mentions stay in prose with the leading "@" dropped.
-        function resolveInlineMention(raw) {
+        // Resolve targeting cleanly without silent misrouting:
+        //  1. If the user explicitly picked a member from the dropdown and
+        //     "@Name" is still present, target that exact member ID.
+        //  2. Otherwise, check only for a leading "@Name" at the start of the
+        //     prompt (longest name first), rejecting ambiguous duplicate names.
+        //  3. If any unresolved "@word" remains in the text (e.g. typo, partial
+        //     multi-word name, or unpicked mid-sentence mention), block submit
+        //     with a clear hint instead of silently broadcasting or misrouting.
+        function resolveMention(raw) {
             if (!members.length) {
-                return { text: raw, target: null };
+                return { text: raw, target: null, error: null };
             }
 
-            const candidates = [];
-            if (pickedMember) candidates.push(pickedMember);
-            const sorted = [...members].sort((a, b) => (b.name || '').length - (a.name || '').length);
-            for (const m of sorted) {
-                if (!pickedMember || m.id !== pickedMember.id) candidates.push(m);
-            }
+            let target = null;
+            let cleaned = raw;
 
-            for (const m of candidates) {
-                const name = (m.name || '').trim();
-                if (!name) continue;
-                const re = new RegExp('(^|\\s)@' + escapeRegExp(name) + '(?=$|[\\s,:;.!?—–-])', 'i');
-                const match = raw.match(re);
-                if (!match) continue;
-
-                const idx = match.index;
-                if (idx === 0) {
-                    const cleaned = raw.slice(match[0].length).replace(/^[\s,:—–-]+/, '').trim();
-                    return { text: cleaned, target: m };
+            if (pickedMember) {
+                const name = (pickedMember.name || '').trim();
+                if (name) {
+                    const m = raw.match(mentionPatternFor(name, false));
+                    if (m) {
+                        target = pickedMember;
+                        if (m.index === 0) {
+                            cleaned = raw.slice(m[0].length).replace(/^[\s,:—–-]+/, '').trim();
+                        } else {
+                            cleaned = (
+                                raw.slice(0, m.index) +
+                                (m[1] || '') + name +
+                                raw.slice(m.index + m[0].length)
+                            ).trim();
+                        }
+                    }
                 }
-
-                // Mid-sentence mention: replace "@Name" with "Name" for clean reading.
-                const cleaned = (
-                    raw.slice(0, idx) +
-                    match[1] + name +
-                    raw.slice(idx + match[0].length)
-                ).trim();
-                return { text: cleaned, target: m };
             }
 
-            return { text: raw, target: null };
+            if (!target && raw.startsWith('@')) {
+                const sorted = [...members].sort((a, b) => (b.name || '').length - (a.name || '').length);
+                const matches = [];
+                let bestLen = 0;
+                for (const m of sorted) {
+                    const name = (m.name || '').trim();
+                    if (!name) continue;
+                    const hit = raw.match(mentionPatternFor(name, true));
+                    if (!hit) continue;
+                    if (name.length > bestLen) {
+                        bestLen = name.length;
+                        matches.length = 0;
+                        matches.push({ member: m, match: hit });
+                    } else if (name.length === bestLen) {
+                        matches.push({ member: m, match: hit });
+                    }
+                }
+                if (matches.length > 1) {
+                    return {
+                        text: raw,
+                        target: null,
+                        error: 'Multiple members share that name — pick one from the @ menu',
+                    };
+                }
+                if (matches.length === 1) {
+                    target = matches[0].member;
+                    cleaned = raw.slice(matches[0].match[0].length).replace(/^[\s,:—–-]+/, '').trim();
+                }
+            }
+
+            // Catch any remaining "@word" mention (typo, partial name, second
+            // @mention, or unpicked mid-sentence @mention) so nothing is
+            // silently sent to the wrong audience.
+            if (/(^|\s)@[\p{L}\p{N}_]/u.test(cleaned)) {
+                return {
+                    text: cleaned,
+                    target: null,
+                    error: target
+                        ? 'You can only put one person in The hot seat per question'
+                        : 'Pick a person from the @ menu, or remove the @ to ask everyone',
+                };
+            }
+
+            return { text: cleaned, target, error: null };
         }
 
         form.addEventListener('submit', async function (ev) {
             ev.preventDefault();
+            if (submitting) return;
             closeMenu();
 
-            const raw = textEl.value.trim();
+            const submittedValue = textEl.value;
+            const raw = submittedValue.trim();
             if (!raw) return;
 
-            const resolved = resolveInlineMention(raw);
+            syncPickedMember();
+            const resolved = resolveMention(raw);
+            if (resolved.error) {
+                showingTargetHint = false;
+                statusEl.style.color = 'var(--sindoor)';
+                statusEl.textContent = resolved.error;
+                textEl.focus();
+                return;
+            }
             if (!resolved.text) {
+                showingTargetHint = false;
                 statusEl.style.color = 'var(--sindoor)';
                 statusEl.textContent = resolved.target
                     ? `Add a question after @${resolved.target.name}`
@@ -238,6 +332,9 @@
                 return;
             }
 
+            submitting = true;
+            if (submitBtn) submitBtn.disabled = true;
+            showingTargetHint = false;
             const csrf = getCSRFToken();
             statusEl.style.color = 'var(--ink-soft)';
             statusEl.textContent = 'Sending…';
@@ -259,9 +356,11 @@
                 const data = await res.json().catch(() => ({}));
 
                 if (res.ok) {
-                    textEl.value = '';
+                    if (textEl.value === submittedValue) {
+                        textEl.value = '';
+                        pickedMember = null;
+                    }
                     const sentFor = resolved.target ? resolved.target.name : null;
-                    pickedMember = null;
                     statusEl.style.color = 'var(--peacock)';
                     statusEl.textContent = sentFor
                         ? `Sent for ${sentFor} — it'll be in The hot seat next round ✓`
@@ -273,6 +372,9 @@
             } catch {
                 statusEl.style.color = 'var(--sindoor)';
                 statusEl.textContent = 'Network error';
+            } finally {
+                submitting = false;
+                if (submitBtn) submitBtn.disabled = false;
             }
         });
     }

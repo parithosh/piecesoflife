@@ -241,11 +241,6 @@ func (s *Server) SendReminderForIssue(
 		return nil
 	}
 
-	questionTexts := make([]string, 0, len(questions))
-	for _, q := range questions {
-		questionTexts = append(questionTexts, q.Text)
-	}
-
 	monthStr := formatDate(issue.OpensAt)
 	daysLeft := int(time.Until(issue.Deadline).Hours() / 24)
 	if daysLeft < 0 {
@@ -307,6 +302,7 @@ func (s *Server) SendReminderForIssue(
 		authURL := fmt.Sprintf("%s/issues/%d/respond?auth=%s",
 			s.config.BaseURL, issueID, raw)
 
+		questionTexts := emailQuestionTextsForUser(questions, user.ID)
 		body := s.renderReminderEmail(
 			settings.LoopName, user.Name, monthStr,
 			questionTexts, authURL, isFinal, daysLeft,
@@ -678,6 +674,12 @@ func (s *Server) openIssueForCollectingWithTransition(
 	freshIssue, err := s.store.GetIssueByID(ctx, issue.ID)
 	if err != nil {
 		return fmt.Errorf("checking issue %d question curation: %w", issue.ID, err)
+	}
+
+	if err := s.store.DeleteInactiveDirectedQuestions(ctx, issue.GroupID, issue.ID); err != nil {
+		s.logger.WarnContext(ctx, "Failed to prune inactive directed questions on issue open",
+			slog.Int64("issue_id", issue.ID),
+			slog.String("error", err.Error()))
 	}
 
 	if freshIssue.QuestionsCuratedAt == nil {

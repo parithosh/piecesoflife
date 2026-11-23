@@ -72,6 +72,23 @@ func (s *Store) PrepareDraftQuestions(
 			issueID, ErrIssueQuestionsNotCuratable)
 	}
 
+	// Drop directed suggestions whose targeted member left or was deactivated
+	// before the round was curated so nobody gets stuck with an unanswerable
+	// hot-seat prompt.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM questions
+		 WHERE issue_id = ? AND target_user_id IS NOT NULL
+		   AND NOT EXISTS (
+		       SELECT 1 FROM memberships m
+		       JOIN users u ON u.id = m.user_id
+		       WHERE m.group_id = ? AND m.user_id = questions.target_user_id
+		         AND m.is_active = 1 AND u.is_active = 1
+		   )`,
+		issueID, groupID,
+	); err != nil {
+		return fmt.Errorf("pruning inactive directed questions for issue %d: %w", issueID, err)
+	}
+
 	var (
 		totalCount  int
 		sharedCount int
@@ -185,11 +202,31 @@ func (s *Store) PrepareDraftQuestions(
 	return nil
 }
 
+// DeleteInactiveDirectedQuestions removes directed questions on issueID whose
+// targeted member is no longer an active member of groupID.
+func (s *Store) DeleteInactiveDirectedQuestions(
+	ctx context.Context, groupID, issueID int64,
+) error {
+	if _, err := s.write.ExecContext(ctx,
+		`DELETE FROM questions
+		 WHERE issue_id = ? AND target_user_id IS NOT NULL
+		   AND NOT EXISTS (
+		       SELECT 1 FROM memberships m
+		       JOIN users u ON u.id = m.user_id
+		       WHERE m.group_id = ? AND m.user_id = questions.target_user_id
+		         AND m.is_active = 1 AND u.is_active = 1
+		   )`,
+		issueID, groupID,
+	); err != nil {
+		return fmt.Errorf("pruning inactive directed questions for issue %d: %w", issueID, err)
+	}
+	return nil
+}
+
 // CreateSuggestedQuestion inserts a member suggestion only while the issue is
-// an upcoming, uncurated draft. The state predicate and insert share one SQL
-// statement so curation cannot race a late, unreviewed suggestion into the set.
-// When targetUserID is non-nil the question is directed exclusively to that
-// circle member.
+// an upcoming, uncurated draft. The state predicate, active-target check, and
+// insert share one SQL statement so curation or member deactivation cannot
+// race a stale suggestion into the set.
 func (s *Store) CreateSuggestedQuestion(
 	ctx context.Context, groupID, issueID, userID int64,
 	text string, category *string, targetUserID *int64,
@@ -203,8 +240,15 @@ func (s *Store) CreateSuggestedQuestion(
 		                  FROM questions q WHERE q.issue_id = i.id), 0)
 		 FROM issues i
 		 WHERE i.id = ? AND i.group_id = ? AND i.status = 'draft'
-		   AND i.opens_at > ? AND i.questions_curated_at IS NULL`,
+		   AND i.opens_at > ? AND i.questions_curated_at IS NULL
+		   AND (? IS NULL OR EXISTS (
+		       SELECT 1 FROM memberships m
+		       JOIN users u ON u.id = m.user_id
+		       WHERE m.group_id = i.group_id AND m.user_id = ?
+		         AND m.is_active = 1 AND u.is_active = 1
+		   ))`,
 		text, category, userID, targetUserID, issueID, groupID, now,
+		targetUserID, targetUserID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("creating suggested question: %w", err)

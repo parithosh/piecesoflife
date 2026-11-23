@@ -16,12 +16,15 @@ import (
 
 // TestDirectedQuestionsEndToEnd exercises the full @mention question lifecycle:
 //   - suggestion submission from the landing page (archive) and validation of
-//     target_user_id membership
+//     target_user_id membership, self-targeting, and max length
 //   - directed questions do not shrink the circle-wide QuestionsPerIssue target
-//   - only the targeted member sees and may answer the directed prompt
-//   - published issues aggregate all directed Q&As into a single "People's
-//     choice" spread positioned directly below Ramble ("From the notebooks"),
-//     preserving standard comments on each answer.
+//   - deactivated targets are pruned before opening
+//   - only the targeted member sees (including via GET /api/issues/{id} and
+//     emails) and may answer the directed prompt; non-admins don't see
+//     submitted_by
+//   - published issues aggregate answered directed Q&As into a single
+//     "The hot seat" spread directly below Ramble ("From the notebooks"),
+//     hiding unanswered directed prompts and preserving standard comments.
 func TestDirectedQuestionsEndToEnd(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
@@ -92,7 +95,27 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 	))
 	assert.Equal(t, http.StatusBadRequest, badTarget.Code, badTarget.Body.String())
 
-	// 3. Bob directs two questions: one to Priya and one to Admin.
+	// Self-targeting and over-500-char suggestions are rejected.
+	selfTarget := postJSON(bob.ID, "/api/questions/submit", fmt.Sprintf(
+		`{"issue_id":%d,"text":"For myself?","target_user_id":%d}`, draftID, bob.ID,
+	))
+	assert.Equal(t, http.StatusBadRequest, selfTarget.Code)
+
+	tooLong := postJSON(bob.ID, "/api/questions/submit", fmt.Sprintf(
+		`{"issue_id":%d,"text":%q}`, draftID, strings.Repeat("a", 501),
+	))
+	assert.Equal(t, http.StatusBadRequest, tooLong.Code)
+
+	// Directed suggestion for a member who gets deactivated before prepare must
+	// be pruned automatically so no orphaned hot-seat prompt survives.
+	leaving := env.createUser(t, "Leaving", "leaving@example.com")
+	rrLeaving := postJSON(bob.ID, "/api/questions/submit", fmt.Sprintf(
+		`{"issue_id":%d,"text":"Question for leaving member?","target_user_id":%d}`, draftID, leaving.ID,
+	))
+	require.Equal(t, http.StatusCreated, rrLeaving.Code, rrLeaving.Body.String())
+	require.NoError(t, env.store.SetMembershipActive(ctx, 1, leaving.ID, false))
+
+	// 3. Bob directs a question to Priya; Priya directs one to Admin (left unanswered).
 	rrQ1 := postJSON(bob.ID, "/api/questions/submit", fmt.Sprintf(
 		`{"issue_id":%d,"text":"How was your Lisbon trip?","target_user_id":%d}`, draftID, priya.ID,
 	))
@@ -115,9 +138,9 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 	))
 	require.Equal(t, http.StatusCreated, rrQ2.Code, rrQ2.Body.String())
 
-	// 4. Admin prepares the draft: directed questions do NOT steal shared slots,
-	//    so we get 2 shared (target=2) + 2 directed = 4 total questions, and
-	//    curation closes the archive page's suggestion box.
+	// 4. Admin prepares the draft: leaving member's prompt is pruned, directed
+	//    questions do NOT steal shared slots (4 shared + 2 active directed = 6),
+	//    and curation closes the archive page's suggestion box.
 	prepRR := postJSON(admin.ID, fmt.Sprintf("/api/issues/%d/questions/prepare", draftID), `{}`)
 	require.Equal(t, http.StatusOK, prepRR.Code, prepRR.Body.String())
 
@@ -126,6 +149,7 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 	sharedCount, directedCount := 0, 0
 	var sharedQID int64
 	for _, q := range allQs {
+		assert.NotEqual(t, "Question for leaving member?", q.Text)
 		if q.TargetUserID == nil {
 			sharedCount++
 			if sharedQID == 0 {
@@ -138,6 +162,18 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 	assert.Equal(t, 4, sharedCount, "directed questions must not shrink the circle-wide target (3 defaults + 1 bank)")
 	assert.Equal(t, 2, directedCount)
 
+	// Per-recipient email helper never leaks another member's directed prompt.
+	priyaEmailQs := emailQuestionTextsForUser(allQs, priya.ID)
+	assert.Contains(t, priyaEmailQs, "[Just for you] How was your Lisbon trip?")
+	assert.NotContains(t, priyaEmailQs, "Best coffee spot near you?")
+	assert.NotContains(t, priyaEmailQs, "[Just for you] Best coffee spot near you?")
+	bobEmailQs := emailQuestionTextsForUser(allQs, bob.ID)
+	assert.Len(t, bobEmailQs, 4)
+	for _, txt := range bobEmailQs {
+		assert.NotContains(t, txt, "Lisbon")
+		assert.NotContains(t, txt, "coffee spot")
+	}
+
 	archiveAfterCurate := getPage(bob.ID, "/issues")
 	require.Equal(t, http.StatusOK, archiveAfterCurate.Code)
 	assert.Contains(t, archiveAfterCurate.Body.String(), "Coming up")
@@ -146,6 +182,19 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 
 	// 5. Flip the draft to collecting and check per-member visibility & guards.
 	require.NoError(t, env.store.SetIssueStatus(ctx, draftID, "collecting"))
+
+	// GET /api/issues/{id} hides other members' directed questions and strips submitted_by.
+	bobIssueAPI := getPage(bob.ID, fmt.Sprintf("/api/issues/%d", draftID))
+	require.Equal(t, http.StatusOK, bobIssueAPI.Code)
+	assert.NotContains(t, bobIssueAPI.Body.String(), "How was your Lisbon trip?")
+	assert.NotContains(t, bobIssueAPI.Body.String(), "Best coffee spot near you?")
+	assert.NotContains(t, bobIssueAPI.Body.String(), fmt.Sprintf(`"submitted_by":%d`, bob.ID))
+
+	priyaIssueAPI := getPage(priya.ID, fmt.Sprintf("/api/issues/%d", draftID))
+	require.Equal(t, http.StatusOK, priyaIssueAPI.Code)
+	assert.Contains(t, priyaIssueAPI.Body.String(), "How was your Lisbon trip?")
+	assert.NotContains(t, priyaIssueAPI.Body.String(), "Best coffee spot near you?")
+	assert.NotContains(t, priyaIssueAPI.Body.String(), fmt.Sprintf(`"submitted_by":%d`, bob.ID))
 
 	// Priya sees the 4 shared prompts + her 1 directed prompt (5 total), NOT Admin's directed prompt.
 	priyaRespond := getPage(priya.ID, fmt.Sprintf("/issues/%d/respond", draftID))
@@ -164,9 +213,9 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 	assert.NotContains(t, bobBody, "How was your Lisbon trip?")
 	assert.NotContains(t, bobBody, "Best coffee spot near you?")
 
-	// API guard: Bob gets 403 trying to create a response to Priya's directed question.
+	// API guard: Bob gets 404 trying to create a response to Priya's directed question.
 	bobCreate := postJSON(bob.ID, "/api/responses", fmt.Sprintf(`{"question_id":%d}`, priyaQID))
-	assert.Equal(t, http.StatusForbidden, bobCreate.Code)
+	assert.Equal(t, http.StatusNotFound, bobCreate.Code)
 
 	// Priya CAN answer her directed question and a shared question.
 	priyaCreate := postJSON(priya.ID, "/api/responses", fmt.Sprintf(`{"question_id":%d}`, priyaQID))
@@ -220,7 +269,8 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 
 	assert.Contains(t, pubBody, "The hot seat")
 	assert.Contains(t, pubBody, "How was your Lisbon trip?")
-	assert.Contains(t, pubBody, "Best coffee spot near you?")
+	assert.NotContains(t, pubBody, "Best coffee spot near you?",
+		"unanswered directed questions must not be published in The hot seat")
 	assert.Contains(t, pubBody, "Pastel de nata every morning by the river.")
 	assert.Contains(t, pubBody, fmt.Sprintf(`data-response-id="%d"`, createdResp.ID))
 	assert.Contains(t, pubBody, `data-comment-count="1"`, "comments panel on directed answer shows comment count")
