@@ -144,7 +144,7 @@
 {{define "scripts"}}
 <script src="/static/recorder.js?v={{assetVersion}}"></script>
 <script src="/static/editor.js?v={{assetVersion}}"></script>
-<script>
+<script nonce="{{.CSPNonce}}">
 (function () {
     // "Today" is the browser's day, not the server's — the page you opened
     // is the page you write on.

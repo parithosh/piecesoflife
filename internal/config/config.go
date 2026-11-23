@@ -122,6 +122,10 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if !c.DevMode && len(c.SessionSecret) < 32 {
+		return fmt.Errorf("SESSION_SECRET must be at least 32 characters in production (got %d)", len(c.SessionSecret))
+	}
+
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("PORT must be between 1 and 65535")
 	}

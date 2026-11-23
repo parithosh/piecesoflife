@@ -457,7 +457,7 @@
 {{end}}
 
 {{define "scripts"}}
-<script>
+<script nonce="{{.CSPNonce}}">
 // Who's reading — social.js shows edit affordances on this member's own
 // comments.
 {{if .User}}window.POLUserID = {{.User.ID}};{{end}}

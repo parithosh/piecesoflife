@@ -31,9 +31,9 @@ const (
 	maxSubmissionWindowDays = 21
 )
 
-// emailCTATokenTTL is how long the magic-link tokens embedded in outgoing
-// emails stay valid.
-const emailCTATokenTTL = 30 * 24 * time.Hour
+// emailCTATokenTTL is how long the single-use magic-link tokens embedded in
+// outgoing member emails stay valid before auto-resending a fresh login link.
+const emailCTATokenTTL = 7 * 24 * time.Hour
 
 // minReminderLead is the minimum head start a reminder needs to be worth
 // queueing. It keeps short windows from firing a reminder right after the
@@ -424,18 +424,9 @@ func (s *Server) SendAdminSummaryForIssue(
 				"admin_summary", "pending", nil)
 		}
 
-		raw, err := s.mintEmailCTAToken(ctx, admin.ID)
-		if err != nil {
-			errStr := err.Error()
-			if logID > 0 {
-				_ = s.store.UpdateEmailLog(ctx, logID, "failed", nil, &errStr)
-			}
-			s.logger.ErrorContext(ctx, "Failed to mint admin summary token",
-				slog.Int64("user_id", admin.ID),
-				slog.String("error", err.Error()))
-			continue
-		}
-
+		// Admin summary emails omit an auto-login ?auth= token: admin
+		// accounts have elevated privileges and forwarded/archived summary
+		// emails should never carry a bearer credential to /admin.
 		body := s.renderEmail("admin_summary.html", map[string]any{
 			"LoopName":      settings.LoopName,
 			"RecipientName": admin.Name,
@@ -444,8 +435,8 @@ func (s *Server) SendAdminSummaryForIssue(
 			"Responded":     responded,
 			"Waiting":       waiting,
 			"CTA": map[string]any{
-				"URL": fmt.Sprintf("%s/admin?auth=%s&g=%d",
-					s.config.BaseURL, raw, issue.GroupID),
+				"URL": fmt.Sprintf("%s/admin?g=%d",
+					s.config.BaseURL, issue.GroupID),
 				"Label": "Open the Loom",
 			},
 		})

@@ -26,7 +26,7 @@
 
 {{define "scripts"}}
 <script src="/static/lightbox.js?v={{assetVersion}}"></script>
-<script>
+<script nonce="{{.CSPNonce}}">
 const MONTHS = ['January','February','March','April','May','June',
     'July','August','September','October','November','December'];
 const VIEW_KEY = 'pol-album-view';

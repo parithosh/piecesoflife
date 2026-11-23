@@ -20,16 +20,24 @@
             </header>
 
             {{if .Error}}
+            {{if or (eq .Error "expired_resent") (eq .Error "used_resent")}}
+            <div class="pl-alert pl-alert--success" role="alert">
+                {{if eq .Error "expired_resent"}}That sign-in link has expired — we've just sent a fresh link to your email. Check your inbox.
+                {{else}}That sign-in link has already been used — we've just sent a fresh link to your email. Check your inbox.
+                {{end}}
+            </div>
+            {{else}}
             <div class="pl-alert pl-alert--error" role="alert">
-                {{if eq .Error "invalid"}}That link is invalid. Please request a new one.
-                {{else if eq .Error "used"}}That link has already been used. Please request a new one.
-                {{else if eq .Error "expired"}}Your link expired — we've sent you a fresh one.
+                {{if eq .Error "invalid"}}That link is invalid. Please request a new one below.
+                {{else if eq .Error "used"}}That link has already been used. Please request a new one below.
+                {{else if eq .Error "expired"}}That link has expired. Please request a new one below.
                 {{else if eq .Error "email"}}Please enter a valid email address.
                 {{else if eq .Error "rate_limited"}}Too many login attempts. Please wait a few minutes and try again.
                 {{else if eq .Error "server"}}Something went wrong on our end. Please try again.
-                {{else}}{{.Error}}
+                {{else}}Unable to sign in with that link. Please request a new one below.
                 {{end}}
             </div>
+            {{end}}
             {{end}}
 
             {{if .Success}}
@@ -58,7 +66,7 @@
 {{end}}
 
 {{define "scripts"}}
-<script>
+<script nonce="{{.CSPNonce}}">
 document.getElementById('login-form').addEventListener('submit', async function(e) {
     e.preventDefault();
     const btn = document.getElementById('login-btn');

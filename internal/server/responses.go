@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,8 +27,9 @@ import (
 )
 
 const (
-	maxUploadBytes     = 1 << 30  // 1 GB
-	maxMultipartMemory = 32 << 20 // 32 MB
+	maxUploadBytes      = 1 << 30  // 1 GB (video / audio)
+	maxPhotoUploadBytes = 30 << 20 // 30 MB (photos)
+	maxMultipartMemory  = 32 << 20 // 32 MB
 	// maxMediaBlocks caps uploads per response, per media type — 100 each
 	// of photos, audio, and video.
 	maxMediaBlocks    = 100
@@ -327,6 +329,21 @@ func (s *Server) handleAddBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Type == "link" {
+		if req.LinkURL == nil {
+			writeValidationError(w, map[string]string{"link_url": "A valid http(s) URL is required"})
+			return
+		}
+
+		cleaned, ok := validateHTTPURL(*req.LinkURL)
+		if !ok {
+			writeValidationError(w, map[string]string{"link_url": "Link URL must start with http:// or https://"})
+			return
+		}
+
+		req.LinkURL = &cleaned
+	}
+
 	blockID, err := s.store.CreateBlock(
 		r.Context(), id, req.Type,
 		req.Content, nil, req.Caption, req.LinkURL,
@@ -543,6 +560,12 @@ func (s *Server) receiveMediaUpload(
 
 	defer file.Close()
 
+	if blockType == photoBlockType && header.Size > maxPhotoUploadBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "too_large",
+			"That photo is too large (30 MB max)")
+		return "", "", false
+	}
+
 	sniff := make([]byte, 512)
 	n, readErr := file.Read(sniff)
 	if readErr != nil && readErr != io.EOF {
@@ -561,14 +584,12 @@ func (s *Server) receiveMediaUpload(
 		return "", "", false
 	}
 
-	ext := extensionFromContentType(contentType)
 	now := time.Now()
 	year := strconv.Itoa(now.Year())
 	month := fmt.Sprintf("%02d", int(now.Month()))
 
 	randomID := auth.GenerateRandomString(8)
 	safeName := sanitizeFilename(strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)))
-	filename := fmt.Sprintf("%s_%s%s", randomID, safeName, ext)
 
 	dir := filepath.Join(s.config.UploadPath, year, month)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -580,6 +601,28 @@ func (s *Server) receiveMediaUpload(
 		return "", "", false
 	}
 
+	// Photos go through the metadata-stripping, bomb-checked re-encode path.
+	if blockType == photoBlockType {
+		dstStem := filepath.Join(dir, fmt.Sprintf("%s_%s", randomID, safeName))
+		filePath, finalType, err := s.storeUploadedPhoto(r.Context(), file, dstStem)
+		if err != nil {
+			var bad badImageError
+			if errors.As(err, &bad) {
+				writeError(w, http.StatusUnprocessableEntity, "unsupported_image", bad.msg)
+				return "", "", false
+			}
+			s.logger.ErrorContext(r.Context(), "Failed to store photo upload",
+				slog.String("error", err.Error()),
+			)
+			writeError(w, http.StatusInternalServerError, "server_error", "Failed to save uploaded photo")
+			return "", "", false
+		}
+
+		return filePath, finalType, true
+	}
+
+	ext := extensionFromContentType(contentType)
+	filename := fmt.Sprintf("%s_%s%s", randomID, safeName, ext)
 	filePath := filepath.Join(dir, filename)
 
 	dst, err := os.Create(filePath) //nolint:gosec // filePath is constructed from sanitized parts
@@ -594,6 +637,7 @@ func (s *Server) receiveMediaUpload(
 
 	if _, err := io.Copy(dst, file); err != nil {
 		_ = dst.Close()
+		_ = os.Remove(filePath)
 		s.logger.ErrorContext(r.Context(), "Failed to write upload file",
 			slog.String("path", filePath),
 			slog.String("error", err.Error()),
@@ -604,31 +648,13 @@ func (s *Server) receiveMediaUpload(
 
 	// The copy must be flushed before ffmpeg reads the file.
 	if err := dst.Close(); err != nil {
+		_ = os.Remove(filePath)
 		s.logger.ErrorContext(r.Context(), "Failed to flush upload file",
 			slog.String("path", filePath),
 			slog.String("error", err.Error()),
 		)
 		writeError(w, http.StatusInternalServerError, "server_error", "Failed to write uploaded file")
 		return "", "", false
-	}
-
-	if contentType == "image/heic" {
-		jpegPath, err := s.transcodeHEIC(r.Context(), filePath)
-		if err != nil {
-			_ = os.Remove(filePath)
-			s.logger.ErrorContext(r.Context(), "Failed to transcode HEIC upload",
-				slog.String("path", filePath),
-				slog.String("error", err.Error()),
-			)
-			writeError(w, http.StatusUnprocessableEntity, "conversion_failed",
-				"Couldn't convert this photo — please try again, "+
-					"or switch the camera to JPEG (\"Most compatible\")")
-
-			return "", "", false
-		}
-
-		filePath = jpegPath
-		contentType = "image/jpeg"
 	}
 
 	s.normalizeWebM(r.Context(), filePath)
@@ -1173,6 +1199,10 @@ func isAllowedUploadType(blockType, contentType string) bool {
 	}
 }
 
+// normalizedUploadContentType classifies an uploaded file strictly from its
+// sniffed magic bytes — never trusting the client-supplied Content-Type
+// header alone. The declared header is only used as a tie-breaker when a
+// container format can carry either audio or video (e.g. WebM, MP4).
 func normalizedUploadContentType(blockType, headerContentType string, sniff []byte) string {
 	detected := http.DetectContentType(sniff)
 	if blockType == photoBlockType {
@@ -1183,15 +1213,85 @@ func normalizedUploadContentType(blockType, headerContentType string, sniff []by
 		return detected
 	}
 
-	declared := strings.ToLower(strings.TrimSpace(strings.Split(headerContentType, ";")[0]))
-	if isAllowedUploadType(blockType, declared) {
-		return declared
-	}
-	if isAllowedUploadType(blockType, detected) {
-		return detected
+	// Sniff container magic bytes directly so a crafted non-media file (e.g.
+	// an HLS playlist or text file) cannot masquerade as audio/video via a
+	// forged multipart Content-Type header.
+	switch blockType {
+	case audioBlockType:
+		switch {
+		case isEBML(sniff):
+			return "audio/webm"
+		case isOgg(sniff):
+			return "audio/ogg"
+		case isWAVE(sniff):
+			return "audio/wav"
+		case isMP3(sniff):
+			return "audio/mpeg"
+		case isISOBMFFAudioVideo(sniff):
+			return "audio/mp4"
+		case isAllowedAudioType(detected):
+			return detected
+		}
+	case videoBlockType:
+		switch {
+		case isEBML(sniff):
+			return "video/webm"
+		case isQuickTime(sniff):
+			return "video/quicktime"
+		case isISOBMFFAudioVideo(sniff):
+			return "video/mp4"
+		case isAllowedVideoType(detected):
+			return detected
+		}
 	}
 
-	return declared
+	_ = headerContentType
+
+	return "application/octet-stream"
+}
+
+// isEBML reports whether sniff starts with the Matroska/WebM EBML magic bytes.
+func isEBML(sniff []byte) bool {
+	return len(sniff) >= 4 &&
+		sniff[0] == 0x1A && sniff[1] == 0x45 && sniff[2] == 0xDF && sniff[3] == 0xA3
+}
+
+func isOgg(sniff []byte) bool {
+	return len(sniff) >= 4 && string(sniff[:4]) == "OggS"
+}
+
+func isWAVE(sniff []byte) bool {
+	return len(sniff) >= 12 && string(sniff[:4]) == "RIFF" && string(sniff[8:12]) == "WAVE"
+}
+
+func isMP3(sniff []byte) bool {
+	if len(sniff) >= 3 && string(sniff[:3]) == "ID3" {
+		return true
+	}
+
+	// MPEG audio frame sync: 11 set bits followed by non-reserved version & layer.
+	return len(sniff) >= 2 && sniff[0] == 0xFF && (sniff[1]&0xE0) == 0xE0 && (sniff[1]&0x06) != 0x00
+}
+
+func isQuickTime(sniff []byte) bool {
+	return len(sniff) >= 12 && string(sniff[4:8]) == "ftyp" && string(sniff[8:12]) == "qt  "
+}
+
+// isISOBMFFAudioVideo reports whether sniff is an ISO-BMFF container (MP4/M4A)
+// excluding HEIF/AVIF still-image brands.
+func isISOBMFFAudioVideo(sniff []byte) bool {
+	if len(sniff) < 12 || string(sniff[4:8]) != "ftyp" || isHEIF(sniff) {
+		return false
+	}
+
+	major := string(sniff[8:12])
+	switch major {
+	case "isom", "iso2", "iso5", "iso6", "mp41", "mp42", "avc1",
+		"M4A ", "M4B ", "M4V ", "mp71", "dash", "3gp4", "3gp5", "3gp6", "qt  ":
+		return true
+	}
+
+	return false
 }
 
 // isHEIF reports whether sniffed upload bytes are an ISO-BMFF file whose
@@ -1274,4 +1374,56 @@ func sanitizeFilename(name string) string {
 	}
 
 	return result
+}
+
+const maxURLBytes = 2048
+
+// validateHTTPURL verifies raw is a well-formed http:// or https:// URL with
+// a non-empty host and bounded length.
+func validateHTTPURL(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || len(trimmed) > maxURLBytes {
+		return "", false
+	}
+
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return "", false
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if (scheme != "http" && scheme != "https") || u.Host == "" {
+		return "", false
+	}
+
+	return trimmed, true
+}
+
+// validateAvatarURL accepts either an https:// URL (http:// also allowed in
+// devMode) or a clean same-origin /uploads/... path.
+func validateAvatarURL(raw string, devMode bool) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", true
+	}
+
+	if len(trimmed) > maxURLBytes {
+		return "", false
+	}
+
+	if strings.HasPrefix(trimmed, "/uploads/") && !strings.Contains(trimmed, "..") {
+		return trimmed, true
+	}
+
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "https" || (devMode && scheme == "http") {
+		return trimmed, true
+	}
+
+	return "", false
 }

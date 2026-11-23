@@ -39,10 +39,11 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       LOG_FORMAT: "json"
     volumes:
-      # Host bind mount: the directory containing this compose file is
-      # mounted as /data, so the database lands in ./db and uploads in
-      # ./uploads. The container runs as a non-root user (uid 100), so the
-      # app must be able to write here:
+      # Mount only the database and uploads subdirectories (never the project
+      # root containing .env) so the container only sees its own data. The
+      # container runs as a non-root user (uid 100), so create and chown both
+      # directories first:
       #   mkdir -p db uploads && chown -R 100:101 db uploads
-      - ./:/data
+      - ./db:/data/db
+      - ./uploads:/data/uploads
     restart: unless-stopped

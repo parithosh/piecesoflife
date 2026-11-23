@@ -92,6 +92,22 @@ func (s *Store) ConsumeAuthToken(ctx context.Context, id int64) error {
 	return nil
 }
 
+// RevokeAuthTokensForUser marks all unconsumed auth tokens for a user as
+// consumed so outstanding email CTA or login links can no longer mint a
+// session directly (e.g. after logout). Keeping the rows with consumed_at
+// stamped lets the server recognize a stale click and auto-send a fresh link.
+func (s *Store) RevokeAuthTokensForUser(ctx context.Context, userID int64) error {
+	_, err := s.write.ExecContext(ctx,
+		`UPDATE auth_tokens SET consumed_at = CURRENT_TIMESTAMP
+		 WHERE user_id = ? AND consumed_at IS NULL`, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("revoking auth tokens for user %d: %w", userID, err)
+	}
+
+	return nil
+}
+
 // CleanupExpiredTokens deletes consumed or expired auth tokens.
 func (s *Store) CleanupExpiredTokens(ctx context.Context) (int64, error) {
 	// Login attempts only matter for the one-hour rate window; a day of
@@ -103,9 +119,13 @@ func (s *Store) CleanupExpiredTokens(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("cleaning up login attempts: %w", err)
 	}
 
+	// Keep recently consumed/expired tokens for 7 days so a member clicking
+	// an old email link after logout or expiry is still recognized and sent
+	// a fresh login link automatically, while purging older rows daily.
 	result, err := s.write.ExecContext(ctx,
 		`DELETE FROM auth_tokens
-		 WHERE consumed_at IS NOT NULL OR expires_at < CURRENT_TIMESTAMP`,
+		 WHERE (consumed_at IS NOT NULL AND consumed_at < datetime('now', '-7 days'))
+		    OR expires_at < datetime('now', '-7 days')`,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("cleaning up expired tokens: %w", err)

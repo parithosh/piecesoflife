@@ -26,6 +26,7 @@ func TestCommentEditPermissions(t *testing.T) {
 
 	respID, err := env.store.CreateResponse(ctx, meera.ID, questionIDs[0])
 	require.NoError(t, err, "create meera's response")
+	require.NoError(t, env.store.SubmitResponse(ctx, respID))
 
 	send := func(userID int64, method, target, body string) *http.Response {
 		t.Helper()

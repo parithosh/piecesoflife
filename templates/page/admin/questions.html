@@ -52,7 +52,7 @@
 {{end}}
 
 {{define "scripts"}}
-<script>
+<script nonce="{{.CSPNonce}}">
 
 document.getElementById('add-q-btn').addEventListener('click', async () => {
     const text = prompt('Question text:');

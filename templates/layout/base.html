@@ -21,7 +21,7 @@
     <style id="pl-theme">:root{ {{- .CSS -}} }</style>
     {{end}}
 
-    <script>
+    <script nonce="{{.CSPNonce}}">
     /* Canonical CSRF helpers (double-submit cookie) — defined in <head> so
        every page script and inline handler can rely on them. */
     function getCSRFToken() {
@@ -186,7 +186,7 @@
         {{block "content" .}}{{end}}
     </main>
 
-    <script>
+    <script nonce="{{.CSPNonce}}">
     /* Loop switcher: pick a Loop, then reload from the top of the new one. */
     (function () {
         var switcher = document.getElementById('loop-switcher');
@@ -237,7 +237,7 @@
         updateFade();
     })();
     </script>
-    <script type="speculationrules">
+    <script type="speculationrules" nonce="{{.CSPNonce}}">
     {
         "prefetch": [{
             "where": { "and": [
@@ -252,7 +252,7 @@
     }
     </script>
     <script src="/static/oat.js?v={{assetVersion}}"></script>
-    <script>
+    <script nonce="{{.CSPNonce}}">
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
             navigator.serviceWorker.register('/static/sw.js?v={{assetVersion}}').catch(function() {});

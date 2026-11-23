@@ -60,7 +60,7 @@
                     {{if eq .Type "text"}}
                         {{if .Content}}<p>{{.Content}}</p>{{end}}
                     {{else if eq .Type "photo"}}
-                        {{$src := mementoFileURL $.Response.ID .FilePath}}
+                        {{$src := mementoFileURL $.Response.ShareToken .FilePath}}
                         <figure class="pl-memento-photo{{if .IsCovered}} covered-photo{{end}}"
                                 data-lightbox
                                 data-lightbox-src="{{$src}}"
@@ -86,7 +86,7 @@
                             {{end}}
                         </figure>
                     {{else if eq .Type "audio"}}
-                        {{$src := mementoFileURL $.Response.ID .FilePath}}
+                        {{$src := mementoFileURL $.Response.ShareToken .FilePath}}
                         <figure class="pl-memento-media">
                             <audio controls preload="metadata">
                                 <source src="{{$src}}" {{if .Content}}type="{{.Content}}"{{end}}>
@@ -94,7 +94,7 @@
                             <figcaption>Audio recording</figcaption>
                         </figure>
                     {{else if eq .Type "video"}}
-                        {{$src := mementoFileURL $.Response.ID .FilePath}}
+                        {{$src := mementoFileURL $.Response.ShareToken .FilePath}}
                         <figure class="pl-memento-media">
                             <video controls preload="metadata" playsinline>
                                 <source src="{{$src}}" {{if .Content}}type="{{.Content}}"{{end}}>

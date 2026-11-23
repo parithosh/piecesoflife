@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -18,6 +20,7 @@ type Response struct {
 	QuestionID int64     `json:"question_id"`
 	IsDraft    bool      `json:"is_draft"`
 	Version    int       `json:"version"`
+	ShareToken string    `json:"share_token"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -68,10 +71,17 @@ type MemberProgress struct {
 func (s *Store) CreateResponse(
 	ctx context.Context, userID, questionID int64,
 ) (int64, error) {
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return 0, fmt.Errorf("generating share token: %w", err)
+	}
+
+	shareToken := hex.EncodeToString(tokenBytes)
+
 	result, err := s.write.ExecContext(ctx,
-		`INSERT INTO responses (user_id, question_id)
-		 VALUES (?, ?)`,
-		userID, questionID,
+		`INSERT INTO responses (user_id, question_id, share_token)
+		 VALUES (?, ?, ?)`,
+		userID, questionID, shareToken,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("creating response: %w", err)
@@ -93,12 +103,35 @@ func (s *Store) GetResponseByID(
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT id, user_id, question_id, is_draft, version,
-		        created_at, updated_at
+		        share_token, created_at, updated_at
 		 FROM responses WHERE id = ?`, id,
 	).Scan(&r.ID, &r.UserID, &r.QuestionID, &r.IsDraft,
-		&r.Version, &r.CreatedAt, &r.UpdatedAt)
+		&r.Version, &r.ShareToken, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting response %d: %w", id, err)
+	}
+
+	return &r, nil
+}
+
+// GetResponseByShareToken returns a response by its unguessable public share token.
+func (s *Store) GetResponseByShareToken(
+	ctx context.Context, shareToken string,
+) (*Response, error) {
+	if shareToken == "" {
+		return nil, sql.ErrNoRows
+	}
+
+	var r Response
+
+	err := s.read.QueryRowContext(ctx,
+		`SELECT id, user_id, question_id, is_draft, version,
+		        share_token, created_at, updated_at
+		 FROM responses WHERE share_token = ?`, shareToken,
+	).Scan(&r.ID, &r.UserID, &r.QuestionID, &r.IsDraft,
+		&r.Version, &r.ShareToken, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("getting response by share token: %w", err)
 	}
 
 	return &r, nil
@@ -112,11 +145,11 @@ func (s *Store) GetUserResponse(
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT id, user_id, question_id, is_draft, version,
-		        created_at, updated_at
+		        share_token, created_at, updated_at
 		 FROM responses WHERE user_id = ? AND question_id = ?`,
 		userID, questionID,
 	).Scan(&r.ID, &r.UserID, &r.QuestionID, &r.IsDraft,
-		&r.Version, &r.CreatedAt, &r.UpdatedAt)
+		&r.Version, &r.ShareToken, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting user response: %w", err)
 	}
@@ -312,7 +345,7 @@ func (s *Store) ListResponsesByIssue(
 	ctx context.Context, issueID int64, onlySubmitted bool,
 ) ([]Response, error) {
 	query := `SELECT r.id, r.user_id, r.question_id, r.is_draft,
-	                  r.version, r.created_at, r.updated_at
+	                  r.version, r.share_token, r.created_at, r.updated_at
 	           FROM responses r
 	           JOIN questions q ON r.question_id = q.id
 	           WHERE q.issue_id = ?`
@@ -336,7 +369,7 @@ func (s *Store) ListResponsesByIssue(
 		var r Response
 
 		err := rows.Scan(&r.ID, &r.UserID, &r.QuestionID, &r.IsDraft,
-			&r.Version, &r.CreatedAt, &r.UpdatedAt)
+			&r.Version, &r.ShareToken, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scanning response: %w", err)
 		}
@@ -361,7 +394,7 @@ func (s *Store) ListUserResponsesForIssue(
 ) ([]Response, error) {
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT r.id, r.user_id, r.question_id, r.is_draft,
-		        r.version, r.created_at, r.updated_at
+		        r.version, r.share_token, r.created_at, r.updated_at
 		 FROM responses r
 		 JOIN questions q ON r.question_id = q.id
 		 WHERE q.issue_id = ? AND r.user_id = ?
@@ -380,7 +413,7 @@ func (s *Store) ListUserResponsesForIssue(
 		var r Response
 
 		err := rows.Scan(&r.ID, &r.UserID, &r.QuestionID, &r.IsDraft,
-			&r.Version, &r.CreatedAt, &r.UpdatedAt)
+			&r.Version, &r.ShareToken, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scanning user response: %w", err)
 		}

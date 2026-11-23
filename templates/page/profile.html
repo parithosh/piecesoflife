@@ -67,7 +67,7 @@
 {{end}}
 
 {{define "scripts"}}
-<script>
+<script nonce="{{.CSPNonce}}">
 const userID = {{.User.ID}};
 const headers = apiHeaders();
 

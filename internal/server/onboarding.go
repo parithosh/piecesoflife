@@ -442,10 +442,17 @@ func (s *Server) handleCompleteOnboarding(w http.ResponseWriter, r *http.Request
 		existingUser, err := s.store.GetUserByEmail(ctx, email)
 		if err == nil {
 			if !existingUser.IsActive {
+				if !user.IsInstanceAdmin {
+					s.logger.WarnContext(ctx, "Skipping globally deactivated user during non-operator onboarding",
+						slog.String("email", email))
+					continue
+				}
+
 				if err := s.store.ReactivateUser(ctx, existingUser.ID); err != nil {
 					s.logger.ErrorContext(ctx, "Failed to reactivate user",
 						slog.String("email", email),
 						slog.String("error", err.Error()))
+					continue
 				}
 			}
 

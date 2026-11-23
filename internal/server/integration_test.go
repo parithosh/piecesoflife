@@ -52,11 +52,20 @@ func TestAuthVerifyMagicLinkFlow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, meRR.Code)
 	assert.Contains(t, meRR.Body.String(), "alice@example.com")
 
-	// Second use of the same token: already consumed.
+	// Second use of the same token while logged out: already consumed,
+	// automatically emails a fresh login link and informs the user.
 	rr2 := env.do(t, httptest.NewRequest(http.MethodGet, "/auth/verify?token="+raw, nil))
 	require.Equal(t, http.StatusSeeOther, rr2.Code)
-	assert.Equal(t, "/login?error=used", rr2.Header().Get("Location"))
+	assert.Equal(t, "/login?error=used_resent", rr2.Header().Get("Location"))
 	assert.Nil(t, findCookie(rr2, "session"), "consumed token must not mint a session")
+
+	// Clicking the same link while already signed in goes straight home
+	// without error or extra email.
+	authedReq := httptest.NewRequest(http.MethodGet, "/auth/verify?token="+raw, nil)
+	authedReq.AddCookie(session)
+	rr3 := env.do(t, authedReq)
+	require.Equal(t, http.StatusSeeOther, rr3.Code)
+	assert.Equal(t, "/", rr3.Header().Get("Location"))
 }
 
 // TestAuthVerifyRejectsBadTokens covers expired, wrong-type, and unknown
@@ -307,41 +316,59 @@ func TestMementoAccessControl(t *testing.T) {
 	require.NoError(t, env.store.SubmitResponse(ctx, responseID))
 	require.NoError(t, env.store.PublishIssue(ctx, issueID))
 
+	respRow, err := env.store.GetResponseByID(ctx, responseID)
+	require.NoError(t, err)
+	require.NotEmpty(t, respRow.ShareToken)
+
 	tests := []struct {
 		name         string
 		allowPublic  bool
 		authed       bool
-		responseID   int64
+		path         string
 		wantStatus   int
 		wantLocation string
 	}{
 		{
-			name:         "anonymous is redirected to login when public mementos off",
-			allowPublic:  false,
-			authed:       false,
-			responseID:   responseID,
-			wantStatus:   http.StatusSeeOther,
-			wantLocation: "/login",
+			name:        "anonymous gets 404 when public mementos off (no existence oracle)",
+			allowPublic: false,
+			authed:      false,
+			path:        "/m/" + respRow.ShareToken,
+			wantStatus:  http.StatusNotFound,
 		},
 		{
-			name:        "member sees memento when public mementos off",
+			name:        "anonymous cannot enumerate numeric response ID even when public mementos on",
+			allowPublic: true,
+			authed:      false,
+			path:        fmt.Sprintf("/m/%d", responseID),
+			wantStatus:  http.StatusNotFound,
+		},
+		{
+			name:        "member sees memento by share token when public mementos off",
 			allowPublic: false,
 			authed:      true,
-			responseID:  responseID,
+			path:        "/m/" + respRow.ShareToken,
 			wantStatus:  http.StatusOK,
 		},
 		{
-			name:        "anonymous sees memento when public mementos on",
+			name:         "member legacy numeric bookmark redirects to share token",
+			allowPublic:  false,
+			authed:       true,
+			path:         fmt.Sprintf("/m/%d", responseID),
+			wantStatus:   http.StatusFound,
+			wantLocation: "/m/" + respRow.ShareToken,
+		},
+		{
+			name:        "anonymous sees memento by share token when public mementos on",
 			allowPublic: true,
 			authed:      false,
-			responseID:  responseID,
+			path:        "/m/" + respRow.ShareToken,
 			wantStatus:  http.StatusOK,
 		},
 		{
 			name:        "unknown memento is 404",
 			allowPublic: true,
 			authed:      false,
-			responseID:  999999,
+			path:        "/m/nonexistent-token",
 			wantStatus:  http.StatusNotFound,
 		},
 	}
@@ -350,8 +377,7 @@ func TestMementoAccessControl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			env.setPublicMementos(t, tt.allowPublic)
 
-			req := httptest.NewRequest(http.MethodGet,
-				fmt.Sprintf("/m/%d", tt.responseID), nil)
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			if tt.authed {
 				req.AddCookie(session)
 			}
@@ -359,6 +385,7 @@ func TestMementoAccessControl(t *testing.T) {
 			rr := env.do(t, req)
 
 			require.Equal(t, tt.wantStatus, rr.Code, "body: %s", rr.Body.String())
+			assert.Equal(t, "noindex, nofollow", rr.Header().Get("X-Robots-Tag"))
 
 			if tt.wantLocation != "" {
 				assert.Equal(t, tt.wantLocation, rr.Header().Get("Location"))
@@ -489,8 +516,9 @@ func TestCoveredPhotoLifecycle(t *testing.T) {
 	assert.NotContains(t, archive.Body.String(), "/uploads/covered.jpg",
 		"covered photo must not become archive cover art")
 
-	mementoReq := httptest.NewRequest(http.MethodGet,
-		fmt.Sprintf("/m/%d", coveredResponseID), nil)
+	coveredResp, err := env.store.GetResponseByID(ctx, coveredResponseID)
+	require.NoError(t, err)
+	mementoReq := httptest.NewRequest(http.MethodGet, "/m/"+coveredResp.ShareToken, nil)
 	mementoReq.AddCookie(session)
 	memento := env.do(t, mementoReq)
 	require.Equal(t, http.StatusOK, memento.Code)
@@ -1140,10 +1168,10 @@ func TestReminderScheduleAnchorsToDeadline(t *testing.T) {
 		"the fallback reminder fires on the next scheduler tick")
 }
 
-// TestEmailCTATokenReuse locks in the forgiving ?auth= semantics: email_cta
-// tokens are reusable until expiry (mail scanners prefetch links, and a
-// member may click an email button more than once), and a visitor with a
-// live session is never bounced to a login error by a stale token.
+// TestEmailCTATokenReuse locks in the hardened ?auth= semantics: email_cta
+// tokens are single-use (a second logged-out click cannot mint another session
+// and instead auto-emails a fresh short-lived login link), while a visitor who
+// already carries a live session passes straight through to the destination.
 func TestEmailCTATokenReuse(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
@@ -1153,24 +1181,24 @@ func TestEmailCTATokenReuse(t *testing.T) {
 	raw, hash, err := auth.GenerateRandomToken(32)
 	require.NoError(t, err)
 	require.NoError(t, env.store.CreateAuthToken(
-		ctx, user.ID, hash, "email_cta", time.Now().Add(30*24*time.Hour)))
+		ctx, user.ID, hash, "email_cta", time.Now().Add(7*24*time.Hour)))
 
-	// First use (e.g. a mail scanner prefetch): mints a session and
-	// redirects to the target without the auth param.
+	// First use: mints a session and redirects to the target without ?auth=.
 	rr := env.do(t, httptest.NewRequest(http.MethodGet, "/issues?auth="+raw, nil))
 	require.Equal(t, http.StatusSeeOther, rr.Code)
 	assert.Equal(t, "/issues", rr.Header().Get("Location"))
 	require.NotNil(t, findCookie(rr, "session"), "first use logs in")
 
-	// Second cold use (the member's real click after the scanner's): the
-	// token is not burned — it still logs in.
+	// Second cold use (logged out, e.g. scanner prefetch or second device):
+	// single-use token does not mint a session; instead auto-sends a fresh
+	// login link and informs the user on /login.
 	rr2 := env.do(t, httptest.NewRequest(http.MethodGet, "/issues?auth="+raw, nil))
 	require.Equal(t, http.StatusSeeOther, rr2.Code)
-	assert.Equal(t, "/issues", rr2.Header().Get("Location"))
-	assert.NotNil(t, findCookie(rr2, "session"), "email_cta tokens are reusable")
+	assert.Equal(t, "/login?error=used_resent", rr2.Header().Get("Location"))
+	assert.Nil(t, findCookie(rr2, "session"), "consumed email_cta token must not mint a second session")
 
 	// A visitor who is already logged in keeps their session — even when
-	// the link carries an expired token.
+	// the link carries an expired or consumed token.
 	session := env.sessionCookie(t, user.ID)
 
 	expRaw, expHash, err := auth.GenerateRandomToken(32)
@@ -1432,8 +1460,8 @@ func TestUploadServeRefusesDirectories(t *testing.T) {
 
 	dir := filepath.Join(env.srv.config.UploadPath, "2026", "11")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dir, "0123456789abcdef_secret.jpg"), []byte("jpeg"), 0o644))
+	secretFile := filepath.Join(dir, "0123456789abcdef_secret.jpg")
+	require.NoError(t, os.WriteFile(secretFile, []byte("jpeg"), 0o644))
 
 	user := env.createUser(t, "Lia", "lia@example.com")
 	session := env.sessionCookie(t, user.ID)
@@ -1451,9 +1479,20 @@ func TestUploadServeRefusesDirectories(t *testing.T) {
 		assert.NotContains(t, rr.Body.String(), "secret.jpg", path)
 	}
 
+	// An unreferenced file on disk is not served.
+	assert.Equal(t, http.StatusNotFound,
+		get("/uploads/2026/11/0123456789abcdef_secret.jpg").Code)
+
+	// Once referenced by Lia's own ramble block, Lia can fetch it.
+	dayID, err := env.store.EnsureRambleDay(context.Background(), user.ID, "2026-11-01")
+	require.NoError(t, err)
+	_, err = env.store.CreateRambleBlock(context.Background(), dayID, "photo", nil, &secretFile, nil)
+	require.NoError(t, err)
+
 	rr := get("/uploads/2026/11/0123456789abcdef_secret.jpg")
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "jpeg", rr.Body.String())
+	assert.Contains(t, rr.Header().Get("Cache-Control"), "private")
 }
 
 // TestResponsesAndEmailsHiddenFromMembers verifies members can't read
@@ -1506,9 +1545,9 @@ func TestResponsesAndEmailsHiddenFromMembers(t *testing.T) {
 	}
 }
 
-// TestExpiredLinkRedirectEscapesEmail verifies the address is query-escaped
-// in the expired-link redirect, so it can't inject extra parameters.
-func TestExpiredLinkRedirectEscapesEmail(t *testing.T) {
+// TestExpiredLinkRedirectOmitsEmail verifies the expired-link redirect does
+// not leak the user's email address into query parameters, logs, or Referers.
+func TestExpiredLinkRedirectOmitsEmail(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx := context.Background()
 
@@ -1524,6 +1563,7 @@ func TestExpiredLinkRedirectEscapesEmail(t *testing.T) {
 
 	loc, err := url.Parse(rr.Header().Get("Location"))
 	require.NoError(t, err)
-	assert.Equal(t, "a+b&error=x@example.com", loc.Query().Get("email"))
+	assert.Empty(t, loc.Query().Get("email"), "expired redirect must not leak email in URL")
+	assert.Equal(t, "1", loc.Query().Get("expired"))
 	assert.Empty(t, loc.Query().Get("error"))
 }

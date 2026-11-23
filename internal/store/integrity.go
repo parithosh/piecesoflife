@@ -184,3 +184,99 @@ func walkUploads(ctx context.Context, base string) (map[string]struct{}, error) 
 
 	return onDisk, nil
 }
+
+// CanUserAccessUpload reports whether the given user is authorized to fetch
+// the upload stored at filePath (cleaned absolute path under UPLOAD_PATH).
+//
+// Access rules:
+//   - Private Ramble media (ramble_blocks): strictly the journal's owner.
+//     Not even an instance admin can read another user's private journal.
+//   - Response media (response_blocks): the response's owner (while an active
+//     member of an active group), any active member once the issue is
+//     published and the response submitted, or a Loop/instance admin.
+//   - Dump media (dump_items): the uploader (while an active member of an
+//     active group), any active member once published, or a Loop/instance admin.
+//   - Notebook snapshot media (diary_blocks): strictly the owner before
+//     publication; any active member (or instance admin) once published.
+func (s *Store) CanUserAccessUpload(
+	ctx context.Context, userID int64, isInstanceAdmin bool, filePath string,
+) (bool, error) {
+	adminFlag := 0
+	if isInstanceAdmin {
+		adminFlag = 1
+	}
+
+	var allowed int
+
+	err := s.read.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM ramble_blocks rb
+			JOIN rambles r ON r.id = rb.ramble_id
+			WHERE rb.file_path = ? AND r.user_id = ?
+
+			UNION ALL
+
+			SELECT 1
+			FROM response_blocks rb
+			JOIN responses resp ON resp.id = rb.response_id
+			JOIN questions q ON q.id = resp.question_id
+			JOIN issues i ON i.id = q.issue_id
+			JOIN groups g ON g.id = i.group_id
+			LEFT JOIN memberships m
+			       ON m.group_id = g.id AND m.user_id = ? AND m.is_active = 1
+			WHERE rb.file_path = ?
+			  AND g.is_active = 1
+			  AND (
+			    ? = 1
+			    OR (resp.user_id = ? AND m.id IS NOT NULL)
+			    OR (i.status = 'published' AND resp.is_draft = 0 AND m.id IS NOT NULL)
+			    OR m.role = 'admin'
+			  )
+
+			UNION ALL
+
+			SELECT 1
+			FROM dump_items d
+			JOIN issues i ON i.id = d.issue_id
+			JOIN groups g ON g.id = i.group_id
+			LEFT JOIN memberships m
+			       ON m.group_id = g.id AND m.user_id = ? AND m.is_active = 1
+			WHERE d.file_path = ?
+			  AND g.is_active = 1
+			  AND (
+			    ? = 1
+			    OR (d.user_id = ? AND m.id IS NOT NULL)
+			    OR (i.status = 'published' AND m.id IS NOT NULL)
+			    OR m.role = 'admin'
+			  )
+
+			UNION ALL
+
+			SELECT 1
+			FROM diary_blocks db
+			JOIN diary_days dd ON dd.id = db.diary_day_id
+			JOIN diary_sections ds ON ds.id = dd.section_id
+			JOIN issues i ON i.id = ds.issue_id
+			JOIN groups g ON g.id = i.group_id
+			LEFT JOIN memberships m
+			       ON m.group_id = g.id AND m.user_id = ? AND m.is_active = 1
+			WHERE db.file_path = ?
+			  AND g.is_active = 1
+			  AND (
+			    (ds.user_id = ? AND (m.id IS NOT NULL OR ? = 1))
+			    OR (i.status = 'published' AND (m.id IS NOT NULL OR ? = 1))
+			  )
+		)
+	`,
+		filePath, userID,
+		userID, filePath, adminFlag, userID,
+		userID, filePath, adminFlag, userID,
+		userID, filePath, userID, adminFlag, adminFlag,
+	).Scan(&allowed)
+	if err != nil {
+		return false, fmt.Errorf("checking upload access: %w", err)
+	}
+
+	return allowed == 1, nil
+}

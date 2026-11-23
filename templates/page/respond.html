@@ -384,7 +384,7 @@
 <script src="/static/sortable.min.js?v={{assetVersion}}"></script>
 <script src="/static/recorder.js?v={{assetVersion}}"></script>
 <script src="/static/editor.js?v={{assetVersion}}"></script>
-<script>
+<script nonce="{{.CSPNonce}}">
 const issueID = {{.Issue.ID}};
 
 let autosaveTimers = {};

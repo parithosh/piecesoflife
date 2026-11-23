@@ -47,6 +47,10 @@ type Server struct {
 	// never deletes a file another request is about to publish.
 	brandingMu sync.Mutex
 
+	// loginIPLimiter bounds magic-link requests per client IP so a single
+	// caller cannot spray login emails across arbitrary addresses.
+	loginIPLimiter *ipRateLimiter
+
 	// Embedded filesystems, injected from main.go where go:embed is valid.
 	staticFS    embed.FS
 	templatesFS embed.FS
@@ -115,6 +119,7 @@ type PageData struct {
 	User      *store.User
 	Settings  *store.Settings
 	CSRFToken string
+	CSPNonce  string
 
 	// Multi-Loop context: the current Loop, the user's role in it, and
 	// their full Loop list for the nav switcher. MultiLoop gates all
@@ -147,13 +152,14 @@ func New(
 	staticFS, templatesFS embed.FS,
 ) *Server {
 	s := &Server{
-		store:       st,
-		config:      cfg,
-		emailer:     emailer,
-		mux:         http.NewServeMux(),
-		logger:      logger.With(slog.String("component", "server")),
-		staticFS:    staticFS,
-		templatesFS: templatesFS,
+		store:          st,
+		config:         cfg,
+		emailer:        emailer,
+		mux:            http.NewServeMux(),
+		logger:         logger.With(slog.String("component", "server")),
+		loginIPLimiter: newIPRateLimiter(20, time.Hour),
+		staticFS:       staticFS,
+		templatesFS:    templatesFS,
 	}
 
 	s.loadTemplates()
@@ -546,7 +552,10 @@ func (s *Server) newPageData(r *http.Request) PageData {
 	user := UserFromContext(r.Context())
 	gc := GroupFromContext(r.Context())
 
-	pd := PageData{User: user}
+	pd := PageData{
+		User:     user,
+		CSPNonce: cspNonceFromContext(r.Context()),
+	}
 
 	if gc != nil {
 		pd.Settings = gc.Settings
