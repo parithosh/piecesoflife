@@ -363,9 +363,11 @@ func TestUnseenCommentsTabVisibilityAndLifecycle(t *testing.T) {
 	markRR := env.do(t, markReq)
 	require.Equal(t, http.StatusNoContent, markRR.Code)
 
-	// Same-second comment posted after render still shows as 1 unseen!
+	// Same-second comment posted after render still shows as 1 unseen, and the
+	// rendered panel carries data-unseen-after-id so the client matches it!
 	afterSnapshotHTML := getIssue(bob.ID, 2026, 10)
 	assert.Contains(t, afterSnapshotHTML, `data-unseen-count="1"`)
+	assert.Contains(t, afterSnapshotHTML, fmt.Sprintf(`data-unseen-after-id="%d"`, audioCID))
 
 	// Marking seen up through sameSecCID clears everything to 0.
 	markBody2 := fmt.Sprintf(`{"as_of":%q,"max_comment_id":%d}`,

@@ -714,6 +714,7 @@
                    data-comment-count="{{.TotalCount}}"
                    data-defer-comments="1"
                    data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
                    data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{else if eq .Kind "diary_block"}}
               <div class="comments-panel pl-unseen-comments"
@@ -721,6 +722,7 @@
                    data-comment-count="{{.TotalCount}}"
                    data-defer-comments="1"
                    data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
                    data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{else if eq .Kind "diary_day"}}
               <div class="comments-panel pl-unseen-comments"
@@ -728,6 +730,7 @@
                    data-comment-count="{{.TotalCount}}"
                    data-defer-comments="1"
                    data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
                    data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{else if eq .Kind "dump_item"}}
               <div class="comments-panel pl-unseen-comments"
@@ -735,6 +738,7 @@
                    data-comment-count="{{.TotalCount}}"
                    data-defer-comments="1"
                    data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
                    data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{end}}
             </article>

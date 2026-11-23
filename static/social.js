@@ -169,12 +169,18 @@
         `;
     }
 
-    function commentItemHTML(c, replies, unseenSinceMs) {
+    function commentAfterWatermark(c, unseenSinceMs, unseenAfterId) {
+        if (!Number.isFinite(unseenSinceMs)) return false;
+        const act = commentActivityMs(c);
+        return act > unseenSinceMs || (act === unseenSinceMs && Number(c.id || 0) > unseenAfterId);
+    }
+
+    function commentItemHTML(c, replies, unseenSinceMs, unseenAfterId) {
         // Replies always target the top-level comment so the thread stays
         // one level deep no matter which comment the user replies to.
         const replyTarget = c.parent_id || c.id;
         const mine = window.POLUserID && c.user_id === window.POLUserID;
-        const isUnseen = Number.isFinite(unseenSinceMs) && !mine && commentActivityMs(c) > unseenSinceMs;
+        const isUnseen = !mine && commentAfterWatermark(c, unseenSinceMs, unseenAfterId);
         return `
             <li class="comment-item${isUnseen ? ' is-unseen' : ''}" data-comment-id="${c.id}"
                 data-raw-body="${escapeHtml(c.body || '')}">
@@ -197,7 +203,7 @@
                 </div>
                 ${replies && replies.length ? `
                 <ul class="comment-replies">
-                    ${replies.map(r => commentItemHTML(r, null, unseenSinceMs)).join('')}
+                    ${replies.map(r => commentItemHTML(r, null, unseenSinceMs, unseenAfterId)).join('')}
                 </ul>` : ''}
             </li>
         `;
@@ -299,16 +305,16 @@
         const unseenSinceMs = panel.dataset.unseenSince
             ? Date.parse(panel.dataset.unseenSince)
             : NaN;
+        const unseenAfterId = Number(panel.dataset.unseenAfterId || 0);
         const unseenAsOfMs = panel.dataset.unseenAsOf
             ? Date.parse(panel.dataset.unseenAsOf)
             : NaN;
         const qualifiesForUnseen = (c) => {
             const mine = Boolean(window.POLUserID && c.user_id === window.POLUserID);
-            const act = commentActivityMs(c);
-            if (!mine) return act > unseenSinceMs;
+            if (!mine) return commentAfterWatermark(c, unseenSinceMs, unseenAfterId);
             // Keep replies the viewer just posted during this session visible,
             // while excluding older viewer-only subthreads to match server rules.
-            return Number.isFinite(unseenAsOfMs) && act > unseenAsOfMs;
+            return Number.isFinite(unseenAsOfMs) && commentActivityMs(c) > unseenAsOfMs;
         };
         let visibleTop = topLevel;
         if (Number.isFinite(unseenSinceMs)) {
@@ -320,7 +326,7 @@
         }
 
         list.innerHTML = visibleTop.map(c =>
-            commentItemHTML(c, byParent.get(c.id), unseenSinceMs)
+            commentItemHTML(c, byParent.get(c.id), unseenSinceMs, unseenAfterId)
         ).join('');
 
         const shownCount = Number.isFinite(unseenSinceMs)

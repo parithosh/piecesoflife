@@ -104,12 +104,13 @@ type IssuePageData struct {
 	// Unseen comments tab: shown only when the issue has been published for at
 	// least 2 days, surfacing comments with activity in the last 2 days that
 	// the reader has not yet caught up on.
-	ShowUnseenComments  bool
-	UnseenCommentsSince string
-	UnseenAsOf          string
-	UnseenMaxCommentID  int64
-	UnseenCommentCount  int
-	UnseenThreads       []UnseenCommentTarget
+	ShowUnseenComments   bool
+	UnseenCommentsSince  string
+	UnseenAfterCommentID int64
+	UnseenAsOf           string
+	UnseenMaxCommentID   int64
+	UnseenCommentCount   int
+	UnseenThreads        []UnseenCommentTarget
 	// NextIssue is the pre-created upcoming round (nil when none). Members
 	// can send it question suggestions until it opens at NextIssueOpens.
 	NextIssue      *store.Issue
@@ -659,12 +660,13 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	// member hasn't caught up on yet.
 	const unseenWindow = 48 * time.Hour
 	var (
-		showUnseenComments  bool
-		unseenCommentsSince string
-		unseenAsOf          string
-		unseenMaxCommentID  int64
-		unseenCommentCount  int
-		unseenThreads       []UnseenCommentTarget
+		showUnseenComments   bool
+		unseenCommentsSince  string
+		unseenAfterCommentID int64
+		unseenAsOf           string
+		unseenMaxCommentID   int64
+		unseenCommentCount   int
+		unseenThreads        []UnseenCommentTarget
 	)
 	nowUTC := time.Now().UTC()
 	if user := UserFromContext(ctx); user != nil &&
@@ -672,19 +674,18 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		nowUTC.Sub(targetIssue.PublishedAt.UTC()) >= unseenWindow {
 		showUnseenComments = true
 		cutoff := nowUTC.Add(-unseenWindow)
-		var afterCommentID int64
 		if readMark, rErr := s.store.GetIssueCommentRead(ctx, user.ID, targetIssue.ID); rErr != nil {
 			s.logger.WarnContext(ctx, "Failed to load issue comment read watermark",
 				slog.Int64("issue_id", targetIssue.ID),
 				slog.String("error", rErr.Error()))
 		} else if readMark != nil && readMark.LastSeenAt.UTC().After(cutoff) {
 			cutoff = readMark.LastSeenAt.UTC()
-			afterCommentID = readMark.LastSeenCommentID
+			unseenAfterCommentID = readMark.LastSeenCommentID
 		}
 		unseenCommentsSince = cutoff.Format(time.RFC3339)
 		asOf := nowUTC
 
-		recent, cErr := s.store.ListRecentIssueComments(ctx, targetIssue.ID, user.ID, cutoff, afterCommentID)
+		recent, cErr := s.store.ListRecentIssueComments(ctx, targetIssue.ID, user.ID, cutoff, unseenAfterCommentID)
 		if cErr != nil {
 			s.logger.WarnContext(ctx, "Failed to load recent unseen comments",
 				slog.Int64("issue_id", targetIssue.ID),
@@ -754,6 +755,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		ThrowbackKicker:         throwbackKicker,
 		ShowUnseenComments:      showUnseenComments,
 		UnseenCommentsSince:     unseenCommentsSince,
+		UnseenAfterCommentID:    unseenAfterCommentID,
 		UnseenAsOf:              unseenAsOf,
 		UnseenMaxCommentID:      unseenMaxCommentID,
 		UnseenCommentCount:      unseenCommentCount,
