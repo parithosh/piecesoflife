@@ -72,6 +72,9 @@
             </div>
         `;
 
+        if (panel.dataset.deferComments === '1') {
+            return;
+        }
         if (count > 0) {
             loadComments(panel);
         } else {
@@ -79,13 +82,38 @@
         }
     }
 
+    function panelTargetSelector(panel) {
+        if (panel.dataset.responseId) {
+            return `.comments-panel[data-response-id="${CSS.escape(panel.dataset.responseId)}"]`;
+        }
+        if (panel.dataset.diaryBlockId) {
+            return `.comments-panel[data-diary-block-id="${CSS.escape(panel.dataset.diaryBlockId)}"]`;
+        }
+        if (panel.dataset.diaryDayId) {
+            return `.comments-panel[data-diary-day-id="${CSS.escape(panel.dataset.diaryDayId)}"]`;
+        }
+        if (panel.dataset.dumpItemId) {
+            return `.comments-panel[data-dump-item-id="${CSS.escape(panel.dataset.dumpItemId)}"]`;
+        }
+        return null;
+    }
+
     async function loadComments(panel) {
         try {
             const res = await fetch(commentsEndpoint(panel));
             if (!res.ok) throw new Error(`comments fetch failed: ${res.status}`);
             const data = await res.json();
-            renderComments(panel, data.comments || []);
-            panel.dataset.loaded = '1';
+            const comments = data.comments || [];
+            const sel = panelTargetSelector(panel);
+            const peers = sel
+                ? Array.from(document.querySelectorAll(sel)).filter(
+                    p => p === panel || (p.dataset.ready === '1' && p.dataset.deferComments !== '1')
+                )
+                : [panel];
+            peers.forEach(p => {
+                renderComments(p, comments);
+                p.dataset.loaded = '1';
+            });
         } catch {
             const list = panel.querySelector('.comment-list');
             if (list && panel.dataset.loaded !== '1') {
@@ -93,6 +121,20 @@
                     '<li class="comment-item comment-load-error">Couldn&#39;t load comments — check your connection and reload.</li>';
             }
         }
+    }
+
+    function loadDeferred(scope) {
+        if (!scope) return;
+        scope.querySelectorAll(`${PANEL_SELECTOR}[data-defer-comments="1"]`).forEach(panel => {
+            delete panel.dataset.deferComments;
+            if (panel.dataset.ready !== '1') setupPanel(panel);
+            const count = Number(panel.dataset.commentCount || 0);
+            if (count > 0) {
+                loadComments(panel);
+            } else {
+                panel.dataset.loaded = '1';
+            }
+        });
     }
 
     function commentActivityMs(c) {
@@ -257,12 +299,23 @@
         const unseenSinceMs = panel.dataset.unseenSince
             ? Date.parse(panel.dataset.unseenSince)
             : NaN;
+        const unseenAsOfMs = panel.dataset.unseenAsOf
+            ? Date.parse(panel.dataset.unseenAsOf)
+            : NaN;
+        const qualifiesForUnseen = (c) => {
+            const mine = Boolean(window.POLUserID && c.user_id === window.POLUserID);
+            const act = commentActivityMs(c);
+            if (!mine) return act > unseenSinceMs;
+            // Keep replies the viewer just posted during this session visible,
+            // while excluding older viewer-only subthreads to match server rules.
+            return Number.isFinite(unseenAsOfMs) && act > unseenAsOfMs;
+        };
         let visibleTop = topLevel;
         if (Number.isFinite(unseenSinceMs)) {
             visibleTop = topLevel.filter(c => {
-                if (commentActivityMs(c) > unseenSinceMs) return true;
+                if (qualifiesForUnseen(c)) return true;
                 const kids = byParent.get(c.id) || [];
-                return kids.some(r => commentActivityMs(r) > unseenSinceMs);
+                return kids.some(qualifiesForUnseen);
             });
         }
 
@@ -639,20 +692,35 @@
         scope.querySelectorAll(PANEL_SELECTOR).forEach(setupPanel);
     }
 
-    function applyLikeState(btn, liked, count, names, animate) {
+    function applyLikeState(btn, liked, count, names, animate, fallbackTitle) {
         btn.classList.toggle('is-liked', liked);
         btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
         btn.dataset.likeCount = String(count);
+
+        const curLabel = btn.getAttribute('aria-label') || '';
+        if (curLabel.startsWith('Like ') && liked) {
+            btn.setAttribute('aria-label', 'Unlike ' + curLabel.slice(5));
+        } else if (curLabel.startsWith('Unlike ') && !liked) {
+            btn.setAttribute('aria-label', 'Like ' + curLabel.slice(7));
+        }
 
         const countEl = btn.querySelector('.like-count');
         if (countEl) {
             countEl.textContent = count > 0 ? String(count) : '';
         }
 
-        if (Array.isArray(names) && names.length) {
-            btn.title = `Liked by ${names.join(', ')}`;
-        } else {
-            btn.removeAttribute('title');
+        if (Array.isArray(names)) {
+            if (names.length) {
+                btn.title = `Liked by ${names.join(', ')}`;
+            } else {
+                btn.removeAttribute('title');
+            }
+        } else if (fallbackTitle !== undefined) {
+            if (fallbackTitle) {
+                btn.title = fallbackTitle;
+            } else {
+                btn.removeAttribute('title');
+            }
         }
 
         if (animate && liked) {
@@ -681,6 +749,7 @@
 
         const prevLiked = btn.classList.contains('is-liked');
         const prevCount = Number(btn.dataset.likeCount || 0);
+        const prevTitles = new Map(peers.map(el => [el, el.getAttribute('title') || '']));
         const nextLiked = !prevLiked;
         const nextCount = Math.max(0, prevCount + (nextLiked ? 1 : -1));
 
@@ -705,7 +774,7 @@
             });
         } catch {
             peers.forEach(el => {
-                applyLikeState(el, prevLiked, prevCount, null, false);
+                applyLikeState(el, prevLiked, prevCount, null, false, prevTitles.get(el) || '');
             });
         } finally {
             peers.forEach(el => { delete el.dataset.pending; });
@@ -818,7 +887,7 @@
         postComment(form);
     });
 
-    window.POLComments = { init };
+    window.POLComments = { init, loadDeferred };
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => init(document));

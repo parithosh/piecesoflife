@@ -31,6 +31,7 @@
     let mode = 'paged';
     let lastReadingMode = 'paged';
     let markedSeen = false;
+    let markingSeen = false;
     try {
         if (localStorage.getItem(MODE_KEY) === 'scroll') {
             mode = 'scroll';
@@ -64,20 +65,35 @@
         return clean.length > 34 ? `${clean.slice(0, 31).trim()}...` : clean;
     }
 
-    function markCommentsSeen() {
-        if (markedSeen || !issueID) return;
+    async function markCommentsSeen() {
+        if (markedSeen || markingSeen || !issueID) return;
         const unseenCount = Number(root.dataset.unseenCount || '0');
         if (unseenCount <= 0) return;
-        markedSeen = true;
-        if (unseenBadge) unseenBadge.remove();
+        markingSeen = true;
 
         const headers = typeof apiHeaders === 'function'
             ? apiHeaders()
             : { 'Content-Type': 'application/json', 'X-CSRF-Token': typeof getCSRFToken === 'function' ? getCSRFToken() : '' };
-        fetch(`/api/issues/${encodeURIComponent(issueID)}/comments/mark-seen`, {
-            method: 'POST',
-            headers,
-        }).catch(() => {});
+        const payload = {
+            as_of: root.dataset.unseenAsOf || '',
+            max_comment_id: Number(root.dataset.unseenMaxId || '0'),
+        };
+
+        try {
+            const res = await fetch(`/api/issues/${encodeURIComponent(issueID)}/comments/mark-seen`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload),
+            });
+            if (res.ok) {
+                markedSeen = true;
+                if (unseenBadge) unseenBadge.remove();
+            }
+        } catch {
+            // Keep the badge so the user knows the watermark hasn't advanced yet.
+        } finally {
+            markingSeen = false;
+        }
     }
 
     function applyMode(next) {
@@ -99,6 +115,8 @@
         });
 
         if (mode === 'unseen') {
+            window.POLComments?.loadDeferred?.(unseenView);
+            unseenView.querySelector('.published-question-title')?.focus?.();
             markCommentsSeen();
             return;
         }
@@ -150,7 +168,8 @@
         } else if (cur?.hasAttribute('data-dump-page')) {
             posLabel = `The dump · ${current + 1} of ${questions.length}`;
         } else if (cur?.hasAttribute('data-throwback-page')) {
-            posLabel = `Photos from one year ago · ${current + 1} of ${questions.length}`;
+            const tbTitle = cur.dataset.questionTitle || 'Photos from one year ago';
+            posLabel = `${tbTitle} · ${current + 1} of ${questions.length}`;
         }
         if (positionLabel) {
             positionLabel.textContent = posLabel;
@@ -261,6 +280,9 @@
     });
 
     window.addEventListener('popstate', () => {
+        if (mode === 'unseen') {
+            applyMode(lastReadingMode);
+        }
         if (mode === 'scroll') {
             scrollToQuestion(parseQuestionParam() - 1);
             return;

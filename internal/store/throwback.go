@@ -19,25 +19,27 @@ type ThrowbackPhoto struct {
 // FindThrowbackIssue locates the past published issue to draw throwback photos
 // from: first a published issue in the same circle from one year earlier
 // (same month, year - 1), and if none exists, the 12th earlier published issue
-// in edition order. Returns (nil, nil) when neither exists.
+// in edition order. The boolean reports whether an exact one-year-ago issue
+// matched (true) vs. the 12-issues-ago fallback (false). Returns (nil, false,
+// nil) when neither exists.
 func (s *Store) FindThrowbackIssue(
 	ctx context.Context, groupID int64, current Issue,
-) (*Issue, error) {
+) (*Issue, bool, error) {
 	// 1. Exact one-year-ago match (same month, previous year).
 	iss, err := scanIssue(s.read.QueryRowContext(ctx,
 		`SELECT `+issueColumns+`
 		 FROM issues
-		 WHERE group_id = ? AND status = 'published' AND id != ?
+		 WHERE group_id = ? AND status = 'published'
 		   AND year = ? AND month = ?
 		 ORDER BY published_at DESC, id DESC
 		 LIMIT 1`,
-		groupID, current.ID, current.Year-1, current.Month,
+		groupID, current.Year-1, current.Month,
 	))
 	if err == nil {
-		return iss, nil
+		return iss, true, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("finding one-year-ago issue: %w", err)
+		return nil, false, fmt.Errorf("finding one-year-ago issue: %w", err)
 	}
 
 	// 2. Fallback: 12th earlier published issue in edition order (OFFSET 11).
@@ -56,13 +58,13 @@ func (s *Store) FindThrowbackIssue(
 		current.Year, current.Month, current.ID,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("finding 12-issues-ago fallback issue: %w", err)
+		return nil, false, fmt.Errorf("finding 12-issues-ago fallback issue: %w", err)
 	}
 
-	return iss, nil
+	return iss, false, nil
 }
 
 // ListRandomThrowbackPhotos collects every uncovered photo published in

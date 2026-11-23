@@ -7,7 +7,9 @@
   <section id="issue-root" class="published-issue pl-issue"
            data-issue-id="{{.Issue.ID}}"
            data-question-count="{{len .Questions}}"
-           data-unseen-count="{{.UnseenCommentCount}}">
+           data-unseen-count="{{.UnseenCommentCount}}"
+           data-unseen-as-of="{{.UnseenAsOf}}"
+           data-unseen-max-id="{{.UnseenMaxCommentID}}">
     <div class="pl-card pl-card--published">
       <div class="temple" aria-hidden="true"></div>
 
@@ -78,7 +80,7 @@
             <a href="?q={{add $throwbackIdx 1}}"
                class="published-progress-segment published-progress-segment--throwback {{if lt $throwbackIdx $.CurrentQIdx}}is-past{{else if eq $throwbackIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
                data-question-target="{{$throwbackIdx}}"
-               aria-label="Go to Photos from one year ago"
+               aria-label="Go to {{.ThrowbackTitle}}"
                {{if eq $throwbackIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
             {{end}}
           </div>
@@ -542,14 +544,14 @@
         {{if .ThrowbackPhotos}}
         <section class="published-question published-question--throwback"
                  data-question-index="{{$throwbackIdx}}"
-                 data-question-title="Photos from one year ago"
+                 data-question-title="{{.ThrowbackTitle}}"
                  data-throwback-page
                  {{if ne $throwbackIdx $.CurrentQIdx}}hidden{{end}}>
           <div class="published-question-inner">
             <p class="published-question-kicker">
-              A look back{{if .ThrowbackIssue}} · <a class="pl-throwback-issue-link" href="/issues/{{.ThrowbackIssue.Year}}/{{printf "%02d" .ThrowbackIssue.Month}}">{{if .ThrowbackIssue.Title}}{{.ThrowbackIssue.Title}}{{else}}{{.ThrowbackIssue.OpensAt | formatDate}}{{end}}</a>{{end}}
+              {{.ThrowbackKicker}}{{if .ThrowbackIssue}} · <a class="pl-throwback-issue-link" href="/issues/{{.ThrowbackIssue.Year}}/{{printf "%02d" .ThrowbackIssue.Month}}">{{if .ThrowbackIssue.Title}}{{.ThrowbackIssue.Title}}{{else}}{{.ThrowbackIssue.OpensAt | formatDate}}{{end}}</a>{{end}}
             </p>
-            <h2 class="published-question-title" tabindex="-1">Photos from one year ago</h2>
+            <h2 class="published-question-title" tabindex="-1">{{.ThrowbackTitle}}</h2>
             <div class="published-ornament" aria-hidden="true"><span></span><i></i><span></span></div>
             <div class="pl-throwback-grid pl-throwback-grid--{{len .ThrowbackPhotos}}">
               {{range .ThrowbackPhotos}}
@@ -589,7 +591,7 @@
           {{else if eq $prevIdx $dumpIdx}}
             {{$prevTitle = "The photo & video dump"}}
           {{else}}
-            {{$prevTitle = "Photos from one year ago"}}
+            {{$prevTitle = .ThrowbackTitle}}
           {{end}}
         {{end}}
         {{$nextTitle := ""}}
@@ -603,7 +605,7 @@
           {{else if eq .CurrentQ $dumpIdx}}
             {{$nextTitle = "The photo & video dump"}}
           {{else}}
-            {{$nextTitle = "Photos from one year ago"}}
+            {{$nextTitle = .ThrowbackTitle}}
           {{end}}
         {{end}}
         <a {{if not $isFirst}}href="?q={{.CurrentQIdx}}"{{end}}
@@ -651,7 +653,7 @@
           <a href="?q={{add $throwbackIdx 1}}"
              class="published-dot {{if lt $throwbackIdx $.CurrentQIdx}}is-past{{else if eq $throwbackIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
              data-question-target="{{$throwbackIdx}}"
-             aria-label="Go to Photos from one year ago"
+             aria-label="Go to {{.ThrowbackTitle}}"
              {{if eq $throwbackIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
           {{end}}
         </div>
@@ -704,26 +706,36 @@
                 </div>
               </div>
 
-              {{if eq .Kind "response"}}
+              {{if .IsCovered}}
+              <p class="pl-unseen-covered-note">This comment is on a covered photo — view it in the issue to reveal the photo and discussion.</p>
+              {{else if eq .Kind "response"}}
               <div class="comments-panel pl-unseen-comments"
                    data-response-id="{{.TargetID}}"
                    data-comment-count="{{.TotalCount}}"
-                   data-unseen-since="{{$.UnseenCommentsSince}}"></div>
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{else if eq .Kind "diary_block"}}
               <div class="comments-panel pl-unseen-comments"
                    data-diary-block-id="{{.TargetID}}"
                    data-comment-count="{{.TotalCount}}"
-                   data-unseen-since="{{$.UnseenCommentsSince}}"></div>
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{else if eq .Kind "diary_day"}}
               <div class="comments-panel pl-unseen-comments"
                    data-diary-day-id="{{.TargetID}}"
                    data-comment-count="{{.TotalCount}}"
-                   data-unseen-since="{{$.UnseenCommentsSince}}"></div>
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{else if eq .Kind "dump_item"}}
               <div class="comments-panel pl-unseen-comments"
                    data-dump-item-id="{{.TargetID}}"
                    data-comment-count="{{.TotalCount}}"
-                   data-unseen-since="{{$.UnseenCommentsSince}}"></div>
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
               {{end}}
             </article>
             {{end}}

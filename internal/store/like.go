@@ -62,17 +62,7 @@ func (s *Store) toggleLike(
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return LikeSummary{}, fmt.Errorf("committing like toggle: %w", err)
-	}
-
-	return s.getLikeSummary(ctx, column, targetID, userID)
-}
-
-func (s *Store) getLikeSummary(
-	ctx context.Context, column string, targetID, viewerID int64,
-) (LikeSummary, error) {
-	rows, err := s.read.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`SELECT l.user_id, u.name
 		 FROM likes l
 		 JOIN users u ON u.id = l.user_id
@@ -83,7 +73,6 @@ func (s *Store) getLikeSummary(
 	if err != nil {
 		return LikeSummary{}, fmt.Errorf("reading likes for %s %d: %w", column, targetID, err)
 	}
-	defer rows.Close()
 
 	var sum LikeSummary
 	for rows.Next() {
@@ -92,16 +81,23 @@ func (s *Store) getLikeSummary(
 			name string
 		)
 		if err := rows.Scan(&uid, &name); err != nil {
+			_ = rows.Close()
 			return LikeSummary{}, fmt.Errorf("scanning like row: %w", err)
 		}
 		sum.Count++
 		sum.Names = append(sum.Names, name)
-		if uid == viewerID {
+		if uid == userID {
 			sum.Liked = true
 		}
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return LikeSummary{}, fmt.Errorf("iterating like rows: %w", err)
+	}
+	_ = rows.Close()
+
+	if err := tx.Commit(); err != nil {
+		return LikeSummary{}, fmt.Errorf("committing like toggle: %w", err)
 	}
 
 	return sum, nil

@@ -5064,6 +5064,15 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
 .pl-unseen-comments {
     margin-top: 12px;
 }
+.pl-unseen-covered-note {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    border-radius: 4px;
+    border: 1px dashed var(--line);
+    background: var(--ivory);
+    font: 500 13px/1.45 var(--font-ui);
+    color: var(--muted);
+}
 .comment-item.is-unseen {
     border-left: 3px solid var(--peacock);
     padding-left: 10px;

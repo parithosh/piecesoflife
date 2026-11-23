@@ -1038,8 +1038,9 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMarkIssueCommentsSeen records that the signed-in member has opened the
-// "Unseen comments" tab on a published issue, updating their per-issue read
-// watermark so already-viewed comments don't reappear on future visits.
+// "Unseen comments" tab on a published issue, advancing their per-issue read
+// watermark monotonically to the snapshot timestamp & max comment ID that were
+// rendered on the page (so comments arriving in between are never skipped).
 // POST /api/issues/{id}/comments/mark-seen
 func (s *Server) handleMarkIssueCommentsSeen(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -1061,7 +1062,31 @@ func (s *Server) handleMarkIssueCommentsSeen(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := s.store.MarkIssueCommentsSeen(ctx, user.ID, issue.ID, time.Now().UTC()); err != nil {
+	nowUTC := time.Now().UTC()
+	seenAt := nowUTC
+	var maxCommentID int64
+
+	if r.Body != nil && r.ContentLength != 0 {
+		var req struct {
+			AsOf         string `json:"as_of"`
+			MaxCommentID int64  `json:"max_comment_id"`
+		}
+		if err := readJSON(r, &req); err == nil {
+			if req.AsOf != "" {
+				if parsed, pErr := time.Parse(time.RFC3339, req.AsOf); pErr == nil {
+					parsed = parsed.UTC()
+					if !parsed.After(nowUTC) {
+						seenAt = parsed
+					}
+				}
+			}
+			if req.MaxCommentID > 0 {
+				maxCommentID = req.MaxCommentID
+			}
+		}
+	}
+
+	if err := s.store.MarkIssueCommentsSeen(ctx, user.ID, issue.ID, seenAt, maxCommentID); err != nil {
 		s.logger.ErrorContext(ctx, "Failed to mark issue comments seen",
 			slog.Int64("issue_id", issue.ID),
 			slog.Int64("user_id", user.ID),
@@ -1085,21 +1110,9 @@ func (s *Server) handleToggleResponseLike(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp, err := s.store.GetResponseByID(ctx, responseID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Response not found")
-		return
-	}
-
-	issue, err := s.store.GetIssueByResponseID(ctx, responseID)
-	if err != nil || issue.GroupID != currentGroupID(ctx) {
-		writeError(w, http.StatusNotFound, "not_found", "Response not found")
-		return
-	}
-
-	if issue.Status != "published" || resp.IsDraft {
-		writeError(w, http.StatusForbidden, "not_published",
-			"Likes are only available on published answers")
+	// Uniform 404 across missing, cross-Loop, unpublished, and draft responses
+	// so callers cannot probe for draft response IDs in their circle.
+	if _, ok := s.requireResponseInGroup(w, r, responseID); !ok {
 		return
 	}
 

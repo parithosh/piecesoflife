@@ -97,6 +97,17 @@ func TestThrowbackPhotosOneYearAgoAndFallback(t *testing.T) {
 	_, _, err = env.store.AttachDiarySection(ctx, oldID, alice.ID, "2025-11-01", "2025-11-05")
 	require.NoError(t, err)
 
+	// Deterministic full-pool privacy check: covered and draft photos must
+	// never appear anywhere in the throwback candidate pool.
+	allPool, err := env.store.ListRandomThrowbackPhotos(ctx, oldID, 100)
+	require.NoError(t, err)
+	require.Len(t, allPool, 7, "expected all 7 uncovered published photos in pool")
+	for _, p := range allPool {
+		assert.NotContains(t, p.FilePath, "tb-covered.jpg", "covered response photo must be excluded from pool")
+		assert.NotContains(t, p.FilePath, "tb-dump-covered.jpg", "covered dump photo must be excluded from pool")
+		assert.NotContains(t, p.FilePath, "tb-draft.jpg", "draft photo must be excluded from pool")
+	}
+
 	// Current issue: Nov 2026.
 	makePublishedIssue("November 2026", 2026, 11)
 
@@ -167,7 +178,8 @@ func TestThrowbackPhotosOneYearAgoAndFallback(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	fbBody := rr.Body.String()
-	assert.Contains(t, fbBody, "Photos from one year ago")
+	assert.Contains(t, fbBody, "Photos from 12 issues ago")
+	assert.NotContains(t, fbBody, "Photos from one year ago")
 	assert.Contains(t, fbBody, "2024-02")
 	assert.Contains(t, fbBody, "Twelve issues back")
 	assert.Contains(t, fbBody, `/issues/2024/02`)
@@ -259,6 +271,30 @@ func TestUnseenCommentsTabVisibilityAndLifecycle(t *testing.T) {
 	dumpID, err := env.store.CreateDumpItem(ctx, oldID, priya.ID, "photo", &jpeg,
 		"/tmp/uploads/sunset.jpg", &dumpCap)
 	require.NoError(t, err)
+
+	// Covered dump photo with a secret caption: unseen tab must mask its
+	// caption and omit the direct comments panel.
+	secretCap := "Top secret surprise party photo"
+	coveredDumpID, err := env.store.CreateDumpItem(ctx, oldID, priya.ID, "photo", &jpeg,
+		"/tmp/uploads/secret-party.jpg", &secretCap)
+	require.NoError(t, err)
+	require.NoError(t, env.store.UpdateDumpItemCover(ctx, coveredDumpID, true, nil))
+
+	// Notebook voice note with MIME type in Content: unseen tab must show
+	// "Voice note", never "audio/webm".
+	rambleID, err := env.store.EnsureRambleDay(ctx, priya.ID, "2026-10-05")
+	require.NoError(t, err)
+	audioMIME := "audio/webm"
+	audioPath := "/tmp/uploads/voice.webm"
+	_, err = env.store.CreateRambleBlock(ctx, rambleID, "audio", &audioMIME, &audioPath, nil)
+	require.NoError(t, err)
+	_, _, err = env.store.AttachDiarySection(ctx, oldID, priya.ID, "2026-10-01", "2026-10-10")
+	require.NoError(t, err)
+	diaryGroups, err := env.store.ListDiarySectionsByIssue(ctx, oldID)
+	require.NoError(t, err)
+	require.Len(t, diaryGroups, 1)
+	audioBlockID := diaryGroups[0].Days[0].Blocks[0].ID
+
 	require.NoError(t, env.store.PublishIssue(ctx, oldID))
 	setPublishedAt(oldID, time.Now().UTC().Add(-5*24*time.Hour))
 
@@ -277,26 +313,82 @@ func TestUnseenCommentsTabVisibilityAndLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	setCommentCreatedAt(recentRespCID, time.Now().UTC().Add(-6*time.Hour))
 
-	// Priya's recent comment on dump item (2 hours ago -> UNSEEN).
+	// Priya's recent comment on uncovered dump item (2 hours ago -> UNSEEN).
+	snapshotTime := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
 	recentDumpCID, err := env.store.CreateDumpComment(ctx, priya.ID, dumpID, nil, "Golden hour!")
 	require.NoError(t, err)
-	setCommentCreatedAt(recentDumpCID, time.Now().UTC().Add(-2*time.Hour))
+	setCommentCreatedAt(recentDumpCID, snapshotTime)
+
+	// Priya's recent comment on covered dump photo + audio diary block.
+	coveredCID, err := env.store.CreateDumpComment(ctx, priya.ID, coveredDumpID, nil, "Shhh surprise!")
+	require.NoError(t, err)
+	setCommentCreatedAt(coveredCID, snapshotTime)
+	audioCID, err := env.store.CreateDiaryBlockComment(ctx, priya.ID, audioBlockID, nil, "Loved hearing your voice!")
+	require.NoError(t, err)
+	setCommentCreatedAt(audioCID, snapshotTime)
 
 	matureHTML := getIssue(bob.ID, 2026, 10)
 	assert.Contains(t, matureHTML, `data-read-mode="unseen"`)
-	assert.Contains(t, matureHTML, `data-unseen-count="2"`)
+	assert.Contains(t, matureHTML, `data-unseen-count="4"`)
 	assert.Contains(t, matureHTML, "Best meal this month?")
 	assert.Contains(t, matureHTML, "Sunset from the terrace")
 
-	// 3. Mark comments seen -> subsequent page load shows 0 unseen.
+	// Extract unseen-comments-view slice to assert cover masking & voice-note label.
+	unseenStart := strings.Index(matureHTML, `id="unseen-comments-view"`)
+	require.Greater(t, unseenStart, 0)
+	unseenSection := matureHTML[unseenStart:]
+	assert.NotContains(t, unseenSection, secretCap, "covered photo caption must not appear in unseen tab")
+	assert.NotContains(t, unseenSection, fmt.Sprintf(`data-dump-item-id="%d"`, coveredDumpID),
+		"covered photo comments panel must not render directly in unseen tab")
+	assert.Contains(t, unseenSection, "This comment is on a covered photo")
+	assert.Contains(t, unseenSection, "Voice note")
+	assert.NotContains(t, unseenSection, "audio/webm", "raw MIME type must not leak into unseen excerpt")
+
+	// 3. Post a comment in the EXACT same second as snapshotTime (with a higher
+	//    comment ID) before Bob marks the rendered snapshot seen. It must NOT
+	//    be swallowed!
+	sameSecCID, err := env.store.CreateComment(ctx, priya.ID, oldRespID, nil, "Arrived same second after render!")
+	require.NoError(t, err)
+	setCommentCreatedAt(sameSecCID, snapshotTime)
+
 	csrfCookie, csrfToken := csrfPair()
+	markBody := fmt.Sprintf(`{"as_of":%q,"max_comment_id":%d}`,
+		snapshotTime.Format(time.RFC3339), audioCID)
 	markReq := httptest.NewRequest(http.MethodPost,
-		fmt.Sprintf("/api/issues/%d/comments/mark-seen", oldID), nil)
+		fmt.Sprintf("/api/issues/%d/comments/mark-seen", oldID), strings.NewReader(markBody))
 	markReq.AddCookie(env.sessionCookie(t, bob.ID))
 	markReq.AddCookie(csrfCookie)
 	markReq.Header.Set("X-CSRF-Token", csrfToken)
+	markReq.Header.Set("Content-Type", "application/json")
 	markRR := env.do(t, markReq)
 	require.Equal(t, http.StatusNoContent, markRR.Code)
+
+	// Same-second comment posted after render still shows as 1 unseen!
+	afterSnapshotHTML := getIssue(bob.ID, 2026, 10)
+	assert.Contains(t, afterSnapshotHTML, `data-unseen-count="1"`)
+
+	// Marking seen up through sameSecCID clears everything to 0.
+	markBody2 := fmt.Sprintf(`{"as_of":%q,"max_comment_id":%d}`,
+		snapshotTime.Format(time.RFC3339), sameSecCID)
+	markReq2 := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/comments/mark-seen", oldID), strings.NewReader(markBody2))
+	markReq2.AddCookie(env.sessionCookie(t, bob.ID))
+	markReq2.AddCookie(csrfCookie)
+	markReq2.Header.Set("X-CSRF-Token", csrfToken)
+	markReq2.Header.Set("Content-Type", "application/json")
+	require.Equal(t, http.StatusNoContent, env.do(t, markReq2).Code)
+
+	// Monotonic check: an older tab posting an earlier as_of must NOT regress
+	// the watermark backwards.
+	staleMarkBody := fmt.Sprintf(`{"as_of":%q,"max_comment_id":%d}`,
+		snapshotTime.Add(-1*time.Hour).Format(time.RFC3339), recentRespCID)
+	staleMarkReq := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/issues/%d/comments/mark-seen", oldID), strings.NewReader(staleMarkBody))
+	staleMarkReq.AddCookie(env.sessionCookie(t, bob.ID))
+	staleMarkReq.AddCookie(csrfCookie)
+	staleMarkReq.Header.Set("X-CSRF-Token", csrfToken)
+	staleMarkReq.Header.Set("Content-Type", "application/json")
+	require.Equal(t, http.StatusNoContent, env.do(t, staleMarkReq).Code)
 
 	afterSeenHTML := getIssue(bob.ID, 2026, 10)
 	assert.Contains(t, afterSeenHTML, `data-read-mode="unseen"`)
@@ -304,10 +396,9 @@ func TestUnseenCommentsTabVisibilityAndLifecycle(t *testing.T) {
 	assert.Contains(t, afterSeenHTML, "all caught up")
 
 	// 4. A brand-new comment posted AFTER mark-seen shows up as 1 unseen.
-	//    Ensure timestamp is strictly after last_seen_at (2 seconds forward).
 	brandNewCID, err := env.store.CreateComment(ctx, priya.ID, oldRespID, nil, "Coming over next week!")
 	require.NoError(t, err)
-	setCommentCreatedAt(brandNewCID, time.Now().UTC().Add(2*time.Second))
+	setCommentCreatedAt(brandNewCID, time.Now().UTC().Add(-1*time.Minute))
 
 	newCommentHTML := getIssue(bob.ID, 2026, 10)
 	assert.Contains(t, newCommentHTML, `data-unseen-count="1"`)
@@ -364,9 +455,10 @@ func TestLikesOnAnswersAndComments(t *testing.T) {
 		return env.do(t, req)
 	}
 
-	// Draft/unpublished response cannot be liked.
+	// Draft/unpublished response returns 404 (same as cross-Loop / missing)
+	// so callers cannot probe for draft response IDs in their circle.
 	draftRR := postLike(bob.ID, 1, fmt.Sprintf("/api/responses/%d/like", respID))
-	assert.Equal(t, http.StatusForbidden, draftRR.Code)
+	assert.Equal(t, http.StatusNotFound, draftRR.Code)
 
 	require.NoError(t, env.store.SubmitResponse(ctx, respID))
 	require.NoError(t, env.store.PublishIssue(ctx, issueID))

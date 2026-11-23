@@ -94,16 +94,20 @@ type IssuePageData struct {
 	// DirectedQuestions are questions aimed at a single member (@mentioned),
 	// aggregated into "The hot seat" spread below the notebooks.
 	DirectedQuestions []store.Question
-	// ThrowbackIssue and ThrowbackPhotos power the "Photos from one year ago"
-	// closing section (5 random uncovered photos from 1Y ago, or 12 issues
-	// earlier when no exact 1Y issue exists). Empty when none are available.
+	// ThrowbackIssue and ThrowbackPhotos power the closing throwback spread
+	// (5 random uncovered photos from 1Y ago, or 12 issues earlier when no
+	// exact 1Y issue exists). Empty when none are available.
 	ThrowbackIssue  *store.Issue
 	ThrowbackPhotos []store.ThrowbackPhoto
+	ThrowbackTitle  string
+	ThrowbackKicker string
 	// Unseen comments tab: shown only when the issue has been published for at
 	// least 2 days, surfacing comments with activity in the last 2 days that
 	// the reader has not yet caught up on.
 	ShowUnseenComments  bool
 	UnseenCommentsSince string
+	UnseenAsOf          string
+	UnseenMaxCommentID  int64
 	UnseenCommentCount  int
 	UnseenThreads       []UnseenCommentTarget
 	// NextIssue is the pre-created upcoming round (nil when none). Members
@@ -124,6 +128,7 @@ type UnseenCommentTarget struct {
 	AuthorName     string
 	Excerpt        string
 	ThumbPath      *string
+	IsCovered      bool
 	UnseenCount    int
 	TotalCount     int
 	LatestActivity time.Time
@@ -592,9 +597,13 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 
 	// Throwback section: 5 random uncovered photos from the issue published 1
 	// year earlier (or 12 issues back if no exact 1Y issue exists).
-	var throwbackIssue *store.Issue
-	var throwbackPhotos []store.ThrowbackPhoto
-	if tbIss, tbErr := s.store.FindThrowbackIssue(ctx, currentGroupID(ctx), *targetIssue); tbErr != nil {
+	var (
+		throwbackIssue  *store.Issue
+		throwbackPhotos []store.ThrowbackPhoto
+		throwbackTitle  string
+		throwbackKicker string
+	)
+	if tbIss, isYearAgo, tbErr := s.store.FindThrowbackIssue(ctx, targetIssue.GroupID, *targetIssue); tbErr != nil {
 		s.logger.WarnContext(ctx, "Failed to find throwback issue",
 			slog.Int64("issue_id", targetIssue.ID),
 			slog.String("error", tbErr.Error()))
@@ -607,6 +616,13 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		} else if len(photos) > 0 {
 			throwbackIssue = tbIss
 			throwbackPhotos = photos
+			if isYearAgo {
+				throwbackTitle = "Photos from one year ago"
+				throwbackKicker = "A look back"
+			} else {
+				throwbackTitle = "Photos from 12 issues ago"
+				throwbackKicker = "12 issues back"
+			}
 		}
 	}
 
@@ -614,8 +630,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	// (and the pager links are right) before any JavaScript runs. Extra
 	// pages come after the shared questions: the notebooks spread (when anyone
 	// wove theirs in), The hot seat (when any questions were directed to
-	// specific members), the dump collage, and "Photos from one year ago" as
-	// the closing spread.
+	// specific members), the dump collage, and throwback photos as the closer.
 	pageCount := len(sharedQuestions)
 	diaryIdx, directedIdx, dumpIdx, throwbackIdx := -1, -1, -1, -1
 
@@ -646,6 +661,8 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 	var (
 		showUnseenComments  bool
 		unseenCommentsSince string
+		unseenAsOf          string
+		unseenMaxCommentID  int64
 		unseenCommentCount  int
 		unseenThreads       []UnseenCommentTarget
 	)
@@ -655,21 +672,40 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		nowUTC.Sub(targetIssue.PublishedAt.UTC()) >= unseenWindow {
 		showUnseenComments = true
 		cutoff := nowUTC.Add(-unseenWindow)
-		if lastSeen, rErr := s.store.GetIssueCommentRead(ctx, user.ID, targetIssue.ID); rErr != nil {
+		var afterCommentID int64
+		if readMark, rErr := s.store.GetIssueCommentRead(ctx, user.ID, targetIssue.ID); rErr != nil {
 			s.logger.WarnContext(ctx, "Failed to load issue comment read watermark",
 				slog.Int64("issue_id", targetIssue.ID),
 				slog.String("error", rErr.Error()))
-		} else if lastSeen != nil && lastSeen.UTC().After(cutoff) {
-			cutoff = lastSeen.UTC()
+		} else if readMark != nil && readMark.LastSeenAt.UTC().After(cutoff) {
+			cutoff = readMark.LastSeenAt.UTC()
+			afterCommentID = readMark.LastSeenCommentID
 		}
 		unseenCommentsSince = cutoff.Format(time.RFC3339)
+		asOf := nowUTC
 
-		recent, cErr := s.store.ListRecentIssueComments(ctx, targetIssue.ID, user.ID, cutoff)
+		recent, cErr := s.store.ListRecentIssueComments(ctx, targetIssue.ID, user.ID, cutoff, afterCommentID)
 		if cErr != nil {
 			s.logger.WarnContext(ctx, "Failed to load recent unseen comments",
 				slog.Int64("issue_id", targetIssue.ID),
 				slog.String("error", cErr.Error()))
 		} else {
+			if len(recent) > 0 {
+				var maxAct time.Time
+				for i := range recent {
+					act := recent[i].CreatedAt.UTC()
+					if recent[i].EditedAt != nil && recent[i].EditedAt.UTC().After(act) {
+						act = recent[i].EditedAt.UTC()
+					}
+					if act.After(maxAct) {
+						maxAct = act
+						unseenMaxCommentID = recent[i].ID
+					} else if act.Equal(maxAct) && recent[i].ID > unseenMaxCommentID {
+						unseenMaxCommentID = recent[i].ID
+					}
+				}
+				asOf = maxAct
+			}
 			unseenThreads, unseenCommentCount = buildUnseenCommentTargets(
 				recent,
 				sharedQuestions, directedQuestions, responses, commentCounts,
@@ -678,6 +714,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 				diaryIdx, directedIdx, dumpIdx,
 			)
 		}
+		unseenAsOf = asOf.Format(time.RFC3339)
 	}
 
 	currentQ := 1
@@ -713,8 +750,12 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		ThrowbackIdx:            throwbackIdx,
 		ThrowbackIssue:          throwbackIssue,
 		ThrowbackPhotos:         throwbackPhotos,
+		ThrowbackTitle:          throwbackTitle,
+		ThrowbackKicker:         throwbackKicker,
 		ShowUnseenComments:      showUnseenComments,
 		UnseenCommentsSince:     unseenCommentsSince,
+		UnseenAsOf:              unseenAsOf,
+		UnseenMaxCommentID:      unseenMaxCommentID,
 		UnseenCommentCount:      unseenCommentCount,
 		UnseenThreads:           unseenThreads,
 		NextIssue:               nextIssue,
@@ -766,9 +807,9 @@ func buildUnseenCommentTargets(
 
 	// Build lightweight context lookups from data already loaded for the page.
 	type qMeta struct {
-		text      string
-		pageIdx   int
-		secLabel  string
+		text     string
+		pageIdx  int
+		secLabel string
 	}
 	qByID := make(map[int64]qMeta, len(sharedQuestions)+len(directedQuestions))
 	for i, q := range sharedQuestions {
@@ -792,10 +833,11 @@ func buildUnseenCommentTargets(
 	}
 
 	type diaryBlockMeta struct {
-		author   string
-		dayLabel string
-		excerpt  string
-		thumb    *string
+		author    string
+		dayLabel  string
+		excerpt   string
+		thumb     *string
+		isCovered bool
 	}
 	diaryBlocks := make(map[int64]diaryBlockMeta)
 	type diaryDayMeta struct {
@@ -812,14 +854,36 @@ func buildUnseenCommentTargets(
 			for bi := range d.Blocks {
 				b := &d.Blocks[bi]
 				meta := diaryBlockMeta{author: g.UserName, dayLabel: dayLabel}
-				if b.Content != nil && strings.TrimSpace(*b.Content) != "" {
-					meta.excerpt = truncateExcerpt(*b.Content, 160)
-				} else if b.Caption != nil && strings.TrimSpace(*b.Caption) != "" {
-					meta.excerpt = truncateExcerpt(*b.Caption, 160)
-				}
-				if b.Type == "photo" && b.FilePath != nil && !b.IsCovered {
-					p := *b.FilePath
-					meta.thumb = &p
+				if b.Type == "photo" && b.IsCovered {
+					// Never expose a covered photo's caption or thumbnail before reveal.
+					meta.isCovered = true
+				} else {
+					switch b.Type {
+					case "text":
+						if b.Content != nil && strings.TrimSpace(*b.Content) != "" {
+							meta.excerpt = truncateExcerpt(*b.Content, 160)
+						}
+					case "photo":
+						if b.Caption != nil && strings.TrimSpace(*b.Caption) != "" {
+							meta.excerpt = truncateExcerpt(*b.Caption, 160)
+						}
+						if b.FilePath != nil {
+							p := *b.FilePath
+							meta.thumb = &p
+						}
+					case "audio":
+						if b.Caption != nil && strings.TrimSpace(*b.Caption) != "" {
+							meta.excerpt = truncateExcerpt(*b.Caption, 160)
+						} else {
+							meta.excerpt = "Voice note"
+						}
+					case "video":
+						if b.Caption != nil && strings.TrimSpace(*b.Caption) != "" {
+							meta.excerpt = truncateExcerpt(*b.Caption, 160)
+						} else {
+							meta.excerpt = "Video"
+						}
+					}
 				}
 				diaryBlocks[b.ID] = meta
 			}
@@ -827,9 +891,10 @@ func buildUnseenCommentTargets(
 	}
 
 	type dumpMeta struct {
-		author  string
-		title   string
-		thumb   *string
+		author    string
+		title     string
+		thumb     *string
+		isCovered bool
 	}
 	dumpByID := make(map[int64]dumpMeta)
 	for gi := range dumpGroups {
@@ -837,10 +902,14 @@ func buildUnseenCommentTargets(
 		for pi := range g.Photos {
 			it := &g.Photos[pi]
 			m := dumpMeta{author: g.UserName, title: "Photo"}
-			if it.Caption != nil && strings.TrimSpace(*it.Caption) != "" {
-				m.title = truncateExcerpt(*it.Caption, 120)
-			}
-			if !it.IsCovered {
+			if it.IsCovered {
+				// Mask covered dump photo caption and thumbnail until revealed.
+				m.isCovered = true
+				m.title = "Covered photo"
+			} else {
+				if it.Caption != nil && strings.TrimSpace(*it.Caption) != "" {
+					m.title = truncateExcerpt(*it.Caption, 120)
+				}
 				p := it.FilePath
 				m.thumb = &p
 			}
@@ -922,6 +991,7 @@ func buildUnseenCommentTargets(
 				t.AuthorName = m.author
 				t.Excerpt = m.excerpt
 				t.ThumbPath = m.thumb
+				t.IsCovered = m.isCovered
 				t.TotalCount = diaryBlockCommentCounts[key.id]
 			case "diary_day":
 				m, ok := diaryDays[key.id]
@@ -943,6 +1013,7 @@ func buildUnseenCommentTargets(
 				t.Title = m.title
 				t.AuthorName = m.author
 				t.ThumbPath = m.thumb
+				t.IsCovered = m.isCovered
 				t.TotalCount = dumpCommentCounts[key.id]
 			}
 
