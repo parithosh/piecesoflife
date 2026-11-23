@@ -10,7 +10,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
-	_ "image/png" // register decoder
+	"image/png"
 	"io"
 	"net/http"
 	"os"
@@ -114,10 +114,127 @@ func (s *Server) storeBrandingImage(ctx context.Context, src uploadedImage, maxE
 	return writeJPEGAtomic(dst, applyOrientation(scaleToFit(img, maxEdge), orientation))
 }
 
+// storeUploadedPhoto validates, decodes, orientation-corrects, and re-encodes
+// a member-uploaded photo (response, dump, or ramble) so EXIF/GPS metadata is
+// stripped and decompression bombs (including HEIF/AVIF) are rejected before
+// decoding. Unlike storeBrandingImage it preserves full resolution and keeps
+// PNG transparency intact. Returns the written file path and content type.
+func (s *Server) storeUploadedPhoto(
+	ctx context.Context, src uploadedImage, dstStem string,
+) (string, string, error) {
+	sniff := make([]byte, 512)
+	n, err := src.ReadAt(sniff, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", "", fmt.Errorf("reading upload: %w", err)
+	}
+	sniff = sniff[:n]
+
+	var in uploadedImage = src
+	switch {
+	case isHEIF(sniff):
+		w, h, ok := heifDimensions(src)
+		if !ok {
+			return "", "", errDamaged
+		}
+		if tooManyPixels(w, h) {
+			return "", "", errTooManyPix
+		}
+		jpegFile, err := s.heicToJPEG(ctx, src, filepath.Dir(dstStem))
+		if err != nil {
+			return "", "", err
+		}
+		defer os.Remove(jpegFile.Name())
+		defer jpegFile.Close()
+		in = jpegFile
+	case isAllowedImageType(http.DetectContentType(sniff)):
+	default:
+		return "", "", errNotAPhoto
+	}
+
+	if _, err := in.Seek(0, io.SeekStart); err != nil {
+		return "", "", fmt.Errorf("rewinding upload: %w", err)
+	}
+	cfg, format, err := image.DecodeConfig(in)
+	if err != nil {
+		return "", "", errDamaged
+	}
+	if tooManyPixels(cfg.Width, cfg.Height) {
+		return "", "", errTooManyPix
+	}
+
+	orientation := imageOrientation(in, format)
+
+	if _, err := in.Seek(0, io.SeekStart); err != nil {
+		return "", "", fmt.Errorf("rewinding upload: %w", err)
+	}
+	img, _, err := image.Decode(in)
+	if err != nil {
+		return "", "", errDamaged
+	}
+
+	var oriented image.Image = img
+	if orientation > 1 && orientation <= 8 {
+		oriented = applyOrientation(imageToRGBA(img), orientation)
+	}
+
+	// Preserve PNG (and transparent WebP) losslessly as PNG without metadata
+	// chunks; encode JPEG, HEIC, and opaque WebP as metadata-free JPEG.
+	if format == "png" || (format == "webp" && imageHasAlpha(oriented)) {
+		dst := dstStem + ".png"
+		if err := writePNGAtomic(dst, oriented); err != nil {
+			return "", "", err
+		}
+
+		return dst, "image/png", nil
+	}
+
+	dst := dstStem + ".jpg"
+	if err := writeJPEGAtomicQuality(dst, flattenOpaque(oriented), 90); err != nil {
+		return "", "", err
+	}
+
+	return dst, "image/jpeg", nil
+}
+
+func imageToRGBA(img image.Image) *image.RGBA {
+	if rgba, ok := img.(*image.RGBA); ok {
+		return rgba
+	}
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(out, out.Bounds(), img, b.Min, draw.Src)
+
+	return out
+}
+
+func flattenOpaque(img image.Image) image.Image {
+	if op, ok := img.(interface{ Opaque() bool }); ok && op.Opaque() {
+		return img
+	}
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(out, out.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(out, out.Bounds(), img, b.Min, draw.Over)
+
+	return out
+}
+
+func imageHasAlpha(img image.Image) bool {
+	if op, ok := img.(interface{ Opaque() bool }); ok {
+		return !op.Opaque()
+	}
+
+	return false
+}
+
 // writeJPEGAtomic encodes img to a temp file beside dst and renames it into
 // place, so a half-written photo is never visible under dst; the temp file
 // is removed on every failure path.
-func writeJPEGAtomic(dst string, img image.Image) (err error) {
+func writeJPEGAtomic(dst string, img image.Image) error {
+	return writeJPEGAtomicQuality(dst, img, 85)
+}
+
+func writeJPEGAtomicQuality(dst string, img image.Image, quality int) (err error) {
 	tmp := dst + ".tmp"
 	f, err := os.Create(tmp) //nolint:gosec // dst is built from a generated name
 	if err != nil {
@@ -129,7 +246,7 @@ func writeJPEGAtomic(dst string, img image.Image) (err error) {
 		}
 	}()
 
-	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 85}); err != nil {
+	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: quality}); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("encoding jpeg: %w", err)
 	}
@@ -138,6 +255,32 @@ func writeJPEGAtomic(dst string, img image.Image) (err error) {
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		return fmt.Errorf("publishing jpeg: %w", err)
+	}
+
+	return nil
+}
+
+func writePNGAtomic(dst string, img image.Image) (err error) {
+	tmp := dst + ".tmp"
+	f, err := os.Create(tmp) //nolint:gosec // dst is built from a generated name
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", tmp, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+
+	if err := png.Encode(f, img); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("encoding png: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("flushing png: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("publishing png: %w", err)
 	}
 
 	return nil

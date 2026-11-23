@@ -478,8 +478,8 @@ func (s *Server) handleAddDumpComment(w http.ResponseWriter, r *http.Request) {
 }
 
 // requireDumpItemInGroup resolves a dump item's owning issue and verifies it
-// belongs to the current Loop — same ID-walking guard as the other comment
-// targets.
+// belongs to the current Loop and is published — same ID-walking and
+// pre-publication guard as the other comment targets.
 func (s *Server) requireDumpItemInGroup(
 	w http.ResponseWriter, r *http.Request, itemID int64,
 ) (*store.Issue, bool) {
@@ -489,7 +489,7 @@ func (s *Server) requireDumpItemInGroup(
 		return nil, false
 	}
 
-	if issue.GroupID != currentGroupID(r.Context()) {
+	if issue.GroupID != currentGroupID(r.Context()) || issue.Status != "published" {
 		s.writeNotFound(w, r, "Item not found")
 		return nil, false
 	}

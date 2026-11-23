@@ -57,8 +57,7 @@
                    placeholder="friend@example.com" required>
           </div>
           <div class="pl-dialog-actions">
-            <button type="button" class="pl-btn pl-btn--outline"
-                    onclick="document.getElementById('invite-dialog').close()">Cancel</button>
+            <button type="button" id="cancel-invite-btn" class="pl-btn pl-btn--outline">Cancel</button>
             <button type="button" id="send-invite-btn" class="pl-btn pl-btn--rani">Send invite</button>
           </div>
         </div>
@@ -70,10 +69,13 @@
 {{end}}
 
 {{define "scripts"}}
-<script>
+<script nonce="{{.CSPNonce}}">
 
 document.getElementById('invite-btn').addEventListener('click', () => {
     document.getElementById('invite-dialog').showModal();
+});
+document.getElementById('cancel-invite-btn').addEventListener('click', () => {
+    document.getElementById('invite-dialog').close();
 });
 
 document.getElementById('send-invite-btn').addEventListener('click', async () => {

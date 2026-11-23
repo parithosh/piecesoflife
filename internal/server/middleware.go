@@ -2,11 +2,12 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -19,9 +20,23 @@ import (
 type contextKey string
 
 const (
-	userContextKey  contextKey = "user"
-	groupContextKey contextKey = "group"
+	userContextKey     contextKey = "user"
+	groupContextKey    contextKey = "group"
+	cspNonceContextKey contextKey = "csp_nonce"
 )
+
+// cspNonceFromContext returns the per-request CSP script nonce attached by
+// securityHeadersMiddleware, or "" outside the middleware chain.
+func cspNonceFromContext(ctx context.Context) string {
+	n, _ := ctx.Value(cspNonceContextKey).(string)
+	return n
+}
+
+func generateCSPNonce() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return base64.RawURLEncoding.EncodeToString(b[:])
+}
 
 // GroupContext is the request's current Loop: the group row, its settings,
 // and the user's membership in it. Membership is nil for instance admins
@@ -127,8 +142,9 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
-	// CSP is narrow by default: same-origin for scripts, self + inline for
-	// styles (template-local <style> blocks and Oat component styles).
+	// CSP is narrow by default: same-origin + per-request nonce for scripts
+	// (no 'unsafe-inline'), self + inline for styles (template-local <style>
+	// blocks and Oat component styles).
 	//
 	// Exceptions:
 	//   - img-src allows https: so admin-set avatar URLs (arbitrary CDNs)
@@ -137,37 +153,39 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 	//     linkEmbed() in embed.go. Keep the two in sync.
 	//   - connect-src allows api.giphy.com: the comment GIF picker searches
 	//     GIPHY from the browser, as GIPHY's API terms require.
-	//   - script-src allows the inline theme-boot snippet in base.html via
-	//     'unsafe-inline' — without it the FOUC avoidance would have to
-	//     become an external file, which defeats the purpose.
 	const embedHosts = "https://www.youtube-nocookie.com https://www.youtube.com " +
 		"https://open.spotify.com https://embed.music.apple.com " +
 		"https://w.soundcloud.com"
 
-	csp := "default-src 'self'; " +
-		"script-src 'self' 'unsafe-inline'; " +
+	const cspPrefix = "default-src 'self'; script-src 'self' 'nonce-"
+	const cspSuffix = "'; " +
 		"style-src 'self' 'unsafe-inline'; " +
 		"img-src 'self' data: https:; " +
 		"media-src 'self'; " +
 		"font-src 'self'; " +
 		"frame-src 'self' " + embedHosts + "; " +
 		"frame-ancestors 'self'; " +
-		"connect-src 'self' https://api.giphy.com"
+		"connect-src 'self' https://api.giphy.com; " +
+		"base-uri 'self'; " +
+		"object-src 'none'"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nonce := generateCSPNonce()
+
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		// Only we may frame our pages: the Appearance editor previews the
 		// circle's real issue in a same-origin iframe. Other origins stay
 		// blocked (clickjacking); XFO backs up frame-ancestors for legacy
 		// browsers.
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-		w.Header().Set("Content-Security-Policy", csp)
+		w.Header().Set("Content-Security-Policy", cspPrefix+nonce+cspSuffix)
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		if !s.config.DevMode {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), cspNonceContextKey, nonce)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -498,16 +516,17 @@ func (s *Server) tryGroup(
 
 // handleAuthParam exchanges an ?auth=TOKEN query parameter (the magic links
 // embedded in emails) for a session and redirects to the same URL without
-// the parameter. Two forgiving rules keep those links working in the real
-// world:
+// the parameter.
 //
 //   - A visitor who already carries a valid session keeps it: the token is
-//     ignored, not consumed, so a second click on an email button never
-//     bounces a logged-in member to a login error.
-//   - email_cta tokens are NOT single-use. Mail clients and corporate link
-//     scanners prefetch URLs, and burning the token on that fetch would
-//     break the member's real click. They stay valid until they expire.
-//     Short-lived login tokens keep their single-use semantics.
+//     ignored, not consumed, so clicking an email button while signed in
+//     never interrupts the member or triggers an extra email.
+//   - Every auth token (including email_cta) is single-use and revoked on
+//     logout. If a logged-out visitor clicks an already-used, revoked, or
+//     expired link for an active account (e.g. a second device or a link
+//     prefetched by a mail scanner), we automatically email them a fresh
+//     short-lived login link (subject to the per-email rate limit) and tell
+//     them on /login to check their inbox.
 func (s *Server) handleAuthParam(
 	w http.ResponseWriter, r *http.Request, rawToken string,
 ) {
@@ -539,37 +558,46 @@ func (s *Server) handleAuthParam(
 		return
 	}
 
-	if token.ExpiresAt.Before(time.Now()) {
-		user, err := s.store.GetUserByID(r.Context(), token.UserID)
-		if err != nil {
-			http.Redirect(w, r, "/login?error=expired", http.StatusSeeOther)
-			return
-		}
-
-		http.Redirect(w, r,
-			"/login?email="+url.QueryEscape(user.Email)+"&expired=1", http.StatusSeeOther)
-
+	user, err := s.store.GetUserByID(r.Context(), token.UserID)
+	if err != nil || !user.IsActive {
+		http.Redirect(w, r, "/login?error=invalid", http.StatusSeeOther)
 		return
 	}
 
-	if token.Type != "email_cta" {
-		if token.ConsumedAt != nil {
+	if token.ExpiresAt.Before(time.Now()) {
+		_ = s.store.ConsumeAuthToken(r.Context(), token.ID)
+		if s.tryAutoResendLoginLink(r.Context(), user) {
+			http.Redirect(w, r, "/login?expired=1", http.StatusSeeOther)
+		} else {
+			http.Redirect(w, r, "/login?error=expired", http.StatusSeeOther)
+		}
+		return
+	}
+
+	if token.ConsumedAt != nil {
+		if s.tryAutoResendLoginLink(r.Context(), user) {
+			http.Redirect(w, r, "/login?error=used_resent", http.StatusSeeOther)
+		} else {
 			http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
-			return
 		}
+		return
+	}
 
-		if err := s.store.ConsumeAuthToken(r.Context(), token.ID); err != nil {
-			if errors.Is(err, store.ErrTokenAlreadyConsumed) {
+	if err := s.store.ConsumeAuthToken(r.Context(), token.ID); err != nil {
+		if errors.Is(err, store.ErrTokenAlreadyConsumed) {
+			if s.tryAutoResendLoginLink(r.Context(), user) {
+				http.Redirect(w, r, "/login?error=used_resent", http.StatusSeeOther)
+			} else {
 				http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
-				return
 			}
-
-			s.logger.ErrorContext(r.Context(), "Failed to consume auth token",
-				slog.String("error", err.Error()))
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-
 			return
 		}
+
+		s.logger.ErrorContext(r.Context(), "Failed to consume auth token",
+			slog.String("error", err.Error()))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+
+		return
 	}
 
 	if err := s.createSessionAndSetCookie(

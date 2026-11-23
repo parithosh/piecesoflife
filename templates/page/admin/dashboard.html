@@ -47,7 +47,7 @@
           <div class="pl-submitbar-actions">
             <button type="button" class="pl-btn pl-btn--danger"
                     data-schedule-trigger>⚠ Adjust schedule</button>
-            <button type="button" class="pl-btn pl-btn--ghost" onclick="sendReminder({{.CurrentIssue.ID}})">Send reminder</button>
+            <button type="button" class="pl-btn pl-btn--ghost" data-reminder-trigger data-issue-id="{{.CurrentIssue.ID}}">Send reminder</button>
             <button type="button" class="pl-btn pl-btn--gold"
                     data-publish-trigger
                     data-issue-id="{{.CurrentIssue.ID}}"
@@ -160,7 +160,7 @@
               <span class="pl-pill pl-pill--submitted">✓ Submitted</span>
             {{else}}
               <span class="pl-pill pl-pill--waiting">● Waiting</span>
-              <button type="button" class="pl-btn pl-btn--nudge" onclick="nudge({{$.CurrentIssue.ID}}, this)">Nudge</button>
+              <button type="button" class="pl-btn pl-btn--nudge" data-nudge-trigger data-issue-id="{{$.CurrentIssue.ID}}">Nudge</button>
             {{end}}
           </div>
           {{end}}
@@ -226,7 +226,7 @@
         </p>
         {{end}}
         <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" class="pl-btn pl-btn--gold" onclick="openCreateIssueDialog()">{{if .NextIssueOpens}}Start it now{{else}}Create new issue{{end}}</button>
+          <button type="button" class="pl-btn pl-btn--gold" data-create-issue-trigger>{{if .NextIssueOpens}}Start it now{{else}}Create new issue{{end}}</button>
           {{if .NextRound}}
           <button type="button" class="pl-btn pl-btn--ghost" data-schedule-trigger>Adjust schedule</button>
           {{end}}
@@ -245,7 +245,7 @@
           </p>
         </div>
         <div class="pl-dialog-actions">
-          <button type="button" class="pl-btn pl-btn--outline" onclick="document.getElementById('create-issue-dialog').close()">Cancel</button>
+          <button type="button" id="cancel-create-issue-btn" class="pl-btn pl-btn--outline">Cancel</button>
           <button type="button" id="confirm-create-issue-btn" class="pl-btn pl-btn--gold">Create issue</button>
         </div>
       </dialog>
@@ -467,7 +467,19 @@
 
 {{define "scripts"}}
 <script src="/static/reorder.js?v={{assetVersion}}"></script>
-<script>
+<script nonce="{{.CSPNonce}}">
+
+document.addEventListener('click', (ev) => {
+    const rem = ev.target.closest('[data-reminder-trigger]');
+    if (rem) { sendReminder(Number(rem.dataset.issueId)); return; }
+    const ndg = ev.target.closest('[data-nudge-trigger]');
+    if (ndg) { nudge(Number(ndg.dataset.issueId), ndg); return; }
+    if (ev.target.closest('[data-create-issue-trigger]')) { openCreateIssueDialog(); return; }
+    if (ev.target.closest('#cancel-create-issue-btn')) {
+        const dlg = document.getElementById('create-issue-dialog');
+        if (dlg) dlg.close();
+    }
+});
 
 // --- Question curation -------------------------------------------------
 // Each visible issue owns an independent editor. The warning dialog is

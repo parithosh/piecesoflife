@@ -521,9 +521,10 @@ func (s *Server) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 	existingUser, err := s.store.GetUserByEmail(ctx, req.Email)
 	if err == nil {
 		// Known account: joining this Loop is just a membership. An active
-		// existing membership is a conflict; a deactivated one (or none) is
-		// (re)created. A globally deactivated account is restored — the
-		// invite is explicit intent to bring the person back.
+		// existing membership is a conflict; a deactivated membership is
+		// restored. Only an instance admin may lift a global deactivation
+		// (users.is_active = 0) — a single Loop admin must not restore a
+		// banned account across every other Loop on the instance.
 		if membership, mErr := s.store.GetMembership(ctx, groupID, existingUser.ID); mErr == nil &&
 			membership.IsActive && existingUser.IsActive {
 			writeError(w, http.StatusConflict, "already_member", "User is already an active member")
@@ -531,6 +532,12 @@ func (s *Server) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !existingUser.IsActive {
+			if !inviter.IsInstanceAdmin {
+				writeError(w, http.StatusForbidden, "account_deactivated",
+					"This account is deactivated — ask the instance operator to restore it")
+				return
+			}
+
 			if err := s.store.ReactivateUser(ctx, existingUser.ID); err != nil {
 				s.logger.ErrorContext(ctx, "Failed to reactivate user",
 					slog.String("email", req.Email),
@@ -588,7 +595,9 @@ func (s *Server) handleInviteUser(w http.ResponseWriter, r *http.Request) {
 		slog.String("email", req.Email),
 		slog.Int64("user_id", newUserID))
 
-	writeJSON(w, http.StatusCreated, map[string]string{"message": "Invite sent"})
+	// Return 200 consistently for both new and existing accounts so the
+	// response status cannot be used to enumerate accounts on the instance.
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Invite sent"})
 }
 
 // handleGetSettings returns the current settings as JSON.

@@ -28,6 +28,7 @@ func TestCommentDigestSkipsOwnComments(t *testing.T) {
 
 	respID, err := env.store.CreateResponse(ctx, meera.ID, questionIDs[0])
 	require.NoError(t, err, "create meera's response")
+	require.NoError(t, env.store.SubmitResponse(ctx, respID))
 
 	postComment := func(userID int64, body string) int64 {
 		t.Helper()
@@ -105,6 +106,7 @@ func TestCommentDigestNotifiesThreadParticipants(t *testing.T) {
 
 	respID, err := env.store.CreateResponse(ctx, meera.ID, questionIDs[0])
 	require.NoError(t, err, "create meera's response")
+	require.NoError(t, env.store.SubmitResponse(ctx, respID))
 
 	postComment := func(userID int64, body string) int64 {
 		t.Helper()

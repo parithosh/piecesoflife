@@ -104,9 +104,9 @@ function offlineResponse() {
         '<p style="margin:0;font-size:16px;line-height:1.6;color:#8a6d55;">' +
         'PiecesOfLife needs a connection to fetch this page. ' +
         'Check your internet and try again.</p>' +
-        '<button onclick="location.reload()" style="margin-top:20px;padding:11px 22px;border:0;border-radius:4px;' +
+        '<a href="" style="display:inline-block;margin-top:20px;padding:11px 22px;border:0;border-radius:4px;' +
         'background:#7a0f38;color:#fbf4e3;font-family:system-ui,sans-serif;font-weight:700;font-size:12px;' +
-        'letter-spacing:.05em;text-transform:uppercase;cursor:pointer;">Try again</button>' +
+        'letter-spacing:.05em;text-transform:uppercase;text-decoration:none;cursor:pointer;">Try again</a>' +
         '</div></body></html>';
     return new Response(html, {
         status: 503,

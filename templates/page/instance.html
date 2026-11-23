@@ -126,8 +126,7 @@
                    placeholder="Asha">
           </div>
           <div class="pl-dialog-actions">
-            <button type="button" class="pl-btn pl-btn--outline"
-                    onclick="document.getElementById('new-loop-dialog').close()">Cancel</button>
+            <button type="button" id="cancel-new-loop-btn" class="pl-btn pl-btn--outline">Cancel</button>
             <button type="button" id="create-loop-btn" class="pl-btn pl-btn--rani">Start the circle</button>
           </div>
         </div>
@@ -139,9 +138,12 @@
 {{end}}
 
 {{define "scripts"}}
-<script>
+<script nonce="{{.CSPNonce}}">
 document.getElementById('new-loop-btn').addEventListener('click', () => {
     document.getElementById('new-loop-dialog').showModal();
+});
+document.getElementById('cancel-new-loop-btn').addEventListener('click', () => {
+    document.getElementById('new-loop-dialog').close();
 });
 
 const circleInfoBtn = document.getElementById('new-circle-info-btn');

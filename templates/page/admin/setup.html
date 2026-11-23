@@ -197,7 +197,7 @@
 
 {{define "scripts"}}
 <script src="/static/reorder.js?v={{assetVersion}}"></script>
-<script>
+<script nonce="{{.CSPNonce}}">
     let suggestedQuestions = {{jsonMarshal .SuggestedQuestions}} || [];
     const csrfToken = getCSRFToken();
 
@@ -269,19 +269,53 @@
     function buildQuestionRow(q) {
         const div = document.createElement('label');
         div.className = 'question-pick checked';
-        if (q.id) div.dataset.bankId = q.id;
-        div.innerHTML = `
-            <div style="display:flex;align-items:center;gap:var(--space-2);">
-                <input type="checkbox" class="q-check" checked>
-                <span class="q-cat">${q.category || 'custom'}</span>
-                <span class="q-tools">
-                    <button type="button" class="q-default" title="Also make this a default question in every future issue">☆ default</button>
-                    <button type="button" class="q-move" data-move="up" aria-label="Move up">↑</button>
-                    <button type="button" class="q-move" data-move="down" aria-label="Move down">↓</button>
-                </span>
-            </div>
-            <input type="text" class="q-text" value="${(q.text || '').replace(/"/g, '&quot;')}" placeholder="Type your question...">
-        `;
+        if (q.id) div.dataset.bankId = String(q.id);
+
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:var(--space-2);';
+
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'q-check';
+        check.checked = true;
+
+        const cat = document.createElement('span');
+        cat.className = 'q-cat';
+        cat.textContent = q.category || 'custom';
+
+        const tools = document.createElement('span');
+        tools.className = 'q-tools';
+
+        const defBtn = document.createElement('button');
+        defBtn.type = 'button';
+        defBtn.className = 'q-default';
+        defBtn.title = 'Also make this a default question in every future issue';
+        defBtn.textContent = '☆ default';
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.className = 'q-move';
+        upBtn.dataset.move = 'up';
+        upBtn.setAttribute('aria-label', 'Move up');
+        upBtn.textContent = '↑';
+
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button';
+        downBtn.className = 'q-move';
+        downBtn.dataset.move = 'down';
+        downBtn.setAttribute('aria-label', 'Move down');
+        downBtn.textContent = '↓';
+
+        tools.append(defBtn, upBtn, downBtn);
+        row.append(check, cat, tools);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'q-text';
+        input.value = q.text || '';
+        input.placeholder = 'Type your question...';
+
+        div.append(row, input);
         return div;
     }
 

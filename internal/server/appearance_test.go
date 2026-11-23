@@ -275,7 +275,9 @@ func TestAppearanceMementoIsColoursOnly(t *testing.T) {
 		fmt.Sprintf(`{"group_id":1,"fabric":"indigo","banner":{"file":%q,"x":50,"y":50}}`, banner.File))
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 
-	memento := f.page(t, nil, fmt.Sprintf("/m/%d", respID))
+	resp, err := f.env.store.GetResponseByID(ctx, respID)
+	require.NoError(t, err)
+	memento := f.page(t, nil, "/m/"+resp.ShareToken)
 	assert.Contains(t, memento, "--rani:#243b6b;")
 	assert.NotContains(t, memento, banner.File)
 	assert.NotContains(t, memento, "data-banner")

@@ -53,6 +53,11 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if issue.Status == "draft" && !isGroupAdmin(r.Context()) {
+		s.writeNotFound(w, r, "Issue not found")
+		return
+	}
+
 	questions, err := s.store.ListQuestionsByIssue(r.Context(), issueID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to list questions for issue",
@@ -764,7 +769,13 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.requireIssue(w, r, issueID); !ok {
+	issue, ok := s.requireIssue(w, r, issueID)
+	if !ok {
+		return
+	}
+
+	if issue.Status == "draft" && !isGroupAdmin(r.Context()) {
+		s.writeNotFound(w, r, "Issue not found")
 		return
 	}
 

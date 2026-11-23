@@ -44,7 +44,7 @@
       {{else}}
 
       <div class="pl-appr">
-        <form class="pl-appr-controls" id="appr-form" onsubmit="return false">
+        <form class="pl-appr-controls" id="appr-form">
 
           <section class="pl-settings-section">
             <h2 class="pl-display pl-settings-title">Fabric</h2>
@@ -170,8 +170,10 @@
 
 {{define "scripts"}}
 {{if .Enabled}}
-<script>
+<script nonce="{{.CSPNonce}}">
 (function () {
+    const apprForm = document.getElementById('appr-form');
+    if (apprForm) apprForm.addEventListener('submit', e => e.preventDefault());
     const fabrics = {{.Fabrics}};
     const groupID = {{.Group.ID}};
     const byId = Object.fromEntries(fabrics.map(f => [f.id, f]));

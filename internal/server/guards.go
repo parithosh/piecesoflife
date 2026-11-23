@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -98,9 +97,10 @@ func (s *Server) requireIssue(
 }
 
 // requireResponseInGroup resolves a response's owning issue and verifies it
-// belongs to the current Loop. Used by handlers that take a bare response
-// ID from the client (comments, listings) so IDs can't be walked across
-// Loops. No auto-switch here — these are fetch endpoints.
+// belongs to the current Loop, is published, and the response is submitted
+// (not a draft). Used by handlers that take a bare response ID from the
+// client (comments, listings) so IDs can't be walked across Loops or probed
+// before publication. No auto-switch here — these are fetch endpoints.
 func (s *Server) requireResponseInGroup(
 	w http.ResponseWriter, r *http.Request, responseID int64,
 ) (*store.Issue, bool) {
@@ -110,7 +110,13 @@ func (s *Server) requireResponseInGroup(
 		return nil, false
 	}
 
-	if issue.GroupID != currentGroupID(r.Context()) {
+	if issue.GroupID != currentGroupID(r.Context()) || issue.Status != "published" {
+		s.writeNotFound(w, r, "Response not found")
+		return nil, false
+	}
+
+	resp, err := s.store.GetResponseByID(r.Context(), responseID)
+	if err != nil || resp.IsDraft {
 		s.writeNotFound(w, r, "Response not found")
 		return nil, false
 	}
@@ -220,25 +226,4 @@ func (s *Server) loadOwnedBlock(
 	}
 
 	return block, resp, true
-}
-
-// isGroupAdminOver reports whether the request's user administers the
-// current Loop AND the target user is an active member of it — the scope of
-// an admin's authority over someone else's profile or preferences. A
-// deactivated membership ends that authority: the profile fields it guards
-// are instance-global, and a removed member's identity belongs to their
-// remaining Loops.
-func (s *Server) isGroupAdminOver(ctx context.Context, targetUserID int64) bool {
-	if !isGroupAdmin(ctx) {
-		return false
-	}
-
-	gc := GroupFromContext(ctx)
-	if gc == nil {
-		return false
-	}
-
-	m, err := s.store.GetMembership(ctx, gc.Group.ID, targetUserID)
-
-	return err == nil && m.IsActive
 }

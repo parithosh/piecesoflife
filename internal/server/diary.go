@@ -539,8 +539,8 @@ func (s *Server) handleAddDiaryBlockComment(w http.ResponseWriter, r *http.Reque
 }
 
 // requireDiaryDayInGroup resolves a notebook day's owning issue and verifies
-// it belongs to the current Loop — same ID-walking guard as
-// requireResponseInGroup.
+// it belongs to the current Loop and is published — same ID-walking and
+// pre-publication guard as requireResponseInGroup.
 func (s *Server) requireDiaryDayInGroup(
 	w http.ResponseWriter, r *http.Request, dayID int64,
 ) (*store.Issue, bool) {
@@ -550,7 +550,7 @@ func (s *Server) requireDiaryDayInGroup(
 		return nil, false
 	}
 
-	if issue.GroupID != currentGroupID(r.Context()) {
+	if issue.GroupID != currentGroupID(r.Context()) || issue.Status != "published" {
 		s.writeNotFound(w, r, "Day not found")
 		return nil, false
 	}
@@ -559,7 +559,7 @@ func (s *Server) requireDiaryDayInGroup(
 }
 
 // requireDiaryBlockInGroup resolves a notebook block's owning issue and
-// verifies it belongs to the current Loop.
+// verifies it belongs to the current Loop and is published.
 func (s *Server) requireDiaryBlockInGroup(
 	w http.ResponseWriter, r *http.Request, blockID int64,
 ) (*store.Issue, bool) {
@@ -569,7 +569,7 @@ func (s *Server) requireDiaryBlockInGroup(
 		return nil, false
 	}
 
-	if issue.GroupID != currentGroupID(r.Context()) {
+	if issue.GroupID != currentGroupID(r.Context()) || issue.Status != "published" {
 		s.writeNotFound(w, r, "Block not found")
 		return nil, false
 	}

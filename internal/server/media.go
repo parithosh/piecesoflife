@@ -28,6 +28,14 @@ func (s *Server) normalizeWebM(ctx context.Context, path string) {
 		return
 	}
 
+	// Verify EBML magic bytes before spawning ffmpeg so non-WebM content
+	// never reaches the demuxer.
+	if !hasEBMLHeader(path) {
+		s.logger.WarnContext(ctx, "Skipping WebM remux — file lacks EBML header",
+			slog.String("path", path))
+		return
+	}
+
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		s.logger.DebugContext(ctx, "ffmpeg not available — skipping WebM remux",
@@ -40,9 +48,17 @@ func (s *Server) normalizeWebM(ctx context.Context, path string) {
 	runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
+	// Lock both the protocol whitelist (local file only — blocks SSRF) and
+	// the input demuxer (matroska,webm — blocks playlist/concat probing).
 	cmd := exec.CommandContext(runCtx, ffmpeg,
+		"-nostdin",
 		"-hide_banner", "-loglevel", "error",
-		"-i", path, "-c", "copy", "-y", tmp,
+		"-protocol_whitelist", "file",
+		"-f", "matroska,webm",
+		"-i", path,
+		"-c", "copy",
+		"-f", "webm",
+		"-y", tmp,
 	)
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -66,6 +82,23 @@ func (s *Server) normalizeWebM(ctx context.Context, path string) {
 
 	s.logger.InfoContext(ctx, "Remuxed WebM upload",
 		slog.String("path", path))
+}
+
+// hasEBMLHeader reports whether the file at path begins with the Matroska/WebM
+// EBML magic bytes (0x1A 0x45 0xDF 0xA3).
+func hasEBMLHeader(path string) bool {
+	f, err := os.Open(path) //nolint:gosec // path is server-generated inside UploadPath
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	var magic [4]byte
+	if _, err := f.Read(magic[:]); err != nil {
+		return false
+	}
+
+	return isEBML(magic[:])
 }
 
 // transcodeHEIC converts a HEIF-family photo upload (HEIC or AVIF) to JPEG

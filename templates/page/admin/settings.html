@@ -215,7 +215,7 @@
 
 {{define "scripts"}}
 <script src="/static/reorder.js?v={{assetVersion}}"></script>
-<script>
+<script nonce="{{.CSPNonce}}">
 
 function setStatus(msg, ok) {
     const el = document.getElementById('settings-status');

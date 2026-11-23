@@ -7,14 +7,88 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
-	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/parithosh/piecesoflife/internal/auth"
 	"github.com/parithosh/piecesoflife/internal/store"
 )
+
+// ipRateLimiter is a small bounded sliding-window rate limiter keyed by client
+// IP. It prevents a single source from spraying magic-link requests across
+// many distinct email addresses (which would bypass the per-email counter).
+type ipRateLimiter struct {
+	mu      sync.Mutex
+	limit   int
+	window  time.Duration
+	entries map[string][]time.Time
+}
+
+func newIPRateLimiter(limit int, window time.Duration) *ipRateLimiter {
+	return &ipRateLimiter{
+		limit:   limit,
+		window:  window,
+		entries: make(map[string][]time.Time),
+	}
+}
+
+func (l *ipRateLimiter) allow(ip string) bool {
+	if l == nil || ip == "" {
+		return true
+	}
+
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Periodically sweep stale buckets so unbounded distinct IPs cannot grow
+	// memory without bound.
+	if len(l.entries) > 2048 {
+		for k, times := range l.entries {
+			kept := pruneTimes(times, cutoff)
+			if len(kept) == 0 {
+				delete(l.entries, k)
+			} else {
+				l.entries[k] = kept
+			}
+		}
+	}
+
+	kept := pruneTimes(l.entries[ip], cutoff)
+	if len(kept) >= l.limit {
+		l.entries[ip] = kept
+		return false
+	}
+
+	l.entries[ip] = append(kept, now)
+	return true
+}
+
+func pruneTimes(times []time.Time, cutoff time.Time) []time.Time {
+	n := 0
+	for _, t := range times {
+		if t.After(cutoff) {
+			times[n] = t
+			n++
+		}
+	}
+	return times[:n]
+}
+
+// clientIP extracts the network peer host from RemoteAddr. It intentionally
+// does not trust unvalidated X-Forwarded-For headers from arbitrary clients.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
 
 // magicLinkOutcome classifies a magic-link request so the JSON API and the
 // no-JavaScript form fallback can share one flow.
@@ -78,13 +152,15 @@ func (s *Server) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 // GET /login
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	data := LoginPageData{
+		PageData: PageData{
+			CSPNonce: cspNonceFromContext(r.Context()),
+		},
 		Error:   r.URL.Query().Get("error"),
-		Email:   r.URL.Query().Get("email"),
 		Success: r.URL.Query().Get("sent") == "1",
 	}
 
 	if r.URL.Query().Get("expired") == "1" {
-		data.Error = "expired"
+		data.Error = "expired_resent"
 	}
 
 	// The login page is Loop-agnostic: brand it with the instance name and
@@ -112,7 +188,7 @@ func (s *Server) handleRequestMagicLink(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	outcome, err := s.requestMagicLink(r.Context(), req.Email)
+	outcome, err := s.requestMagicLink(r.Context(), clientIP(r), req.Email)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Magic link request failed",
 			slog.String("error", err.Error()),
@@ -144,7 +220,7 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outcome, err := s.requestMagicLink(r.Context(), r.PostFormValue("email"))
+	outcome, err := s.requestMagicLink(r.Context(), clientIP(r), r.PostFormValue("email"))
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Magic link request failed",
 			slog.String("error", err.Error()),
@@ -167,10 +243,16 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 // rate-limit, mint a token, and send the email in the background. Unknown and
 // deactivated accounts return magicLinkSent so callers never reveal whether
 // an email exists.
-func (s *Server) requestMagicLink(ctx context.Context, email string) (magicLinkOutcome, error) {
+func (s *Server) requestMagicLink(ctx context.Context, remoteIP, email string) (magicLinkOutcome, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	if email == "" || !strings.Contains(email, "@") {
 		return magicLinkInvalidEmail, nil
+	}
+
+	// Per-IP rate limit runs first so one caller cannot spray requests
+	// across many distinct addresses to exhaust SMTP quota.
+	if !s.loginIPLimiter.allow(remoteIP) {
+		return magicLinkRateLimited, nil
 	}
 
 	// Rate limit: max 3 magic-link requests per address per hour. The
@@ -210,15 +292,25 @@ func (s *Server) requestMagicLink(ctx context.Context, email string) (magicLinkO
 		return magicLinkSent, nil
 	}
 
+	if err := s.mintAndSendLoginLink(ctx, user); err != nil {
+		return magicLinkSent, err
+	}
+
+	return magicLinkSent, nil
+}
+
+// mintAndSendLoginLink creates a 30-minute single-use login token for user
+// and sends the magic-link email asynchronously.
+func (s *Server) mintAndSendLoginLink(ctx context.Context, user *store.User) error {
 	raw, hash, err := auth.GenerateRandomToken(32)
 	if err != nil {
-		return magicLinkSent, fmt.Errorf("generating login token: %w", err)
+		return fmt.Errorf("generating login token: %w", err)
 	}
 
 	expiresAt := time.Now().Add(30 * time.Minute)
 
 	if err := s.store.CreateAuthToken(ctx, user.ID, hash, "login", expiresAt); err != nil {
-		return magicLinkSent, fmt.Errorf("creating auth token: %w", err)
+		return fmt.Errorf("creating auth token: %w", err)
 	}
 
 	link := s.config.BaseURL + "/auth/verify?token=" + raw
@@ -250,7 +342,38 @@ func (s *Server) requestMagicLink(ctx context.Context, email string) (magicLinkO
 		}
 	}()
 
-	return magicLinkSent, nil
+	return nil
+}
+
+// tryAutoResendLoginLink emails a fresh 30-minute login link to an active user
+// when they click a used, revoked, or expired magic link while signed out.
+// Shares the per-email 3/hr rate limit so stale links cannot be used to spam
+// the user's inbox. Returns true when a fresh link was queued.
+func (s *Server) tryAutoResendLoginLink(ctx context.Context, user *store.User) bool {
+	if user == nil || !user.IsActive {
+		return false
+	}
+
+	emailHash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(strings.ToLower(user.Email)))))
+
+	attempts, err := s.store.CountRecentLoginAttempts(ctx, emailHash)
+	if err != nil || attempts >= 3 {
+		return false
+	}
+
+	if err := s.store.RecordLoginAttempt(ctx, emailHash); err != nil {
+		return false
+	}
+
+	if err := s.mintAndSendLoginLink(ctx, user); err != nil {
+		s.logger.ErrorContext(ctx, "Failed to auto-resend login link",
+			slog.Int64("user_id", user.ID),
+			slog.String("error", err.Error()),
+		)
+		return false
+	}
+
+	return true
 }
 
 // handleVerifyToken processes a magic link token verification.
@@ -262,6 +385,14 @@ func (s *Server) handleVerifyToken(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	r = r.WithContext(ctx)
+
+	// If the visitor already has a valid session (e.g. clicking an old email
+	// link again), let them straight in without burning the token or sending
+	// an unnecessary email.
+	if s.hasValidSession(r) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 
 	rawToken := r.URL.Query().Get("token")
 	if rawToken == "" {
@@ -277,24 +408,27 @@ func (s *Server) handleVerifyToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if token.ConsumedAt != nil {
-		http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
-		return
-	}
-
 	if token.Type != "login" {
 		http.Redirect(w, r, "/login?error=invalid", http.StatusSeeOther)
 		return
 	}
 
-	if token.ExpiresAt.Before(time.Now()) {
-		// Token expired — auto-send a fresh one.
-		user, err := s.store.GetUserByID(r.Context(), token.UserID)
-		if err != nil {
-			http.Redirect(w, r, "/login?error=expired", http.StatusSeeOther)
-			return
-		}
+	user, err := s.store.GetUserByID(r.Context(), token.UserID)
+	if err != nil || !user.IsActive {
+		http.Redirect(w, r, "/login?error=invalid", http.StatusSeeOther)
+		return
+	}
 
+	if token.ConsumedAt != nil {
+		if s.tryAutoResendLoginLink(r.Context(), user) {
+			http.Redirect(w, r, "/login?error=used_resent", http.StatusSeeOther)
+		} else {
+			http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
+		}
+		return
+	}
+
+	if token.ExpiresAt.Before(time.Now()) {
 		// Consume the expired token to prevent reuse. A losing race here is
 		// harmless — the token is expired either way.
 		if err := s.store.ConsumeAuthToken(r.Context(), token.ID); err != nil &&
@@ -304,34 +438,23 @@ func (s *Server) handleVerifyToken(w http.ResponseWriter, r *http.Request) {
 			)
 		}
 
-		// Generate a fresh login token.
-		newRaw, newHash, err := auth.GenerateRandomToken(32)
-		if err == nil {
-			newExpiry := time.Now().Add(30 * time.Minute)
-			if err := s.store.CreateAuthToken(r.Context(), user.ID, newHash, "login", newExpiry); err == nil {
-				link := s.config.BaseURL + "/auth/verify?token=" + newRaw
-				body := s.renderLoginEmail(user.Name, link)
-
-				bgCtx := context.WithoutCancel(r.Context())
-				go func() {
-					ctx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
-					defer cancel()
-
-					_ = s.emailer.Send(ctx, user.Email, "Your login link", body)
-				}()
-			}
+		if s.tryAutoResendLoginLink(r.Context(), user) {
+			http.Redirect(w, r, "/login?expired=1", http.StatusSeeOther)
+		} else {
+			http.Redirect(w, r, "/login?error=expired", http.StatusSeeOther)
 		}
-
-		http.Redirect(w, r,
-			"/login?email="+url.QueryEscape(user.Email)+"&expired=1", http.StatusSeeOther)
 		return
 	}
 
 	// Consume the token atomically. If another tab/click already consumed it,
-	// redirect to login rather than minting a second session.
+	// send a fresh login link instead of minting a second session.
 	if err := s.store.ConsumeAuthToken(r.Context(), token.ID); err != nil {
 		if errors.Is(err, store.ErrTokenAlreadyConsumed) {
-			http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
+			if s.tryAutoResendLoginLink(r.Context(), user) {
+				http.Redirect(w, r, "/login?error=used_resent", http.StatusSeeOther)
+			} else {
+				http.Redirect(w, r, "/login?error=used", http.StatusSeeOther)
+			}
 			return
 		}
 
@@ -354,7 +477,8 @@ func (s *Server) handleVerifyToken(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// handleLogout destroys the current session.
+// handleLogout destroys the current session and revokes any outstanding
+// unconsumed magic-link / email CTA tokens for the user.
 // POST /api/auth/logout
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
@@ -370,6 +494,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		if delErr := s.store.DeleteSession(r.Context(), session.ID); delErr != nil {
 			s.logger.ErrorContext(r.Context(), "Failed to delete session",
 				slog.String("error", delErr.Error()),
+			)
+		}
+		if revErr := s.store.RevokeAuthTokensForUser(r.Context(), session.UserID); revErr != nil {
+			s.logger.ErrorContext(r.Context(), "Failed to revoke auth tokens on logout",
+				slog.Int64("user_id", session.UserID),
+				slog.String("error", revErr.Error()),
 			)
 		}
 	}

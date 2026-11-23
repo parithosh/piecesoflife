@@ -691,9 +691,14 @@ func (s *Server) handleProfilePage(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, "profile.html", data)
 }
 
-// handleUploadServe serves uploaded files with directory traversal protection.
+// handleUploadServe serves uploaded files with directory traversal protection
+// and per-file authorization (Loop membership, publication state, and strict
+// ownership for private Ramble media).
 // GET /uploads/*
 func (s *Server) handleUploadServe(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := UserFromContext(ctx)
+
 	// Strip the /uploads/ prefix to get the relative path.
 	relPath := strings.TrimPrefix(r.URL.Path, "/uploads/")
 
@@ -717,6 +722,49 @@ func (s *Server) handleUploadServe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce ownership / Loop membership before serving bytes.
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) == 3 && parts[0] == brandingDirName {
+		groupID, parseErr := strconv.ParseInt(parts[1], 10, 64)
+		if parseErr != nil || !brandingFileRe.MatchString(parts[2]) {
+			http.NotFound(w, r)
+			return
+		}
+
+		gc := s.tryGroup(ctx, user, groupID)
+		if gc == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Unpublished draft branding photos are only visible to that circle's admins.
+		if !brandingInUse(gc.Settings)[parts[2]] {
+			isAdmin := user.IsInstanceAdmin ||
+				(gc.Membership != nil && gc.Membership.IsActive && gc.Membership.Role == "admin")
+			if !isAdmin {
+				http.NotFound(w, r)
+				return
+			}
+		}
+	} else {
+		allowed, accessErr := s.store.CanUserAccessUpload(
+			ctx, user.ID, user.IsInstanceAdmin, cleanPath,
+		)
+		if accessErr != nil {
+			s.logger.ErrorContext(ctx, "Failed to authorize upload access",
+				slog.Int64("user_id", user.ID),
+				slog.String("error", accessErr.Error()))
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		if !allowed {
+			http.NotFound(w, r)
+			return
+		}
+	}
+
+	// Prevent shared proxies/CDNs from caching authenticated private media.
+	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeFile(w, r, cleanPath)
 }
 
@@ -758,9 +806,10 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Members may only update their own profile; Loop admins may update any
-	// member of their Loop.
-	if caller.ID != userID && !s.isGroupAdminOver(ctx, userID) {
+	// Profile fields are instance-global, so only the user themselves or an
+	// instance admin may update them — a single Loop admin cannot overwrite a
+	// member's identity across other Loops.
+	if caller.ID != userID && !caller.IsInstanceAdmin {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot update another user's profile")
 		return
 	}
@@ -796,7 +845,18 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.AvatarURL != nil {
-		target.AvatarURL = req.AvatarURL
+		cleaned, ok := validateAvatarURL(*req.AvatarURL, s.config.DevMode)
+		if !ok {
+			writeValidationError(w, map[string]string{
+				"avatar_url": "Avatar URL must be an https:// link or an uploaded image path",
+			})
+			return
+		}
+		if cleaned == "" {
+			target.AvatarURL = nil
+		} else {
+			target.AvatarURL = &cleaned
+		}
 	}
 
 	if req.Bio != nil {
@@ -828,8 +888,9 @@ func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Members may only view their own preferences.
-	if caller.ID != userID && !s.isGroupAdminOver(ctx, userID) {
+	// Preferences are instance-global: only the user themselves or an
+	// instance admin may view them.
+	if caller.ID != userID && !caller.IsInstanceAdmin {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot view another user's preferences")
 		return
 	}
@@ -857,8 +918,9 @@ func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Members may only update their own preferences.
-	if caller.ID != userID && !s.isGroupAdminOver(ctx, userID) {
+	// Preferences are instance-global: only the user themselves or an
+	// instance admin may update them.
+	if caller.ID != userID && !caller.IsInstanceAdmin {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot update another user's preferences")
 		return
 	}
@@ -943,20 +1005,49 @@ func (s *Server) mementoAccess(
 
 // handleMemento renders a single response as a shareable page with Open
 // Graph tags so link previews on social/chat apps look nice. The page is
-// public iff settings.AllowPublicMementos is true AND the parent issue is
-// published — drafts are never public even with the setting on.
+// keyed by the response's unguessable share_token (never sequential IDs for
+// anonymous viewers), and is public iff settings.AllowPublicMementos AND
+// instance_settings.AllowPublicMementos are true and the parent issue is
+// published. Drafts are never public.
 // GET /m/{id}
 func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	responseID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+
+	token := r.PathValue("id")
+	if token == "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	resp, err := s.store.GetResponseByID(ctx, responseID)
+	viewer := s.lookupSessionUser(r)
+
+	resp, err := s.store.GetResponseByShareToken(ctx, token)
 	if err != nil {
+		// Preserve old numeric /m/{id} bookmarks for signed-in members of
+		// the owning Loop only — anonymous visitors never resolve numeric
+		// IDs, eliminating sequential enumeration.
+		if viewer != nil {
+			if legacyID, parseErr := strconv.ParseInt(token, 10, 64); parseErr == nil {
+				if legacyResp, lErr := s.store.GetResponseByID(ctx, legacyID); lErr == nil &&
+					!legacyResp.IsDraft && legacyResp.ShareToken != "" {
+					if q, qErr := s.store.GetQuestionByID(ctx, legacyResp.QuestionID); qErr == nil {
+						if iss, iErr := s.store.GetIssueByID(ctx, q.IssueID); iErr == nil &&
+							iss.Status == "published" {
+							if settings, sErr := s.store.GetSettings(ctx, iss.GroupID); sErr == nil {
+								isMember, _ := s.mementoAccess(ctx, viewer, iss.GroupID, settings)
+								if isMember {
+									http.Redirect(w, r, "/m/"+legacyResp.ShareToken, http.StatusFound)
+									return
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
 		http.NotFound(w, r)
 		return
 	}
@@ -993,28 +1084,19 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 	// Access control: a signed-in active member of the owning Loop (or an
 	// instance admin) always may view. Anyone else counts as a public
 	// visitor, which requires the Loop's public-memento switch AND the
-	// instance policy.
-	viewer := s.lookupSessionUser(r)
-
+	// instance policy. Unauthorized requests always return 404 so probes
+	// cannot distinguish private mementos from nonexistent tokens.
 	isMember, publicAllowed := s.mementoAccess(ctx, viewer, issue.GroupID, settings)
 
 	if !isMember && !publicAllowed {
-		// Anonymous visitors might just need to log in; a signed-in
-		// non-member gets a plain 404 — a login form can't help them.
-		if viewer == nil {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-
 		http.NotFound(w, r)
-
 		return
 	}
 
-	blocks, err := s.store.ListBlocksByResponse(ctx, responseID)
+	blocks, err := s.store.ListBlocksByResponse(ctx, resp.ID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to load memento blocks",
-			slog.Int64("response_id", responseID),
+			slog.Int64("response_id", resp.ID),
 			slog.String("error", err.Error()))
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -1037,12 +1119,12 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		if b.Type == "photo" && b.FilePath != nil && !b.IsCovered {
 			// Covered photos are never unsolicited social previews. Use the
 			// memento-scoped route only for an uncovered photo.
-			ogImage = s.config.BaseURL + s.mementoFileURL(responseID, *b.FilePath)
+			ogImage = s.config.BaseURL + s.mementoFileURL(resp.ShareToken, *b.FilePath)
 			break
 		}
 	}
 
-	pd := PageData{User: viewer, Settings: settings}
+	pd := PageData{User: viewer, Settings: settings, CSPNonce: cspNonceFromContext(ctx)}
 	// Mementos can be public: the circle's colours carry over, its photos
 	// never do (withPhotos=false keeps their URLs out of the page).
 	if settings.Theme != nil && s.appearanceEnabled(ctx) {
@@ -1056,7 +1138,7 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		Author:        *author,
 		Question:      *question,
 		Issue:         *issue,
-		Canonical:     fmt.Sprintf("%s/m/%d", s.config.BaseURL, responseID),
+		Canonical:     fmt.Sprintf("%s/m/%s", s.config.BaseURL, resp.ShareToken),
 		OGTitle:       ogTitle,
 		OGDescription: ogDesc,
 		OGImage:       ogImage,
@@ -1075,19 +1157,16 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	responseID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 
+	token := r.PathValue("id")
 	relPath := r.PathValue("path")
-	if relPath == "" {
+	if token == "" || relPath == "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	resp, err := s.store.GetResponseByID(ctx, responseID)
+	resp, err := s.store.GetResponseByShareToken(ctx, token)
 	if err != nil || resp.IsDraft {
 		http.NotFound(w, r)
 		return
@@ -1121,10 +1200,10 @@ func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	blocks, err := s.store.ListBlocksByResponse(ctx, responseID)
+	blocks, err := s.store.ListBlocksByResponse(ctx, resp.ID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to load memento blocks for file",
-			slog.Int64("response_id", responseID),
+			slog.Int64("response_id", resp.ID),
 			slog.String("error", err.Error()))
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -1155,6 +1234,10 @@ func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 	if !matched {
 		http.NotFound(w, r)
 		return
+	}
+
+	if !publicAllowed {
+		w.Header().Set("Cache-Control", "private, max-age=3600")
 	}
 
 	http.ServeFile(w, r, cleanPath)
@@ -1402,10 +1485,10 @@ func (s *Server) uploadURL(p string) string {
 }
 
 // mementoFileURL produces a public URL for a memento's file via the
-// /m/{id}/file/... route, which permits anonymous viewers when
+// /m/{token}/file/... route, which permits anonymous viewers when
 // AllowPublicMementos is on. Falls back to uploadURL behaviour for paths
 // that already look like URLs or sit outside the configured UploadPath.
-func (s *Server) mementoFileURL(responseID int64, p string) string {
+func (s *Server) mementoFileURL(shareToken, p string) string {
 	if p == "" {
 		return ""
 	}
@@ -1426,7 +1509,7 @@ func (s *Server) mementoFileURL(responseID int64, p string) string {
 		return s.uploadURL(p)
 	}
 
-	return fmt.Sprintf("/m/%d/file/%s", responseID, strings.ReplaceAll(rel, sep, "/"))
+	return fmt.Sprintf("/m/%s/file/%s", shareToken, strings.ReplaceAll(rel, sep, "/"))
 }
 
 // hasAnswerContent reports whether a response's blocks hold anything a reader

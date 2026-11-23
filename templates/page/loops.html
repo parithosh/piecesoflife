@@ -56,7 +56,7 @@
 {{end}}
 
 {{define "scripts"}}
-<script>
+<script nonce="{{.CSPNonce}}">
 document.querySelectorAll('.pl-loop-card[data-group-id]').forEach((card) => {
     card.addEventListener('click', async () => {
         const res = await fetch('/api/me/group', {
