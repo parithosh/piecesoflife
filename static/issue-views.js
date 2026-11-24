@@ -23,11 +23,20 @@
     const nextTitle = root.querySelector('[data-pager-next-title]');
     const modeToggle = root.querySelector('[data-mode-toggle]');
     const modeButtons = Array.from(root.querySelectorAll('[data-read-mode]'));
+    const unseenView = root.querySelector('[data-unseen-view]');
+    const unseenBadge = root.querySelector('[data-unseen-badge]');
+    const issueID = root.dataset.issueId || '';
 
     const MODE_KEY = 'pol-read-mode';
     let mode = 'paged';
+    let lastReadingMode = 'paged';
+    let markedSeen = false;
+    let markingSeen = false;
     try {
-        if (localStorage.getItem(MODE_KEY) === 'scroll') mode = 'scroll';
+        if (localStorage.getItem(MODE_KEY) === 'scroll') {
+            mode = 'scroll';
+            lastReadingMode = 'scroll';
+        }
     } catch {}
 
     let current = clamp(parseQuestionParam() - 1);
@@ -56,14 +65,61 @@
         return clean.length > 34 ? `${clean.slice(0, 31).trim()}...` : clean;
     }
 
+    async function markCommentsSeen() {
+        if (markedSeen || markingSeen || !issueID) return;
+        const unseenCount = Number(root.dataset.unseenCount || '0');
+        if (unseenCount <= 0) return;
+        markingSeen = true;
+
+        const headers = typeof apiHeaders === 'function'
+            ? apiHeaders()
+            : { 'Content-Type': 'application/json', 'X-CSRF-Token': typeof getCSRFToken === 'function' ? getCSRFToken() : '' };
+        const payload = {
+            as_of: root.dataset.unseenAsOf || '',
+            max_comment_id: Number(root.dataset.unseenMaxId || '0'),
+        };
+
+        try {
+            const res = await fetch(`/api/issues/${encodeURIComponent(issueID)}/comments/mark-seen`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload),
+            });
+            if (res.ok) {
+                markedSeen = true;
+                if (unseenBadge) unseenBadge.remove();
+            }
+        } catch {
+            // Keep the badge so the user knows the watermark hasn't advanced yet.
+        } finally {
+            markingSeen = false;
+        }
+    }
+
     function applyMode(next) {
-        mode = next === 'scroll' ? 'scroll' : 'paged';
+        if (next === 'unseen' && unseenView) {
+            mode = 'unseen';
+        } else {
+            mode = next === 'scroll' ? 'scroll' : 'paged';
+            lastReadingMode = mode;
+        }
+
         root.classList.toggle('is-scroll', mode === 'scroll');
+        root.classList.toggle('is-unseen', mode === 'unseen');
+        if (unseenView) unseenView.hidden = mode !== 'unseen';
+
         modeButtons.forEach(btn => {
             const active = btn.dataset.readMode === mode;
             btn.classList.toggle('is-active', active);
             btn.setAttribute('aria-pressed', active ? 'true' : 'false');
         });
+
+        if (mode === 'unseen') {
+            window.POLComments?.loadDeferred?.(unseenView);
+            unseenView.querySelector('.published-question-title')?.focus?.();
+            markCommentsSeen();
+            return;
+        }
 
         if (mode === 'scroll') {
             questions.forEach(section => { section.hidden = false; });
@@ -111,6 +167,9 @@
             posLabel = `The hot seat · ${current + 1} of ${questions.length}`;
         } else if (cur?.hasAttribute('data-dump-page')) {
             posLabel = `The dump · ${current + 1} of ${questions.length}`;
+        } else if (cur?.hasAttribute('data-throwback-page')) {
+            const tbTitle = cur.dataset.questionTitle || 'Photos from one year ago';
+            posLabel = `${tbTitle} · ${current + 1} of ${questions.length}`;
         }
         if (positionLabel) {
             positionLabel.textContent = posLabel;
@@ -179,6 +238,18 @@
             return;
         }
 
+        const jumpBtn = ev.target.closest('[data-jump-page]');
+        if (jumpBtn) {
+            const targetIdx = clamp(Number(jumpBtn.dataset.jumpPage));
+            applyMode(lastReadingMode);
+            if (mode === 'scroll') {
+                scrollToQuestion(targetIdx);
+            } else {
+                go(targetIdx);
+            }
+            return;
+        }
+
         const link = ev.target.closest('[data-question-target]');
         if (link) {
             ev.preventDefault();
@@ -209,6 +280,9 @@
     });
 
     window.addEventListener('popstate', () => {
+        if (mode === 'unseen') {
+            applyMode(lastReadingMode);
+        }
         if (mode === 'scroll') {
             scrollToQuestion(parseQuestionParam() - 1);
             return;
@@ -217,7 +291,7 @@
     });
 
     document.addEventListener('keydown', ev => {
-        if (mode === 'scroll') return;
+        if (mode !== 'paged') return;
 
         const active = document.activeElement;
         const editing = active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);

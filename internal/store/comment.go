@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -260,6 +262,191 @@ func (s *Store) listCommentsByTarget(
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating comments: %w", err)
+	}
+
+	return comments, nil
+}
+
+// IssueCommentRead records a member's monotonic read watermark on an issue's
+// comments — both the timestamp and the highest comment ID displayed at that
+// timestamp so same-second comments are never dropped.
+type IssueCommentRead struct {
+	LastSeenAt        time.Time
+	LastSeenCommentID int64
+}
+
+// GetIssueCommentRead returns when userID last marked comments seen on issueID,
+// or (nil, nil) if they haven't yet.
+func (s *Store) GetIssueCommentRead(
+	ctx context.Context, userID, issueID int64,
+) (*IssueCommentRead, error) {
+	var r IssueCommentRead
+
+	err := s.read.QueryRowContext(ctx,
+		`SELECT last_seen_at, last_seen_comment_id FROM issue_comment_reads
+		 WHERE user_id = ? AND issue_id = ?`,
+		userID, issueID,
+	).Scan(&r.LastSeenAt, &r.LastSeenCommentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting issue comment read for user %d issue %d: %w",
+			userID, issueID, err)
+	}
+
+	return &r, nil
+}
+
+// MarkIssueCommentsSeen advances userID's read watermark on issueID
+// monotonically to (seenAt, maxCommentID); an older tab can never move the
+// watermark backwards.
+func (s *Store) MarkIssueCommentsSeen(
+	ctx context.Context, userID, issueID int64, seenAt time.Time, maxCommentID int64,
+) error {
+	ts := seenAt.UTC().Format(time.DateTime)
+
+	_, err := s.write.ExecContext(ctx,
+		`INSERT INTO issue_comment_reads (user_id, issue_id, last_seen_at, last_seen_comment_id)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(user_id, issue_id) DO UPDATE SET
+		     last_seen_at = CASE
+		         WHEN excluded.last_seen_at > issue_comment_reads.last_seen_at
+		         THEN excluded.last_seen_at
+		         ELSE issue_comment_reads.last_seen_at
+		     END,
+		     last_seen_comment_id = CASE
+		         WHEN excluded.last_seen_at > issue_comment_reads.last_seen_at
+		         THEN excluded.last_seen_comment_id
+		         WHEN excluded.last_seen_at = issue_comment_reads.last_seen_at
+		              AND excluded.last_seen_comment_id > issue_comment_reads.last_seen_comment_id
+		         THEN excluded.last_seen_comment_id
+		         ELSE issue_comment_reads.last_seen_comment_id
+		     END`,
+		userID, issueID, ts, maxCommentID,
+	)
+	if err != nil {
+		return fmt.Errorf("marking issue %d comments seen for user %d: %w",
+			issueID, userID, err)
+	}
+
+	return nil
+}
+
+// ListRecentIssueComments returns comments on any target belonging to issueID
+// (submitted responses, notebook blocks, legacy notebook days, and dump items)
+// authored by someone other than excludeUserID whose activity timestamp
+// (edited_at or created_at) is after since, or equal to since with ID >
+// afterCommentID. Driven from issue-rooted indexes via UNION ALL so SQLite
+// never scans comments belonging to other issues or Loops.
+func (s *Store) ListRecentIssueComments(
+	ctx context.Context, issueID, excludeUserID int64, since time.Time, afterCommentID int64,
+) ([]CommentWithUser, error) {
+	// Compare UTC "YYYY-MM-DD HH:MM:SS" directly (matches CURRENT_TIMESTAMP);
+	// subtract 1s as a safety floor and enforce exact (time, id) filtering in Go.
+	sinceUTC := since.UTC()
+	sqlFloor := sinceUTC.Add(-time.Second).Format(time.DateTime)
+
+	rows, err := s.read.QueryContext(ctx,
+		`SELECT id, user_id, response_id, diary_day_id,
+		        diary_block_id, dump_item_id,
+		        parent_id, body, edited_at, created_at,
+		        author_name, author_avatar_url
+		 FROM (
+		     SELECT c.id, c.user_id, c.response_id, c.diary_day_id,
+		            c.diary_block_id, c.dump_item_id,
+		            c.parent_id, c.body, c.edited_at, c.created_at,
+		            u.name AS author_name, u.avatar_url AS author_avatar_url,
+		            COALESCE(c.edited_at, c.created_at) AS activity_at
+		     FROM questions q
+		     JOIN responses r ON r.question_id = q.id AND r.is_draft = 0
+		     JOIN comments c ON c.response_id = r.id
+		     JOIN users u ON u.id = c.user_id
+		     WHERE q.issue_id = ? AND c.user_id != ?
+		       AND COALESCE(c.edited_at, c.created_at) >= ?
+
+		     UNION ALL
+
+		     SELECT c.id, c.user_id, c.response_id, c.diary_day_id,
+		            c.diary_block_id, c.dump_item_id,
+		            c.parent_id, c.body, c.edited_at, c.created_at,
+		            u.name AS author_name, u.avatar_url AS author_avatar_url,
+		            COALESCE(c.edited_at, c.created_at) AS activity_at
+		     FROM diary_sections ds
+		     JOIN diary_days dd ON dd.section_id = ds.id
+		     JOIN diary_blocks db ON db.diary_day_id = dd.id
+		     JOIN comments c ON c.diary_block_id = db.id
+		     JOIN users u ON u.id = c.user_id
+		     WHERE ds.issue_id = ? AND c.user_id != ?
+		       AND COALESCE(c.edited_at, c.created_at) >= ?
+
+		     UNION ALL
+
+		     SELECT c.id, c.user_id, c.response_id, c.diary_day_id,
+		            c.diary_block_id, c.dump_item_id,
+		            c.parent_id, c.body, c.edited_at, c.created_at,
+		            u.name AS author_name, u.avatar_url AS author_avatar_url,
+		            COALESCE(c.edited_at, c.created_at) AS activity_at
+		     FROM diary_sections ds
+		     JOIN diary_days dd ON dd.section_id = ds.id
+		     JOIN comments c ON c.diary_day_id = dd.id
+		     JOIN users u ON u.id = c.user_id
+		     WHERE ds.issue_id = ? AND c.user_id != ?
+		       AND COALESCE(c.edited_at, c.created_at) >= ?
+
+		     UNION ALL
+
+		     SELECT c.id, c.user_id, c.response_id, c.diary_day_id,
+		            c.diary_block_id, c.dump_item_id,
+		            c.parent_id, c.body, c.edited_at, c.created_at,
+		            u.name AS author_name, u.avatar_url AS author_avatar_url,
+		            COALESCE(c.edited_at, c.created_at) AS activity_at
+		     FROM dump_items di
+		     JOIN comments c ON c.dump_item_id = di.id
+		     JOIN users u ON u.id = c.user_id
+		     WHERE di.issue_id = ? AND c.user_id != ?
+		       AND COALESCE(c.edited_at, c.created_at) >= ?
+		 )
+		 ORDER BY activity_at DESC, id DESC`,
+		issueID, excludeUserID, sqlFloor,
+		issueID, excludeUserID, sqlFloor,
+		issueID, excludeUserID, sqlFloor,
+		issueID, excludeUserID, sqlFloor,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing recent comments for issue %d: %w", issueID, err)
+	}
+	defer rows.Close()
+
+	comments := make([]CommentWithUser, 0)
+
+	for rows.Next() {
+		var c CommentWithUser
+
+		err := rows.Scan(&c.ID, &c.UserID, &c.ResponseID, &c.DiaryDayID,
+			&c.DiaryBlockID, &c.DumpItemID, &c.ParentID, &c.Body,
+			&c.EditedAt, &c.CreatedAt,
+			&c.AuthorName, &c.AuthorAvatarURL)
+		if err != nil {
+			return nil, fmt.Errorf("scanning recent issue comment: %w", err)
+		}
+
+		activity := c.CreatedAt.UTC()
+		if c.EditedAt != nil && c.EditedAt.UTC().After(activity) {
+			activity = c.EditedAt.UTC()
+		}
+		if activity.Before(sinceUTC) {
+			continue
+		}
+		if activity.Equal(sinceUTC) && c.ID <= afterCommentID {
+			continue
+		}
+
+		comments = append(comments, c)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating recent issue comments: %w", err)
 	}
 
 	return comments, nil

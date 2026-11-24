@@ -4,7 +4,12 @@
 
 {{define "content"}}
 <div class="pl-page pl-page--published">
-  <section id="issue-root" class="published-issue pl-issue" data-question-count="{{len .Questions}}">
+  <section id="issue-root" class="published-issue pl-issue"
+           data-issue-id="{{.Issue.ID}}"
+           data-question-count="{{len .Questions}}"
+           data-unseen-count="{{.UnseenCommentCount}}"
+           data-unseen-as-of="{{.UnseenAsOf}}"
+           data-unseen-max-id="{{.UnseenMaxCommentID}}">
     <div class="pl-card pl-card--published">
       <div class="temple" aria-hidden="true"></div>
 
@@ -30,12 +35,16 @@
       {{$diaryIdx := .DiaryIdx}}
       {{$directedIdx := .DirectedIdx}}
       {{$dumpIdx := .DumpIdx}}
+      {{$throwbackIdx := .ThrowbackIdx}}
 
       {{if gt $pageCount 0}}
       <div class="published-issue-strip">
         <div class="published-mode-toggle" role="group" aria-label="Reading mode" hidden data-mode-toggle>
           <button type="button" data-read-mode="paged" class="is-active" aria-pressed="true">One at a time</button>
           <button type="button" data-read-mode="scroll" aria-pressed="false">All at once</button>
+          {{if .ShowUnseenComments}}
+          <button type="button" data-read-mode="unseen" aria-pressed="false">Unseen comments{{if gt .UnseenCommentCount 0}} <span class="published-mode-badge" data-unseen-badge>{{.UnseenCommentCount}}</span>{{end}}</button>
+          {{end}}
         </div>
         <div class="published-strip-progress" aria-label="Issue progress">
           <div class="published-progress-segments" role="list">
@@ -66,6 +75,13 @@
                data-question-target="{{$dumpIdx}}"
                aria-label="Go to the photo &amp; video dump"
                {{if eq $dumpIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+            {{end}}
+            {{if .ThrowbackPhotos}}
+            <a href="?q={{add $throwbackIdx 1}}"
+               class="published-progress-segment published-progress-segment--throwback {{if lt $throwbackIdx $.CurrentQIdx}}is-past{{else if eq $throwbackIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+               data-question-target="{{$throwbackIdx}}"
+               aria-label="Go to {{.ThrowbackTitle}}"
+               {{if eq $throwbackIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
             {{end}}
           </div>
           <span class="published-progress-label" data-question-position>Question {{.CurrentQ}} of {{$pageCount}}</span>
@@ -169,6 +185,26 @@
                         {{end}}
                       {{end}}
                     {{end}}
+                    </div>
+
+                    {{$lk := index $.ResponseLikes .Response.ID}}
+                    <div class="pl-answer-actions">
+                      <button type="button"
+                              class="like-btn{{if $lk.Liked}} is-liked{{end}}"
+                              data-like-response="{{.Response.ID}}"
+                              data-like-count="{{$lk.Count}}"
+                              aria-pressed="{{if $lk.Liked}}true{{else}}false{{end}}"
+                              aria-label="{{if $lk.Liked}}Unlike{{else}}Like{{end}} {{.User.Name}}'s answer"
+                              {{if $lk.Names}}title="Liked by {{join $lk.Names ", "}}"{{end}}>
+                        <span class="like-heart-wrap" aria-hidden="true">
+                          <svg class="like-heart-icon" viewBox="0 0 24 24" width="15" height="15">
+                            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                          </svg>
+                          <span class="like-burst"></span>
+                          <span class="like-float-heart">♥</span>
+                        </span>
+                        <span class="like-count">{{if gt $lk.Count 0}}{{$lk.Count}}{{end}}</span>
+                      </button>
                     </div>
 
                     <section class="comments-section" aria-label="Comments">
@@ -393,6 +429,26 @@
                       {{end}}
                       </div>
 
+                      {{$lk := index $.ResponseLikes .Response.ID}}
+                      <div class="pl-answer-actions">
+                        <button type="button"
+                                class="like-btn{{if $lk.Liked}} is-liked{{end}}"
+                                data-like-response="{{.Response.ID}}"
+                                data-like-count="{{$lk.Count}}"
+                                aria-pressed="{{if $lk.Liked}}true{{else}}false{{end}}"
+                                aria-label="{{if $lk.Liked}}Unlike{{else}}Like{{end}} {{.User.Name}}'s answer"
+                                {{if $lk.Names}}title="Liked by {{join $lk.Names ", "}}"{{end}}>
+                          <span class="like-heart-wrap" aria-hidden="true">
+                            <svg class="like-heart-icon" viewBox="0 0 24 24" width="15" height="15">
+                              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                            </svg>
+                            <span class="like-burst"></span>
+                            <span class="like-float-heart">♥</span>
+                          </span>
+                          <span class="like-count">{{if gt $lk.Count 0}}{{$lk.Count}}{{end}}</span>
+                        </button>
+                      </div>
+
                       <section class="comments-section" aria-label="Comments">
                         <div class="comments-panel"
                              data-response-id="{{.Response.ID}}"
@@ -484,6 +540,40 @@
           </div>
         </section>
         {{end}}
+
+        {{if .ThrowbackPhotos}}
+        <section class="published-question published-question--throwback"
+                 data-question-index="{{$throwbackIdx}}"
+                 data-question-title="{{.ThrowbackTitle}}"
+                 data-throwback-page
+                 {{if ne $throwbackIdx $.CurrentQIdx}}hidden{{end}}>
+          <div class="published-question-inner">
+            <p class="published-question-kicker">
+              {{.ThrowbackKicker}}{{if .ThrowbackIssue}} · <a class="pl-throwback-issue-link" href="/issues/{{.ThrowbackIssue.Year}}/{{printf "%02d" .ThrowbackIssue.Month}}">{{if .ThrowbackIssue.Title}}{{.ThrowbackIssue.Title}}{{else}}{{.ThrowbackIssue.OpensAt | formatDate}}{{end}}</a>{{end}}
+            </p>
+            <h2 class="published-question-title" tabindex="-1">{{.ThrowbackTitle}}</h2>
+            <div class="published-ornament" aria-hidden="true"><span></span><i></i><span></span></div>
+            <div class="pl-throwback-grid pl-throwback-grid--{{len .ThrowbackPhotos}}">
+              {{range .ThrowbackPhotos}}
+              <figure class="pl-throwback-item"
+                      data-lightbox
+                      data-lightbox-src="{{.FilePath | uploadURL}}"
+                      data-lightbox-caption="{{if .Caption}}{{.Caption}} — {{.AuthorName}}{{else}}{{.AuthorName}}{{end}}">
+                <div class="pl-throwback-frame">
+                  <img src="{{.FilePath | uploadURL}}"
+                       alt="{{if .Caption}}{{.Caption}}{{else}}Photo by {{.AuthorName}}{{end}}"
+                       loading="lazy">
+                </div>
+                <figcaption class="pl-throwback-caption">
+                  <strong class="pl-throwback-author">{{.AuthorName}}</strong>
+                  {{if .Caption}}<span class="pl-throwback-note">{{.Caption}}</span>{{end}}
+                </figcaption>
+              </figure>
+              {{end}}
+            </div>
+          </div>
+        </section>
+        {{end}}
       </div>
 
       <footer class="published-pager" aria-label="Question navigation">
@@ -498,8 +588,10 @@
             {{$prevTitle = "From the notebooks"}}
           {{else if eq $prevIdx $directedIdx}}
             {{$prevTitle = "The hot seat"}}
-          {{else}}
+          {{else if eq $prevIdx $dumpIdx}}
             {{$prevTitle = "The photo & video dump"}}
+          {{else}}
+            {{$prevTitle = .ThrowbackTitle}}
           {{end}}
         {{end}}
         {{$nextTitle := ""}}
@@ -510,8 +602,10 @@
             {{$nextTitle = "From the notebooks"}}
           {{else if eq .CurrentQ $directedIdx}}
             {{$nextTitle = "The hot seat"}}
-          {{else}}
+          {{else if eq .CurrentQ $dumpIdx}}
             {{$nextTitle = "The photo & video dump"}}
+          {{else}}
+            {{$nextTitle = .ThrowbackTitle}}
           {{end}}
         {{end}}
         <a {{if not $isFirst}}href="?q={{.CurrentQIdx}}"{{end}}
@@ -555,6 +649,13 @@
              aria-label="Go to the photo &amp; video dump"
              {{if eq $dumpIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
           {{end}}
+          {{if .ThrowbackPhotos}}
+          <a href="?q={{add $throwbackIdx 1}}"
+             class="published-dot {{if lt $throwbackIdx $.CurrentQIdx}}is-past{{else if eq $throwbackIdx $.CurrentQIdx}}is-current{{else}}is-upcoming{{end}}"
+             data-question-target="{{$throwbackIdx}}"
+             aria-label="Go to {{.ThrowbackTitle}}"
+             {{if eq $throwbackIdx $.CurrentQIdx}}aria-current="step"{{end}}></a>
+          {{end}}
         </div>
 
         <a href="{{if $isLast}}/issues{{else}}?q={{add .CurrentQ 1}}{{end}}"
@@ -568,6 +669,85 @@
           <span class="published-pager-arrow" aria-hidden="true">→</span>
         </a>
       </footer>
+
+      {{if .ShowUnseenComments}}
+      <section id="unseen-comments-view" class="published-unseen" data-unseen-view hidden aria-label="Unseen comments">
+        <div class="published-question-inner">
+          <p class="published-question-kicker">Recent activity · last 2 days</p>
+          <h2 class="published-question-title" tabindex="-1">Unseen comments</h2>
+          <div class="published-ornament" aria-hidden="true"><span></span><i></i><span></span></div>
+
+          {{if not .UnseenThreads}}
+          <div class="pl-unseen-empty">
+            <p>You're all caught up — no unseen comments in the last 2 days.</p>
+          </div>
+          {{else}}
+          <div class="pl-unseen-list">
+            {{range .UnseenThreads}}
+            <article class="pl-unseen-card">
+              <div class="pl-unseen-head">
+                <div class="pl-unseen-meta">
+                  <span class="pl-unseen-section">{{.SectionLabel}}</span>
+                  <span class="pl-unseen-count">{{.UnseenCount}} new</span>
+                </div>
+                {{if ge .PageIndex 0}}
+                <button type="button" class="pl-unseen-jump" data-jump-page="{{.PageIndex}}">View in issue →</button>
+                {{end}}
+              </div>
+
+              <div class="pl-unseen-context">
+                {{if .ThumbPath}}
+                <img class="pl-unseen-thumb" src="{{.ThumbPath | uploadURL}}" alt="" loading="lazy">
+                {{end}}
+                <div class="pl-unseen-context-body">
+                  {{if .Title}}<h3 class="pl-unseen-title">{{.Title}}</h3>{{end}}
+                  <p class="pl-unseen-byline">{{.AuthorName}}</p>
+                  {{if .Excerpt}}<p class="pl-unseen-excerpt">{{.Excerpt}}</p>{{end}}
+                </div>
+              </div>
+
+              {{if .IsCovered}}
+              <p class="pl-unseen-covered-note">This comment is on a covered photo — view it in the issue to reveal the photo and discussion.</p>
+              {{else if eq .Kind "response"}}
+              <div class="comments-panel pl-unseen-comments"
+                   data-response-id="{{.TargetID}}"
+                   data-comment-count="{{.TotalCount}}"
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
+              {{else if eq .Kind "diary_block"}}
+              <div class="comments-panel pl-unseen-comments"
+                   data-diary-block-id="{{.TargetID}}"
+                   data-comment-count="{{.TotalCount}}"
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
+              {{else if eq .Kind "diary_day"}}
+              <div class="comments-panel pl-unseen-comments"
+                   data-diary-day-id="{{.TargetID}}"
+                   data-comment-count="{{.TotalCount}}"
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
+              {{else if eq .Kind "dump_item"}}
+              <div class="comments-panel pl-unseen-comments"
+                   data-dump-item-id="{{.TargetID}}"
+                   data-comment-count="{{.TotalCount}}"
+                   data-defer-comments="1"
+                   data-unseen-since="{{$.UnseenCommentsSince}}"
+                   data-unseen-after-id="{{$.UnseenAfterCommentID}}"
+                   data-unseen-as-of="{{$.UnseenAsOf}}"></div>
+              {{end}}
+            </article>
+            {{end}}
+          </div>
+          {{end}}
+        </div>
+      </section>
+      {{end}}
       {{end}}
 
       {{if and .NextIssue (not .NextIssue.QuestionsCuratedAt)}}
