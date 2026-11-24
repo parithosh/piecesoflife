@@ -103,10 +103,15 @@
             link.href = questionURL(i);
         });
 
-        const onDump = questions[current]?.hasAttribute('data-dump-page');
-        const posLabel = onDump
-            ? `The dump · ${current + 1} of ${questions.length}`
-            : `Question ${current + 1} of ${questions.length}`;
+        const cur = questions[current];
+        let posLabel = `Question ${current + 1} of ${questions.length}`;
+        if (cur?.hasAttribute('data-diary-page')) {
+            posLabel = `From the notebooks · ${current + 1} of ${questions.length}`;
+        } else if (cur?.hasAttribute('data-peoples-choice-page')) {
+            posLabel = `The hot seat · ${current + 1} of ${questions.length}`;
+        } else if (cur?.hasAttribute('data-dump-page')) {
+            posLabel = `The dump · ${current + 1} of ${questions.length}`;
+        }
         if (positionLabel) {
             positionLabel.textContent = posLabel;
         }

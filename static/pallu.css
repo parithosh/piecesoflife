@@ -4736,3 +4736,181 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
         box-shadow: 4px 4px 0 rgba(var(--ink-rgb), 0.2);
     }
 }
+
+/* =====================================================================
+ * Directed question suggestions (@mention) & "The hot seat" spread
+ * ===================================================================== */
+
+.pl-next-issue-suggest {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+}
+.pl-next-issue-suggest-title {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 20px;
+    color: var(--ink);
+    margin: 0 0 4px;
+}
+.pl-next-issue-suggest-sub {
+    font-family: var(--font-read);
+    font-size: 15px;
+    color: var(--ink-soft);
+    margin: 0 0 12px;
+}
+.pl-next-issue-suggest textarea {
+    font-family: var(--font-read);
+    font-size: 16px;
+}
+.pl-suggest code,
+.pl-next-issue-suggest code {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(var(--ink-rgb), 0.06);
+    color: var(--rani);
+}
+
+.pl-suggest-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.pl-mention-wrap {
+    position: relative;
+}
+.pl-mention-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 30;
+    max-width: 320px;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--ivory);
+    border: 1.5px solid var(--rani);
+    border-radius: 5px;
+    box-shadow: 0 10px 26px rgba(var(--ink-rgb), 0.14);
+    padding: 4px;
+}
+.pl-mention-menu[hidden] {
+    display: none !important;
+}
+.pl-mention-item {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink);
+    font: 600 14px var(--font-ui);
+    text-align: left;
+    cursor: pointer;
+}
+.pl-mention-item:hover,
+.pl-mention-item.is-active {
+    background: var(--ivory-2);
+    color: var(--rani);
+}
+.pl-mention-ava {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--rani);
+    color: var(--ivory);
+    font: 700 11px var(--font-ui);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    overflow: hidden;
+}
+.pl-mention-ava img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.pl-mention-empty {
+    padding: 10px 12px;
+    font: 13px var(--font-ui);
+    color: var(--ink-soft);
+}
+
+/* Respond page: "The hot seat · just for you" band */
+.pl-directed-band {
+    margin: 30px 0 8px;
+    padding: 16px 18px;
+    background: var(--ivory-2);
+    border-left: 3px solid var(--peacock);
+    border-radius: 4px;
+}
+.pl-directed-band .pl-eyebrow {
+    margin: 0 0 4px;
+}
+.pl-directed-band-sub {
+    font-family: var(--font-read);
+    font-size: 15px;
+    color: var(--ink-soft);
+    margin: 0;
+}
+.pl-q-num--directed {
+    color: var(--peacock);
+}
+
+/* Published issue: "The hot seat" aggregated spread */
+.pl-peoples-list {
+    margin-top: 26px;
+}
+.pl-peoples-item {
+    padding-top: 28px;
+    margin-top: 28px;
+    border-top: 1px solid var(--line);
+}
+.pl-peoples-item.is-first {
+    padding-top: 0;
+    margin-top: 0;
+    border-top: 0;
+}
+.pl-peoples-head {
+    margin-bottom: 14px;
+}
+.pl-peoples-for {
+    display: inline-block;
+    margin-bottom: 8px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--peacock);
+    background: var(--ivory-2);
+    font: 600 11px var(--font-ui);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--peacock);
+}
+.pl-peoples-for strong {
+    color: var(--ink);
+    font-weight: 700;
+}
+.pl-peoples-q {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 24px;
+    line-height: 1.24;
+    color: var(--ink);
+    margin: 0;
+}
+.pl-peoples-item .pl-answer {
+    margin-top: 14px;
+    padding-top: 14px;
+}
+

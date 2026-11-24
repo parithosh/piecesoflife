@@ -665,10 +665,7 @@ func (s *Server) sendIssueOpenEmail(
 	authURL := fmt.Sprintf("%s/issues/%d/respond?auth=%s", s.config.BaseURL, issue.ID, raw)
 	monthStr := formatDate(issue.OpensAt)
 
-	questionTexts := make([]string, 0, len(questions))
-	for _, q := range questions {
-		questionTexts = append(questionTexts, q.Text)
-	}
+	questionTexts := emailQuestionTextsForUser(questions, user.ID)
 
 	subject := fmt.Sprintf("%s — %s is open!", settings.LoopName, monthStr)
 	body := s.renderIssueOpenEmail(settings.LoopName, user.Name, monthStr, questionTexts, authURL)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/parithosh/piecesoflife/internal/email"
 	"github.com/parithosh/piecesoflife/internal/store"
@@ -67,6 +68,10 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
+	questions = filterQuestionsForViewer(
+		questions, issue.Status, UserFromContext(r.Context()), isGroupAdmin(r.Context()),
+	)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issue":     issue,
@@ -789,7 +794,53 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	questions = filterQuestionsForViewer(
+		questions, issue.Status, UserFromContext(r.Context()), isGroupAdmin(r.Context()),
+	)
+
 	writeJSON(w, http.StatusOK, map[string]any{"questions": questions})
+}
+
+func questionVisibleToMember(q store.Question, userID int64) bool {
+	return q.TargetUserID == nil || *q.TargetUserID == userID
+}
+
+// filterQuestionsForViewer enforces directed-question privacy for non-admins:
+// while collecting, hides questions targeted at other members; and strips
+// submitted_by so member-suggested / hot-seat askers stay anonymous.
+func filterQuestionsForViewer(
+	questions []store.Question, issueStatus string, user *store.User, isAdmin bool,
+) []store.Question {
+	if isAdmin {
+		return questions
+	}
+
+	filtered := make([]store.Question, 0, len(questions))
+	for _, q := range questions {
+		if issueStatus == "collecting" {
+			if user == nil || !questionVisibleToMember(q, user.ID) {
+				continue
+			}
+		}
+		q.SubmittedBy = nil
+		filtered = append(filtered, q)
+	}
+	return filtered
+}
+
+// emailQuestionTextsForUser builds the per-recipient question list for open
+// and reminder emails, omitting prompts directed to other members and marking
+// the recipient's own hot-seat prompts with "[Just for you] ".
+func emailQuestionTextsForUser(questions []store.Question, userID int64) []string {
+	out := make([]string, 0, len(questions))
+	for _, q := range questions {
+		if q.TargetUserID == nil {
+			out = append(out, q.Text)
+		} else if *q.TargetUserID == userID {
+			out = append(out, "[Just for you] "+q.Text)
+		}
+	}
+	return out
 }
 
 // handleGetProgress returns submission progress for an issue.
@@ -1276,9 +1327,10 @@ func (s *Server) handleDeleteQuestion(w http.ResponseWriter, r *http.Request) {
 
 // friendSubmitQuestionRequest is the expected JSON body for POST /api/questions/submit.
 type friendSubmitQuestionRequest struct {
-	IssueID  int64   `json:"issue_id"`
-	Text     string  `json:"text"`
-	Category *string `json:"category"`
+	IssueID      int64   `json:"issue_id"`
+	Text         string  `json:"text"`
+	Category     *string `json:"category"`
+	TargetUserID *int64  `json:"target_user_id"`
 }
 
 // handleFriendSubmitQuestion allows a member to submit a custom question for an issue.
@@ -1302,8 +1354,15 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 		validationErrs["issue_id"] = "Valid issue_id is required"
 	}
 
-	if strings.TrimSpace(req.Text) == "" {
+	trimmedText := strings.TrimSpace(req.Text)
+	if trimmedText == "" {
 		validationErrs["text"] = "Question text is required"
+	} else if utf8.RuneCountInString(trimmedText) > 500 {
+		validationErrs["text"] = "Question must be 500 characters or fewer"
+	}
+
+	if req.TargetUserID != nil && *req.TargetUserID == user.ID {
+		validationErrs["target_user_id"] = "Pick someone else in the circle"
 	}
 
 	if len(validationErrs) > 0 {
@@ -1327,8 +1386,23 @@ func (s *Server) handleFriendSubmitQuestion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// When directed to a specific member, verify they are an active member of
+	// this circle (never allow targeting outsiders or deactivated accounts).
+	if req.TargetUserID != nil {
+		if *req.TargetUserID <= 0 {
+			writeValidationError(w, map[string]string{"target_user_id": "Selected person is not in this circle"})
+			return
+		}
+		m, mErr := s.store.GetMembership(r.Context(), issue.GroupID, *req.TargetUserID)
+		targetUser, uErr := s.store.GetUserByID(r.Context(), *req.TargetUserID)
+		if mErr != nil || !m.IsActive || uErr != nil || !targetUser.IsActive {
+			writeValidationError(w, map[string]string{"target_user_id": "Selected person is not in this circle"})
+			return
+		}
+	}
+
 	questionID, err := s.store.CreateSuggestedQuestion(
-		r.Context(), issue.GroupID, issue.ID, user.ID, req.Text, req.Category,
+		r.Context(), issue.GroupID, issue.ID, user.ID, trimmedText, req.Category, req.TargetUserID,
 	)
 	if err != nil {
 		if errors.Is(err, store.ErrIssueNotAcceptingSuggestions) {

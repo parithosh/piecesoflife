@@ -52,13 +52,45 @@
             </div>
         </div>
     </section>
-    {{else if .NextIssueOpens}}
+    {{else if or .NextIssueOpens .NextIssue}}
     <section class="pl-next-issue" aria-label="Next issue">
         <p class="pl-eyebrow pl-eyebrow--peacock">Coming up</p>
+        {{if .NextIssueOpens}}
         <p class="pl-next-issue-copy">
             The next issue opens <b>{{.NextIssueOpens}}</b> — we'll email you
             when it's ready for your answers.
         </p>
+        {{end}}
+        {{if and .NextIssue (not .NextIssue.QuestionsCuratedAt)}}
+        <div class="pl-next-issue-suggest">
+            <h2 class="pl-next-issue-suggest-title">Suggest a question for the next issue</h2>
+            <p class="pl-next-issue-suggest-sub">
+                Ask the whole circle, or type <code>@</code> to put one person in The hot seat.
+            </p>
+            <form id="archive-next-question-form"
+                  data-suggest-form
+                  data-issue-id="{{.NextIssue.ID}}"
+                  data-members="{{jsonMarshal .SuggestMembers}}">
+                <div class="pl-mention-wrap">
+                    <textarea id="archive-next-question-text" class="pl-field"
+                              data-suggest-text
+                              aria-autocomplete="list"
+                              aria-expanded="false"
+                              placeholder="e.g. What's a small ritual you picked up this month? (or @name to ask one person)"
+                              style="min-height:76px;margin-top:0;" maxlength="500" required></textarea>
+                    <div class="pl-mention-menu" data-mention-menu role="listbox" aria-label="Circle members" hidden></div>
+                </div>
+                <div class="pl-suggest-actions">
+                    <button type="submit" class="pl-btn pl-btn--outline">Send suggestion</button>
+                    {{if .SuggestMembers}}
+                    <button type="button" class="pl-chip-btn pl-mention-trigger" data-mention-trigger>@ Ask one person</button>
+                    {{end}}
+                    <span data-suggest-status role="status"
+                          style="font-family:var(--font-ui);font-size:12px;color:var(--ink-soft);"></span>
+                </div>
+            </form>
+        </div>
+        {{end}}
     </section>
     {{end}}
 
@@ -101,4 +133,8 @@
     {{end}}
 </div>
 </div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/suggest-question.js?v={{assetVersion}}"></script>
 {{end}}

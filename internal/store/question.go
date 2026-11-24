@@ -9,14 +9,16 @@ import (
 
 // Question represents a question assigned to an issue.
 type Question struct {
-	ID          int64     `json:"id"`
-	IssueID     int64     `json:"issue_id"`
-	Text        string    `json:"text"`
-	Category    *string   `json:"category"`
-	Source      string    `json:"source"`
-	SubmittedBy *int64    `json:"submitted_by"`
-	SortOrder   int       `json:"sort_order"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID             int64     `json:"id"`
+	IssueID        int64     `json:"issue_id"`
+	Text           string    `json:"text"`
+	Category       *string   `json:"category"`
+	Source         string    `json:"source"`
+	SubmittedBy    *int64    `json:"submitted_by"`
+	TargetUserID   *int64    `json:"target_user_id,omitempty"`
+	TargetUserName *string   `json:"target_user_name,omitempty"`
+	SortOrder      int       `json:"sort_order"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // QuestionBank represents a pre-generated question in the bank.
@@ -60,11 +62,15 @@ func (s *Store) GetQuestionByID(
 	var q Question
 
 	err := s.read.QueryRowContext(ctx,
-		`SELECT id, issue_id, text, category, source,
-		        submitted_by, sort_order, created_at
-		 FROM questions WHERE id = ?`, id,
+		`SELECT q.id, q.issue_id, q.text, q.category, q.source,
+		        q.submitted_by, q.target_user_id, tu.name,
+		        q.sort_order, q.created_at
+		 FROM questions q
+		 LEFT JOIN users tu ON tu.id = q.target_user_id
+		 WHERE q.id = ?`, id,
 	).Scan(&q.ID, &q.IssueID, &q.Text, &q.Category,
-		&q.Source, &q.SubmittedBy, &q.SortOrder, &q.CreatedAt)
+		&q.Source, &q.SubmittedBy, &q.TargetUserID, &q.TargetUserName,
+		&q.SortOrder, &q.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting question %d: %w", id, err)
 	}
@@ -77,10 +83,13 @@ func (s *Store) ListQuestionsByIssue(
 	ctx context.Context, issueID int64,
 ) ([]Question, error) {
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT id, issue_id, text, category, source,
-		        submitted_by, sort_order, created_at
-		 FROM questions WHERE issue_id = ?
-		 ORDER BY sort_order`, issueID,
+		`SELECT q.id, q.issue_id, q.text, q.category, q.source,
+		        q.submitted_by, q.target_user_id, tu.name,
+		        q.sort_order, q.created_at
+		 FROM questions q
+		 LEFT JOIN users tu ON tu.id = q.target_user_id
+		 WHERE q.issue_id = ?
+		 ORDER BY q.sort_order`, issueID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing questions for issue %d: %w", issueID, err)
@@ -93,7 +102,8 @@ func (s *Store) ListQuestionsByIssue(
 		var q Question
 
 		err := rows.Scan(&q.ID, &q.IssueID, &q.Text, &q.Category,
-			&q.Source, &q.SubmittedBy, &q.SortOrder, &q.CreatedAt)
+			&q.Source, &q.SubmittedBy, &q.TargetUserID, &q.TargetUserName,
+			&q.SortOrder, &q.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scanning question: %w", err)
 		}

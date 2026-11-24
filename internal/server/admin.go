@@ -384,7 +384,14 @@ func (s *Server) handleAdminMemberSubmission(
 			answers[resp.QuestionID] = MemberAnswer{Response: resp, Blocks: blocks}
 		}
 
-		data.Questions = questions
+		filtered := make([]store.Question, 0, len(questions))
+		for _, q := range questions {
+			if questionVisibleToMember(q, memberID) {
+				filtered = append(filtered, q)
+			}
+		}
+
+		data.Questions = filtered
 		data.Answers = answers
 	}
 
@@ -847,10 +854,7 @@ func (s *Server) handleResendEmail(w http.ResponseWriter, r *http.Request) {
 			monthStr = formatDate(issue.OpensAt)
 		}
 
-		questionTexts := make([]string, 0, len(questions))
-		for _, q := range questions {
-			questionTexts = append(questionTexts, q.Text)
-		}
+		questionTexts := emailQuestionTextsForUser(questions, user.ID)
 
 		subject = fmt.Sprintf("%s — %s is open!", settings.LoopName, monthStr)
 		body = s.renderIssueOpenEmail(settings.LoopName, user.Name, monthStr, questionTexts, authURL)

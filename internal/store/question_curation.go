@@ -72,21 +72,41 @@ func (s *Store) PrepareDraftQuestions(
 			issueID, ErrIssueQuestionsNotCuratable)
 	}
 
+	// Drop directed suggestions whose targeted member left or was deactivated
+	// before the round was curated so nobody gets stuck with an unanswerable
+	// hot-seat prompt.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM questions
+		 WHERE issue_id = ? AND target_user_id IS NOT NULL
+		   AND NOT EXISTS (
+		       SELECT 1 FROM memberships m
+		       JOIN users u ON u.id = m.user_id
+		       WHERE m.group_id = ? AND m.user_id = questions.target_user_id
+		         AND m.is_active = 1 AND u.is_active = 1
+		   )`,
+		issueID, groupID,
+	); err != nil {
+		return fmt.Errorf("pruning inactive directed questions for issue %d: %w", issueID, err)
+	}
+
 	var (
-		questionCount int
-		hasDefaults   bool
+		totalCount  int
+		sharedCount int
+		hasDefaults bool
 	)
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*), EXISTS(
-		     SELECT 1 FROM questions WHERE issue_id = ? AND source = 'default'
-		 )
+		`SELECT COUNT(*),
+		        COALESCE(SUM(CASE WHEN target_user_id IS NULL THEN 1 ELSE 0 END), 0),
+		        EXISTS(
+		            SELECT 1 FROM questions WHERE issue_id = ? AND source = 'default'
+		        )
 		 FROM questions WHERE issue_id = ?`,
 		issueID, issueID,
-	).Scan(&questionCount, &hasDefaults); err != nil {
+	).Scan(&totalCount, &sharedCount, &hasDefaults); err != nil {
 		return fmt.Errorf("counting issue %d questions: %w", issueID, err)
 	}
 
-	nextOrder := questionCount
+	nextOrder := totalCount
 	if !hasDefaults {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT text FROM default_questions
@@ -123,10 +143,14 @@ func (s *Store) PrepareDraftQuestions(
 				return fmt.Errorf("adding default to issue %d: %w", issueID, err)
 			}
 			nextOrder++
+			sharedCount++
 		}
 	}
 
-	if need := target - nextOrder; need > 0 {
+	// Only circle-wide (undirected) questions count toward the target;
+	// questions directed at one member are bonus prompts and never shrink
+	// everyone else's set.
+	if need := target - sharedCount; need > 0 {
 		bankQuestions, err := selectRandomUnusedQuestions(ctx, tx, groupID, need)
 		if err != nil {
 			return fmt.Errorf("selecting bank questions for issue %d: %w", issueID, err)
@@ -178,24 +202,53 @@ func (s *Store) PrepareDraftQuestions(
 	return nil
 }
 
+// DeleteInactiveDirectedQuestions removes directed questions on issueID whose
+// targeted member is no longer an active member of groupID.
+func (s *Store) DeleteInactiveDirectedQuestions(
+	ctx context.Context, groupID, issueID int64,
+) error {
+	if _, err := s.write.ExecContext(ctx,
+		`DELETE FROM questions
+		 WHERE issue_id = ? AND target_user_id IS NOT NULL
+		   AND NOT EXISTS (
+		       SELECT 1 FROM memberships m
+		       JOIN users u ON u.id = m.user_id
+		       WHERE m.group_id = ? AND m.user_id = questions.target_user_id
+		         AND m.is_active = 1 AND u.is_active = 1
+		   )`,
+		issueID, groupID,
+	); err != nil {
+		return fmt.Errorf("pruning inactive directed questions for issue %d: %w", issueID, err)
+	}
+	return nil
+}
+
 // CreateSuggestedQuestion inserts a member suggestion only while the issue is
-// an upcoming, uncurated draft. The state predicate and insert share one SQL
-// statement so curation cannot race a late, unreviewed suggestion into the set.
+// an upcoming, uncurated draft. The state predicate, active-target check, and
+// insert share one SQL statement so curation or member deactivation cannot
+// race a stale suggestion into the set.
 func (s *Store) CreateSuggestedQuestion(
 	ctx context.Context, groupID, issueID, userID int64,
-	text string, category *string,
+	text string, category *string, targetUserID *int64,
 ) (int64, error) {
 	now := time.Now().UTC()
 	result, err := s.write.ExecContext(ctx,
 		`INSERT INTO questions
-		 (issue_id, text, category, source, submitted_by, sort_order)
-		 SELECT i.id, ?, ?, 'friend', ?,
+		 (issue_id, text, category, source, submitted_by, target_user_id, sort_order)
+		 SELECT i.id, ?, ?, 'friend', ?, ?,
 		        COALESCE((SELECT MAX(q.sort_order) + 1
 		                  FROM questions q WHERE q.issue_id = i.id), 0)
 		 FROM issues i
 		 WHERE i.id = ? AND i.group_id = ? AND i.status = 'draft'
-		   AND i.opens_at > ? AND i.questions_curated_at IS NULL`,
-		text, category, userID, issueID, groupID, now,
+		   AND i.opens_at > ? AND i.questions_curated_at IS NULL
+		   AND (? IS NULL OR EXISTS (
+		       SELECT 1 FROM memberships m
+		       JOIN users u ON u.id = m.user_id
+		       WHERE m.group_id = i.group_id AND m.user_id = ?
+		         AND m.is_active = 1 AND u.is_active = 1
+		   ))`,
+		text, category, userID, targetUserID, issueID, groupID, now,
+		targetUserID, targetUserID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("creating suggested question: %w", err)

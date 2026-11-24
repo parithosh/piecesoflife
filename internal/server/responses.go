@@ -188,6 +188,11 @@ func (s *Server) handleCreateResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if question.TargetUserID != nil && *question.TargetUserID != user.ID {
+		writeError(w, http.StatusNotFound, "not_found", "Question not found")
+		return
+	}
+
 	// Return existing response if one already exists — idempotent on retry.
 	if existing, err := s.store.GetUserResponse(r.Context(), user.ID, req.QuestionID); err == nil {
 		writeJSON(w, http.StatusOK, existing)

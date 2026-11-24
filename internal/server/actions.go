@@ -241,11 +241,6 @@ func (s *Server) SendReminderForIssue(
 		return nil
 	}
 
-	questionTexts := make([]string, 0, len(questions))
-	for _, q := range questions {
-		questionTexts = append(questionTexts, q.Text)
-	}
-
 	monthStr := formatDate(issue.OpensAt)
 	daysLeft := int(time.Until(issue.Deadline).Hours() / 24)
 	if daysLeft < 0 {
@@ -307,6 +302,7 @@ func (s *Server) SendReminderForIssue(
 		authURL := fmt.Sprintf("%s/issues/%d/respond?auth=%s",
 			s.config.BaseURL, issueID, raw)
 
+		questionTexts := emailQuestionTextsForUser(questions, user.ID)
 		body := s.renderReminderEmail(
 			settings.LoopName, user.Name, monthStr,
 			questionTexts, authURL, isFinal, daysLeft,
@@ -680,6 +676,12 @@ func (s *Server) openIssueForCollectingWithTransition(
 		return fmt.Errorf("checking issue %d question curation: %w", issue.ID, err)
 	}
 
+	if err := s.store.DeleteInactiveDirectedQuestions(ctx, issue.GroupID, issue.ID); err != nil {
+		s.logger.WarnContext(ctx, "Failed to prune inactive directed questions on issue open",
+			slog.Int64("issue_id", issue.ID),
+			slog.String("error", err.Error()))
+	}
+
 	if freshIssue.QuestionsCuratedAt == nil {
 		existing, err := s.store.ListQuestionsByIssue(ctx, issue.ID)
 		if err != nil {
@@ -690,20 +692,27 @@ func (s *Server) openIssueForCollectingWithTransition(
 		}
 
 		hasDefaults := false
+		sharedCount := 0
 
 		for _, q := range existing {
 			if q.Source == "default" {
 				hasDefaults = true
-				break
+			}
+			if q.TargetUserID == nil {
+				sharedCount++
 			}
 		}
 
 		nextOrder := len(existing)
 		if !hasDefaults {
-			nextOrder += s.insertDefaultQuestions(ctx, issue.GroupID, issue.ID, nextOrder)
+			added := s.insertDefaultQuestions(ctx, issue.GroupID, issue.ID, nextOrder)
+			nextOrder += added
+			sharedCount += added
 		}
 
-		if need := questionTarget(settings, questionCount) - nextOrder; need > 0 {
+		// Directed questions (target_user_id != nil) are bonus prompts for
+		// one member and never shrink the circle-wide question set.
+		if need := questionTarget(settings, questionCount) - sharedCount; need > 0 {
 			bankQuestions, err := s.store.SelectRandomUnusedQuestions(ctx, issue.GroupID, need)
 			if err != nil {
 				s.logger.WarnContext(ctx, "Failed to select bank questions for issue open",
