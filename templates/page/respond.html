@@ -138,6 +138,13 @@
                       {{end}}
                     </div>
                   {{end}}
+                  {{/* An answer with no text block yet (a blank row, or one
+                       whose only photo was removed) still needs somewhere
+                       to type; autosave turns it into a text block. */}}
+                  {{$hasText := false}}{{range .Blocks}}{{if eq .Type "text"}}{{$hasText = true}}{{end}}{{end}}
+                  {{if not $hasText}}
+                  <textarea class="response-text" placeholder="Share your thoughts…"></textarea>
+                  {{end}}
                   </div>
                 </div>
                 {{else}}
@@ -165,15 +172,38 @@
           {{end}}
 
           {{if .DirectedQuestions}}
-          <div class="pl-directed-band">
+          <div class="pl-directed-band" id="hot-seat">
             <p class="pl-eyebrow pl-eyebrow--peacock">The hot seat · just for you</p>
             <p class="pl-directed-band-sub">
-              Someone in the circle put you on the spot with {{if eq (len .DirectedQuestions) 1}}this question{{else}}these questions{{end}}.
+              Someone in the circle put you on the spot with {{if eq .HotSeatCount 1}}this question{{else}}these questions{{end}}.
               Only you answer — everyone reads it in The hot seat once this issue is woven.
             </p>
+            {{if gt (len .DirectedQuestions) 1}}
+            {{/* Grouping mode: tick hot-seat questions, save each group,
+                 repeat, then Done. Circle-wide questions never take part. */}}
+            <div class="pl-group-bar" data-group-bar>
+              <p class="pl-directed-band-sub" data-group-hint>Some of these overlap? Group them and write one answer for each group.</p>
+              <button type="button" class="pl-chip-btn" data-group-start>Group questions</button>
+              <div class="pl-group-tools" data-group-tools hidden>
+                <p class="pl-directed-band-sub" role="status" data-group-status>Tick the questions you want to answer together, then save the group.</p>
+                <div class="pl-group-actions">
+                  <button type="button" class="pl-chip-btn pl-chip-btn--save" data-group-save disabled>Save group</button>
+                  <button type="button" class="pl-chip-btn" data-group-done>Done grouping</button>
+                </div>
+                <p class="pl-q-together-error" role="alert" data-group-error></p>
+              </div>
+            </div>
+            {{end}}
           </div>
           {{range $idx, $q := .DirectedQuestions}}
+          {{$joined := index $.JoinedQuestions $q.ID}}
           <div class="pl-q pl-q--directed question-section" data-question-id="{{$q.ID}}">
+            {{if gt (len $.DirectedQuestions) 1}}
+            <label class="pl-group-pick">
+              <input type="checkbox" data-group-pick value="{{$q.ID}}" autocomplete="off"
+                     aria-label="Group “{{$q.Text}}”{{range $joined}} and “{{.Text}}”{{end}}">
+            </label>
+            {{end}}
             <div class="pl-q-num pl-q-num--directed" aria-hidden="true">★</div>
             <div class="pl-q-body">
               <div class="pl-q-head">
@@ -183,6 +213,16 @@
                 {{else}}<span class="save-status"></span>{{end}}
                 {{else}}<span class="save-status"></span>{{end}}
               </div>
+              {{if $joined}}
+              <ul class="pl-q-joined" aria-label="Answered together with">
+                {{range $joined}}
+                <li>
+                  <h3 class="pl-q-prompt">{{.Text}}</h3>
+                  <button type="button" class="pl-q-together-link" data-answer-separately="{{.ID}}">Answer this one separately</button>
+                </li>
+                {{end}}
+              </ul>
+              {{end}}
 
               {{if $.Responses}}
                 {{with index $.Responses $q.ID}}
@@ -251,6 +291,13 @@
                       </div>
                       {{end}}
                     </div>
+                  {{end}}
+                  {{/* An answer with no text block yet (a blank row, or one
+                       whose only photo was removed) still needs somewhere
+                       to type; autosave turns it into a text block. */}}
+                  {{$hasText := false}}{{range .Blocks}}{{if eq .Type "text"}}{{$hasText = true}}{{end}}{{end}}
+                  {{if not $hasText}}
+                  <textarea class="response-text" placeholder="Share your thoughts…"></textarea>
                   {{end}}
                   </div>
                 </div>
@@ -507,6 +554,40 @@ const issueID = {{.Issue.ID}};
 
 let autosaveTimers = {};
 
+// Unsaved edits by field (answer card, notebook block): each key holds the
+// save for its latest edit until the server has acknowledged it, so a failed
+// save stays pending. Saves for one field run one after another (saveChains),
+// so an older request can never land after a newer one. flushAllSaves lets
+// actions that reload the page save everything first, and stop if anything
+// is still unsaved.
+const pendingSaves = new Map();
+const saveChains = new Map();
+
+function runPendingSave(key) {
+    const run = (saveChains.get(key) || Promise.resolve()).then(async () => {
+        const save = pendingSaves.get(key);
+        if (!save) return true;
+        pendingSaves.delete(key);
+        const ok = await save().catch(() => false);
+        // Failed: keep it pending unless a newer edit already is.
+        if (!ok && !pendingSaves.has(key)) pendingSaves.set(key, save);
+        return ok;
+    });
+    saveChains.set(key, run);
+    return run;
+}
+
+function scheduleSave(key, save, delay) {
+    pendingSaves.set(key, save);
+    return setTimeout(() => runPendingSave(key), delay);
+}
+
+async function flushAllSaves() {
+    const keys = new Set([...pendingSaves.keys(), ...saveChains.keys()]);
+    await Promise.all([...keys].map(runPendingSave));
+    return pendingSaves.size === 0;
+}
+
 function updateGlobalSave() {
     const bar = document.getElementById('global-save-status');
     if (!bar) return;
@@ -525,15 +606,23 @@ document.querySelectorAll('.response-text').forEach(textarea => {
         clearTimeout(autosaveTimers[qID]);
         const status = section.querySelector('.save-status');
         if (status) { status.className = 'save-status'; status.textContent = ''; }
-        autosaveTimers[qID] = setTimeout(() => autosave(section), 2000);
+        autosaveTimers[qID] = scheduleSave('answer:' + qID, () => autosave(section), 2000);
     });
 });
 
-async function autosave(section) {
+// Returns true once the card's text is saved, false when it could not be.
+async function autosave(section, attempt = 0) {
     const qID = section.dataset.questionId;
     const area = section.querySelector('.response-area');
     let responseID = area?.dataset.responseId;
     const status = section.querySelector('.save-status');
+    const outOfDate = () => {
+        if (status) {
+            status.className = 'save-status error';
+            status.textContent = 'This page is out of date — reload it to keep writing';
+        }
+        return false;
+    };
 
     if (!responseID) {
         // Create the response first. The server returns either a freshly
@@ -547,12 +636,20 @@ async function autosave(section) {
                 headers: apiHeaders(),
                 body: JSON.stringify({ question_id: parseInt(qID) }),
             });
-            if (!res.ok) return;
+            // 409: the question is now answered together with another.
+            if (res.status === 409) return outOfDate();
+            if (!res.ok) {
+                if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
+                return false;
+            }
             const data = await res.json();
             responseID = data.id;
             area.dataset.responseId = responseID;
             area.dataset.version = String(data.version ?? 0);
-        } catch { return; }
+        } catch {
+            if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
+            return false;
+        }
     }
 
     const version = parseInt(area.dataset.version || '0');
@@ -573,20 +670,181 @@ async function autosave(section) {
             const data = await res.json();
             area.dataset.version = data.version;
             if (status) { status.className = 'save-status saved'; status.textContent = 'Saved'; }
+            return true;
         } else if (res.status === 409) {
-            const data = await res.json();
+            // Only a version conflict is retried, a few times, with the text
+            // as it is now; any other 409 (say the round closed) is final.
+            const data = await res.json().catch(() => ({}));
+            if (typeof data.current_version !== 'number' || attempt >= 2) {
+                if (status) {
+                    status.className = 'save-status error';
+                    status.textContent = data.error?.message || 'Save failed';
+                }
+                return false;
+            }
             area.dataset.version = data.current_version;
             if (status) { status.className = 'save-status error'; status.textContent = 'Conflict — retrying…'; }
-            setTimeout(() => autosave(section), 500);
+            await new Promise(r => setTimeout(r, 500));
+            return autosave(section, attempt + 1);
+        } else if (res.status === 404) {
+            // The response is gone: answered together from another tab.
+            return outOfDate();
         }
+        if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
+        return false;
     } catch {
         if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
+        return false;
     }
 }
 
 // Expose autosave to editor.js link-paste logic so the shared helper can
 // trigger a save before inserting a link block.
 window.autosave = autosave;
+
+// --- Hot-seat questions answered together ------------------------------
+//
+// Combining or separating changes which cards exist, so it reloads the page.
+// First it freezes the page and saves everything unsaved (answers, notebook
+// text, photo covers, dump captions); if anything fails it stops and
+// unfreezes, so nothing typed is ever lost to the reload.
+// note is where problems are shown, next to the control that was used,
+// where they stay until the next attempt (a toast would cover the Submit
+// bar on phones). After success the page reloads to reloadHash.
+async function changeAnswerGrouping(note, url, body, doneMessage, reloadHash) {
+    const helper = window.__polEditor;
+    note.textContent = '';
+    if (document.querySelector('.pl-media-btn:disabled, #dump-photo-btn:disabled, #dump-video-btn:disabled')) {
+        note.textContent = 'Wait for the upload to finish first.';
+        return;
+    }
+
+    const main = document.querySelector('main');
+    main.inert = true;
+    const unfreeze = (message) => {
+        main.inert = false;
+        note.textContent = message;
+    };
+
+    const saved = (await Promise.all([
+        flushAllSaves(),
+        helper?.flushCoverEditors?.() ?? true,
+        helper?.flushDumpCaptions?.() ?? true,
+    ])).every(Boolean);
+    if (!saved) {
+        helper?.setCoverEditorsLocked?.(false);
+        unfreeze("Something on this page didn't save — check it and try again.");
+        return;
+    }
+
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            helper?.setCoverEditorsLocked?.(false);
+            unfreeze(data.error?.message || 'Could not change that — try again');
+            return;
+        }
+    } catch {
+        helper?.setCoverEditorsLocked?.(false);
+        unfreeze('Could not reach the server — try again');
+        return;
+    }
+
+    helper?.showToast(doneMessage);
+    history.replaceState(null, '', location.pathname + location.search + (reloadHash || ''));
+    setTimeout(() => window.location.reload(), 600);
+}
+
+// Grouping mode on the hot-seat band: tick questions, Save group (the page
+// reloads with them stacked in one card and stays in grouping mode), repeat,
+// then Done grouping.
+(function () {
+    const bar = document.querySelector('[data-group-bar]');
+    if (!bar) return;
+    const editor = document.getElementById('response-editor');
+    const tools = bar.querySelector('[data-group-tools]');
+    const startBtn = bar.querySelector('[data-group-start]');
+    const hint = bar.querySelector('[data-group-hint]');
+    const saveBtn = bar.querySelector('[data-group-save]');
+    const status = bar.querySelector('[data-group-status]');
+    const error = bar.querySelector('[data-group-error]');
+    const picks = [...document.querySelectorAll('[data-group-pick]')];
+    const HASH = '#group-questions';
+
+    function picked() { return picks.filter(p => p.checked); }
+
+    function update() {
+        const n = picked().length;
+        saveBtn.disabled = n < 2;
+        status.textContent = n === 0
+            ? 'Tick the questions you want to answer together, then save the group.'
+            : n === 1
+                ? '1 ticked — tick at least one more.'
+                : `${n} ticked — save them as one group.`;
+    }
+
+    function setMode(on) {
+        editor.classList.toggle('is-grouping', on);
+        tools.hidden = !on;
+        startBtn.hidden = on;
+        hint.hidden = on;
+        if (!on) picks.forEach(p => { p.checked = false; });
+        error.textContent = '';
+        history.replaceState(null, '', location.pathname + location.search + (on ? HASH : ''));
+        update();
+    }
+
+    startBtn.addEventListener('click', () => setMode(true));
+    bar.querySelector('[data-group-done]').addEventListener('click', () => setMode(false));
+    picks.forEach(p => p.addEventListener('change', update));
+
+    // In grouping mode, tapping a card's question ticks it too.
+    document.querySelectorAll('.pl-q--directed .pl-q-head').forEach(head => {
+        head.addEventListener('click', ev => {
+            if (!editor.classList.contains('is-grouping') || ev.target.closest('button, a, input')) return;
+            const pick = head.closest('.question-section').querySelector('[data-group-pick]');
+            if (pick) { pick.checked = !pick.checked; update(); }
+        });
+    });
+
+    saveBtn.addEventListener('click', () => {
+        changeAnswerGrouping(error, '/api/questions/answer-together',
+            { question_ids: picked().map(p => Number(p.value)) },
+            'Grouped — they share one answer now', HASH);
+    });
+
+    // Browsers restore checkbox state across the reload that follows Save
+    // group, which would leave the new group ticked: start every pick clear.
+    picks.forEach(p => { p.checked = false; });
+
+    if (location.hash === HASH) {
+        setMode(true);
+        document.getElementById('hot-seat')?.scrollIntoView({ block: 'start' });
+    }
+})();
+
+document.querySelectorAll('[data-answer-separately]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const section = btn.closest('.question-section');
+        let note = section.querySelector('.pl-q-together-error');
+        if (!note) {
+            note = document.createElement('p');
+            note.className = 'pl-q-together-error';
+            note.setAttribute('role', 'alert');
+            btn.closest('.pl-q-joined').after(note);
+        }
+        changeAnswerGrouping(note,
+            `/api/questions/${btn.dataset.answerSeparately}/answer-separately`,
+            { from: Number(section.dataset.questionId) },
+            'Answering it separately — your answer stays with the first question',
+            location.hash);
+    });
+});
 
 const submitAllButton = document.getElementById('submit-all-btn');
 if (submitAllButton) {
@@ -609,9 +867,22 @@ submitAllButton.addEventListener('click', async function() {
     }
 
 
-    // Autosave all first.
+    // Autosave all first, and stop if anything didn't save: submitting
+    // would otherwise report success for text that never reached the
+    // server (say, a card that is now answered together from another tab).
+    let allSaved = true;
     for (const section of document.querySelectorAll('.question-section')) {
-        await autosave(section);
+        if (!(await autosave(section))) allSaved = false;
+    }
+    if (!allSaved) {
+        editorHelper?.setCoverEditorsLocked?.(false);
+        this.textContent = this.dataset.label || 'Submit to the issue →';
+        this.disabled = false;
+        if (errorBox) {
+            errorBox.textContent = "Some answers didn't save — check the messages above, reload if asked, then submit.";
+            errorBox.hidden = false;
+        }
+        return;
     }
 
     // Submit each response. Questions the user never touched have no
@@ -828,29 +1099,33 @@ document.querySelectorAll('.pl-record-btn').forEach(btn => {
         const dayEl = textarea.closest('[data-diary-day-id]');
         const status = blockEl.querySelector('[data-diary-block-status]');
 
+        async function save() {
+            if (status) { status.className = 'save-status saving'; status.textContent = 'Saving…'; }
+            try {
+                const res = await fetch(`/api/diary-blocks/${blockID}`, {
+                    method: 'PUT',
+                    headers: apiHeaders(),
+                    body: JSON.stringify({ text: textarea.value }),
+                });
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                if (data.removed) {
+                    blockEl.remove();
+                    if (data.day_removed) { dayEl.remove(); }
+                    return true;
+                }
+                if (status) { status.className = 'save-status saved'; status.textContent = 'Saved'; }
+                return true;
+            } catch {
+                if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
+                return false;
+            }
+        }
+
         textarea.addEventListener('input', () => {
             clearTimeout(diaryTimers[blockID]);
             if (status) { status.className = 'save-status'; status.textContent = ''; }
-            diaryTimers[blockID] = setTimeout(async () => {
-                if (status) { status.className = 'save-status saving'; status.textContent = 'Saving…'; }
-                try {
-                    const res = await fetch(`/api/diary-blocks/${blockID}`, {
-                        method: 'PUT',
-                        headers: apiHeaders(),
-                        body: JSON.stringify({ text: textarea.value }),
-                    });
-                    if (!res.ok) throw new Error();
-                    const data = await res.json();
-                    if (data.removed) {
-                        blockEl.remove();
-                        if (data.day_removed) { dayEl.remove(); }
-                        return;
-                    }
-                    if (status) { status.className = 'save-status saved'; status.textContent = 'Saved'; }
-                } catch {
-                    if (status) { status.className = 'save-status error'; status.textContent = 'Save failed'; }
-                }
-            }, 1500);
+            diaryTimers[blockID] = scheduleSave('diary:' + blockID, save, 1500);
         });
     });
 

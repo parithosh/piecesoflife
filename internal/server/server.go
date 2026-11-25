@@ -336,6 +336,8 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("PATCH /api/questions/{id}", adminMW(s.handleEditQuestion))
 	s.mux.Handle("DELETE /api/questions/{id}", adminMW(s.handleDeleteQuestion))
 	s.mux.Handle("POST /api/questions/submit", groupMW(s.handleFriendSubmitQuestion))
+	s.mux.Handle("POST /api/questions/answer-together", groupMW(s.handleAnswerTogether))
+	s.mux.Handle("POST /api/questions/{id}/answer-separately", groupMW(s.handleAnswerSeparately))
 
 	// Response API routes.
 	s.mux.Handle("POST /api/responses", groupMW(s.handleCreateResponse))

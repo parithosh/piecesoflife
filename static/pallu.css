@@ -4935,3 +4935,128 @@ nav.pl-nav .pl-nav-loops-menu a.pl-nav-loop:hover { background: var(--strip); co
     padding-top: 14px;
 }
 
+
+/* === Hot-seat questions answered together =========================== *
+ * Respond page: joined prompts stack under the card's own, each with a
+ * quiet "answer separately" link; "Answer together with…" sits under the
+ * prompts, apart from the chips that add content. */
+.pl-q-joined {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+}
+.pl-q-joined li { margin-top: 10px; }
+.pl-q-joined li::before {
+    content: "&";
+    display: block;
+    font-family: var(--font-display);
+    font-size: 18px;
+    line-height: 1;
+    color: var(--zari);
+    margin-bottom: 6px;
+}
+/* button.… so these outrank app.css's :is(button, …, a.button) height and
+ * oat.css's nowrap, centred buttons: long questions must wrap. */
+button.pl-q-together-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    max-width: 100%;
+    min-height: 32px;
+    white-space: normal;
+    margin-top: 6px;
+    padding: 0;
+    font: 600 12px var(--font-ui);
+    letter-spacing: 0.02em;
+    color: var(--peacock);
+    background: none;
+    border: 0;
+    text-align: left;
+    text-decoration: underline;
+    text-decoration-color: var(--peacock-line);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+button.pl-q-together-link { box-shadow: none; }
+.pl-q-together-link:hover { text-decoration-color: currentColor; }
+@media (max-width: 720px) {
+    button.pl-q-together-link { min-height: 44px; }
+}
+
+/* Grouping mode ("Group questions" on the hot-seat band): each hot-seat
+ * card's star becomes a checkbox, ticked cards are tinted, and answer
+ * boxes step back so the questions are what you look at. */
+.pl-group-bar { margin-top: 12px; }
+/* While grouping, the band (with Save group) sticks under the nav, trimmed
+ * to the eyebrow and tools, so it stays in reach while ticking cards far
+ * down the page. */
+.is-grouping .pl-directed-band {
+    position: sticky;
+    top: 63px; /* nav.pl-nav height */
+    z-index: 40;
+    box-shadow: 0 6px 12px -8px rgba(var(--ink-rgb), 0.25);
+}
+.is-grouping .pl-directed-band > .pl-directed-band-sub { display: none; }
+/* overflow: hidden on the card would make it the sticky band's scroll
+ * container; clip still clips its corners without being one. */
+.pl-card--editor:has(.is-grouping) { overflow: clip; }
+.pl-group-bar [hidden] { display: none !important; } /* chips set display */
+.pl-group-bar .pl-directed-band-sub { margin-bottom: 10px; }
+.pl-group-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.pl-group-pick { display: none; }
+.is-grouping .pl-q--directed .pl-group-pick {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    align-self: flex-start;
+    flex: none;
+    width: 52px;
+    min-height: 44px; /* tap target; the question text also toggles it */
+    padding-top: 2px;
+    cursor: pointer;
+}
+.is-grouping .pl-q--directed .pl-group-pick input {
+    width: 26px;
+    height: 26px;
+    margin: 0;
+    accent-color: var(--peacock);
+    cursor: pointer;
+}
+.is-grouping .pl-q--directed .pl-q-num { display: none; }
+.is-grouping .pl-q--directed .pl-q-head { cursor: pointer; }
+.is-grouping .pl-q--directed:has([data-group-pick]:checked) {
+    background: var(--peacock-wash);
+    box-shadow: 0 0 0 10px var(--peacock-wash);
+    border-radius: 2px;
+}
+.is-grouping .pl-q--directed .response-area,
+.is-grouping .pl-q--directed .pl-q-actions {
+    opacity: 0.4;
+}
+
+.pl-q-together-error {
+    margin: 8px 0 0;
+    font: 14px/1.4 var(--font-read);
+    color: var(--sindoor);
+}
+.pl-q-together-error:empty { display: none; }
+
+/* Published hot seat, memento and admin preview: questions answered
+ * together read as one prompt, joined by a gold ampersand. */
+.pl-peoples-q-line,
+.pl-memento-question-joined { display: block; }
+.pl-peoples-q-line + .pl-peoples-q-line::before,
+.pl-memento-question-joined::before {
+    content: "& ";
+    color: var(--zari);
+}
+.pl-peoples-q-line + .pl-peoples-q-line { margin-top: 4px; }
+.pl-memento-question-joined { margin-top: 6px; }
+.pl-msub-q-title--joined::before { content: "& "; color: var(--zari); }
+.pl-msub-joined-note {
+    margin: -4px 0 12px;
+    font: 600 11px var(--font-ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--peacock);
+}

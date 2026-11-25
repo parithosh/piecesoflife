@@ -801,6 +801,31 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"questions": questions})
 }
 
+// groupAnsweredTogether splits questions into roots, in their order, and the
+// questions each primary's member answers together with it. Callers filter
+// for visibility first: every question of a group is directed at the same
+// member, so a group is either visible whole or not at all.
+func groupAnsweredTogether(questions []store.Question) ([]store.Question, map[int64][]store.Question) {
+	roots := make([]store.Question, 0, len(questions))
+	joined := make(map[int64][]store.Question)
+	for _, q := range questions {
+		if q.AnsweredWith == nil {
+			roots = append(roots, q)
+		} else {
+			joined[*q.AnsweredWith] = append(joined[*q.AnsweredWith], q)
+		}
+	}
+
+	return roots, joined
+}
+
+// groupJoinedWith returns the questions answered together with primaryID.
+func groupJoinedWith(questions []store.Question, primaryID int64) []store.Question {
+	_, joined := groupAnsweredTogether(questions)
+
+	return joined[primaryID]
+}
+
 func questionVisibleToMember(q store.Question, userID int64) bool {
 	return q.TargetUserID == nil || *q.TargetUserID == userID
 }
@@ -1313,7 +1338,15 @@ func (s *Server) handleDeleteQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.DeleteQuestion(r.Context(), questionID); err != nil {
+	// Answered questions are reworded, never removed — including one its
+	// member answered together with another, whose answer sits on the
+	// primary. The dashboard disables Remove for these too.
+	if err := s.store.DeleteQuestion(r.Context(), questionID); errors.Is(err, store.ErrQuestionAnswered) {
+		writeError(w, http.StatusConflict, "answered",
+			"Members have answered this question — reword it instead of removing it")
+
+		return
+	} else if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to delete question",
 			slog.Int64("question_id", questionID),
 			slog.String("error", err.Error()))

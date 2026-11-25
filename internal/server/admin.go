@@ -113,6 +113,9 @@ type AdminMemberSubmissionData struct {
 	// that question. Missing entries mean the member hasn't started that
 	// question; entries with IsDraft=true are unsubmitted work-in-progress.
 	Answers map[int64]MemberAnswer
+	// JoinedQuestions maps a hot-seat question to the ones the member
+	// answers together with it; Questions holds only roots.
+	JoinedQuestions map[int64][]store.Question
 }
 
 // MemberAnswer pairs a single response with its content blocks for the
@@ -391,7 +394,7 @@ func (s *Server) handleAdminMemberSubmission(
 			}
 		}
 
-		data.Questions = filtered
+		data.Questions, data.JoinedQuestions = groupAnsweredTogether(filtered)
 		data.Answers = answers
 	}
 

@@ -38,7 +38,7 @@
         <div class="pl-memento-body">
             <header class="pl-memento-head">
                 <p class="pl-eyebrow pl-eyebrow--peacock">{{.Settings.LoopName}} · {{.Issue.OpensAt | formatDate}}</p>
-                <h1 class="pl-memento-question">{{.Question.Text}}</h1>
+                <h1 class="pl-memento-question">{{.Question.Text}}{{range .Joined}}<span class="pl-memento-question-joined">{{.Text}}</span>{{end}}</h1>
             </header>
 
             <div class="pl-memento-author">
