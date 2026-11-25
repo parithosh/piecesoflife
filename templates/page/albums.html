@@ -81,6 +81,14 @@ function cardHtml(item) {
         `;
     }
 
+    // Resized copies (once the server has made them). Tiles are 4:3 crops,
+    // so a photo wider than 4:3 is drawn wider than its tile (crop > 1).
+    // fitTileSizes replaces this estimate with the measured tile width.
+    // The lightbox opens the original.
+    const src = escapeHtml(item.src || item.url || '');
+    const srcset = escapeHtml(item.srcset || '');
+    const crop = item.width && item.height ? Math.max(1, (item.width / item.height) / (4 / 3)) : 1;
+    const sizes = `(max-width: 720px) ${Math.round(50 * crop)}vw, ${Math.round(300 * crop)}px`;
     const cover = covered ? `
                 <button type="button" class="covered-photo-cover" data-cover-reveal>
                     <span class="covered-photo-cover-title">Covered photo</span>
@@ -99,13 +107,24 @@ function cardHtml(item) {
                 tabindex="0" role="button"
                 aria-label="${covered ? `Reveal covered photo by ${name}` : `View photo${caption ? ': ' + caption : ''} by ${name}`}">
             <div class="covered-photo-frame">
-                <img src="${url}" alt="${covered ? 'Covered photo' : caption}"
-                     data-covered-alt="${caption}" loading="lazy">
+                <img src="${src}" alt="${covered ? 'Covered photo' : caption}"
+                     ${srcset ? `srcset="${srcset}" sizes="${sizes}" data-full-width="${Number(item.width) || 0}" data-crop="${crop}"` : ''}
+                     data-covered-alt="${caption}" loading="lazy" decoding="async">
                 ${cover}
             </div>
             ${meta}
         </figure>
     `;
+}
+
+// Tiles are lazy, so the browser picks a srcset candidate only when one
+// nears the viewport: by then sizes holds the tile's real drawn width.
+function fitTileSizes(root) {
+    root.querySelectorAll('img[data-crop]').forEach(img => {
+        if (img.offsetWidth) {
+            img.sizes = Math.ceil(img.offsetWidth * Number(img.dataset.crop)) + 'px';
+        }
+    });
 }
 
 function issueLabel(item) {
@@ -161,6 +180,7 @@ function render() {
         }).join('');
     }
 
+    fitTileSizes(grid);
     if (window.__polLightbox) window.__polLightbox.attach();
 }
 

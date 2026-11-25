@@ -78,6 +78,10 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	emailer := email.NewSender(cfg, logger)
 
 	srv := New(st, cfg, emailer, logger, embed.FS{}, embed.FS{})
+	// Registered after the upload TempDir, so it runs before that is removed:
+	// the photo-copy worker must not be writing into it.
+	t.Cleanup(srv.waitForVariants)
+	srv.variants.uploadQuiet = 0
 
 	return &integrationEnv{handler: srv.Handler(), store: st, srv: srv}
 }

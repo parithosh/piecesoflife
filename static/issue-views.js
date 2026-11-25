@@ -81,6 +81,12 @@
         section.querySelector('.published-question-title')?.focus?.();
     }
 
+    // Photos outside the current question load lazily, so the question being
+    // read loads first. Preload the next one so turning the page is instant.
+    function preload(section) {
+        section?.querySelectorAll('img[loading="lazy"]').forEach(img => { img.loading = 'eager'; });
+    }
+
     function setCurrent(index, opts = {}) {
         current = clamp(index);
 
@@ -88,6 +94,7 @@
             questions.forEach((section, i) => {
                 section.hidden = i !== current;
             });
+            preload(questions[current + 1]);
         }
 
         [...progressLinks, ...dotLinks].forEach(link => {
@@ -240,4 +247,11 @@
     } else {
         applyMode('paged');
     }
+
+    // Once what's on screen has loaded, fetch the rest of the issue's photos
+    // in the background, as every photo was before lazy loading, so jumping
+    // to any question finds its photos ready.
+    const preloadAll = () => questions.forEach(preload);
+    if (document.readyState === 'complete') preloadAll();
+    else window.addEventListener('load', preloadAll, { once: true });
 })();

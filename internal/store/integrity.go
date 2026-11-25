@@ -166,6 +166,11 @@ func walkUploads(ctx context.Context, base string) (map[string]struct{}, error) 
 		}
 
 		if d.IsDir() {
+			// Resized photo copies (server.variantCacheDir) are derived
+			// files that no row references by design.
+			if path == filepath.Join(base, ".cache") {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 

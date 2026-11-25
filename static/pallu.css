@@ -1949,6 +1949,27 @@ input.pl-field::placeholder,
     border-radius: 4px;
 }
 
+/* Progressive photos: a tiny blurred copy (an inline data: URI, so it costs
+ * no request) holds the photo's space until the image arrives; lightbox.js
+ * drops it on load. */
+.pl-progressive {
+    height: auto; /* the height attribute only supplies the aspect ratio */
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+.pl-progressive.is-loaded { background-image: none !important; }
+/* An auto-sized image is 0×0 until it loads; give answer and memento
+ * photos the width they will end up with: column-wide, but never past their
+ * own pixels plus the 1px border each side (--w) or, for answers, 480px
+ * tall including that border (--ar is width/height). */
+.published-photo img.pl-progressive[width] {
+    width: min(100%, calc(478px * var(--ar) + 2px), calc(var(--w) * 1px + 2px));
+}
+.pl-memento-photo img.pl-progressive[width] {
+    width: min(100%, calc(var(--w) * 1px + 2px));
+}
+
 .published-photo figcaption {
     margin-top: 7px;
     font-family: var(--font-read);

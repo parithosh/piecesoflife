@@ -879,6 +879,14 @@ func (s *Server) handleUploadServe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ?w= asks for a resized copy; authorisation above was checked against
+	// the original, which is served while no copy exists.
+	if size := r.URL.Query().Get("w"); size != "" {
+		if variant, ok := s.servableVariant(cleanPath, size); ok {
+			cleanPath = variant
+		}
+	}
+
 	// Prevent shared proxies/CDNs from caching authenticated private media.
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeFile(w, r, cleanPath)
@@ -1352,6 +1360,12 @@ func (s *Server) handleMementoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if size := r.URL.Query().Get("w"); size != "" {
+		if variant, ok := s.servableVariant(cleanPath, size); ok {
+			cleanPath = variant
+		}
+	}
+
 	if !publicAllowed {
 		w.Header().Set("Cache-Control", "private, max-age=3600")
 	}
@@ -1425,6 +1439,24 @@ type mediaEntry struct {
 	Title        *string   `json:"title"`
 	Month        int       `json:"month"`
 	Year         int       `json:"year"`
+	// Photos only: see photoImage. Src and Srcset fall back to URL alone
+	// until the resized copies exist. No inlined placeholder: across a whole
+	// library it would add ~0.7 KB per photo to this response.
+	Src    string `json:"src,omitempty"`
+	Srcset string `json:"srcset,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+}
+
+// withPhoto fills a photo entry's resized-copy fields from its stored file.
+func (s *Server) withPhoto(e mediaEntry, path string) mediaEntry {
+	if e.Kind != "photo" {
+		return e
+	}
+	p := s.photoImage(path)
+	e.Src, e.Srcset, e.Width, e.Height = p.Src(), p.Srcset(), p.Width, p.Height
+
+	return e
 }
 
 // handleListAlbums returns every media item (photos, videos, audio — from
@@ -1480,7 +1512,7 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				media = append(media, mediaEntry{
+				media = append(media, s.withPhoto(mediaEntry{
 					ID:        block.ID,
 					Source:    "response",
 					Kind:      block.Type,
@@ -1494,7 +1526,7 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 					Title:     issue.Title,
 					Month:     issue.Month,
 					Year:      issue.Year,
-				})
+				}, *block.FilePath))
 			}
 		}
 
@@ -1507,7 +1539,7 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, item := range dumpItems {
-			media = append(media, mediaEntry{
+			media = append(media, s.withPhoto(mediaEntry{
 				ID:        item.ID,
 				Source:    "dump",
 				Kind:      item.Kind,
@@ -1522,7 +1554,7 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 				Title:     issue.Title,
 				Month:     issue.Month,
 				Year:      issue.Year,
-			})
+			}, item.FilePath))
 		}
 
 		// Published notebook media. Only what members wove into the issue —
@@ -1542,7 +1574,7 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 
-					media = append(media, mediaEntry{
+					media = append(media, s.withPhoto(mediaEntry{
 						ID:           b.ID,
 						Source:       "diary",
 						Kind:         b.Type,
@@ -1557,7 +1589,7 @@ func (s *Server) handleListAlbums(w http.ResponseWriter, r *http.Request) {
 						Title:        issue.Title,
 						Month:        issue.Month,
 						Year:         issue.Year,
-					})
+					}, *b.FilePath))
 				}
 			}
 		}

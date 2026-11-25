@@ -184,6 +184,7 @@ func (s *Server) storeUploadedPhoto(
 		if err := writePNGAtomic(dst, oriented); err != nil {
 			return "", "", err
 		}
+		s.queueUploadVariants(dst)
 
 		return dst, "image/png", nil
 	}
@@ -192,6 +193,7 @@ func (s *Server) storeUploadedPhoto(
 	if err := writeJPEGAtomicQuality(dst, flattenOpaque(oriented), 90); err != nil {
 		return "", "", err
 	}
+	s.queueUploadVariants(dst)
 
 	return dst, "image/jpeg", nil
 }
