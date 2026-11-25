@@ -567,6 +567,7 @@ func (s *Server) removeUploadIfUnreferenced(ctx context.Context, path string) {
 			slog.String("path", path),
 			slog.String("error", err.Error()))
 	}
+	s.removeVariants(path)
 }
 
 // rambleIssueDividers builds "issue published here" timeline markers from

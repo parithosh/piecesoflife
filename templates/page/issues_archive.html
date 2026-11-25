@@ -111,7 +111,9 @@
                 {{$size := len .Photos}}
                 <div class="pl-issue-cover photo-collage {{if eq $size 1}}size-1{{else if eq $size 2}}size-2{{else if eq $size 4}}size-4{{else}}size-4{{end}}">
                     {{range .Photos}}
-                    <img src="{{. | uploadURL}}" alt="" loading="lazy">
+                    {{$p := photo .}}
+                    <img src="{{$p.Src}}" srcset="{{$p.Srcset}}" sizes="{{$p.CoverSizes $size}}"
+                         alt="" loading="lazy" decoding="async">
                     {{end}}
                 </div>
                 {{else}}

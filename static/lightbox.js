@@ -124,6 +124,12 @@
                 return {
                     el,
                     src: el.dataset.lightboxSrc || img?.src || '',
+                    // The resized copy already on the page, shown while
+                    // the full-size original downloads.
+                    preview: img?.complete && img.naturalWidth ? img.currentSrc : '',
+                    ratio: img?.naturalWidth ? img.naturalWidth / img.naturalHeight : 0,
+                    // The original's width, when the page knows it.
+                    fullWidth: Number(img?.dataset.fullWidth || img?.getAttribute('width')) || 0,
                     caption: el.dataset.lightboxCaption || img?.dataset.coveredAlt ||
                         img?.alt || '',
                     covered: isCovered(el),
@@ -282,7 +288,25 @@
         } else {
             cover.style.display = 'none';
             img.style.display = '';
-            img.src = cur.src;
+            // Show the resized copy already on the page while the original
+            // downloads, sized as the original will be shown so nothing
+            // jumps. Only when the page knows the original's width, which
+            // also keeps a small original from being drawn enlarged.
+            if (cur.preview && cur.fullWidth &&
+                cur.preview !== new URL(cur.src, location.href).href) {
+                img.style.width = `min(94vw, calc(86vh * ${cur.ratio}), ${cur.fullWidth}px)`;
+                img.src = cur.preview;
+                const full = new Image();
+                full.onload = function() {
+                    if (images[currentIndex] === cur && overlay.style.display !== 'none') {
+                        img.src = cur.src;
+                    }
+                };
+                full.src = cur.src;
+            } else {
+                img.style.width = '';
+                img.src = cur.src;
+            }
             img.alt = cur.caption || '';
             caption.textContent = cur.caption || '';
             overlay.setAttribute('aria-label', cur.caption || 'Image viewer');
@@ -356,6 +380,16 @@
             });
         });
     }
+
+    // Progressive photos: drop the blurred placeholder once the real image
+    // has loaded (load doesn't bubble, so listen in the capture phase).
+    function markLoaded(img) {
+        if (img.classList?.contains('pl-progressive')) img.classList.add('is-loaded');
+    }
+    document.addEventListener('load', ev => markLoaded(ev.target), true);
+    document.querySelectorAll('img.pl-progressive').forEach(img => {
+        if (img.complete && img.naturalWidth) markLoaded(img);
+    });
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', attach);

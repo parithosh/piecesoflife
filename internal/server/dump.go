@@ -355,6 +355,7 @@ func (s *Server) handleDumpDelete(w http.ResponseWriter, r *http.Request) {
 			slog.String("path", item.FilePath),
 			slog.String("error", err.Error()))
 	}
+	s.removeVariants(item.FilePath)
 
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }

@@ -47,6 +47,11 @@ type Server struct {
 	// never deletes a file another request is about to publish.
 	brandingMu sync.Mutex
 
+	// photoInfo memoises photo dimensions and placeholders by path;
+	// variants is the background worker that makes resized photo copies.
+	photoInfo sync.Map
+	variants  variantWorker
+
 	// loginIPLimiter bounds magic-link requests per client IP so a single
 	// caller cannot spray login emails across arbitrary addresses.
 	loginIPLimiter *ipRateLimiter
@@ -161,6 +166,8 @@ func New(
 		staticFS:       staticFS,
 		templatesFS:    templatesFS,
 	}
+
+	s.variants.uploadQuiet = 2 * time.Second
 
 	s.loadTemplates()
 	s.registerRoutes()
@@ -392,6 +399,8 @@ func (s *Server) loadTemplates() {
 		"truncate":       truncate,
 		"safeHTML":       safeHTML,
 		"uploadURL":      s.uploadURL,
+		"photo":          s.photoImage,
+		"mementoPhoto":   s.mementoPhoto,
 		"mementoFileURL": s.mementoFileURL,
 		"add":            func(a, b int) int { return a + b },
 		"sub":            func(a, b int) int { return a - b },

@@ -492,6 +492,7 @@ func (s *Server) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 				slog.String("error", err.Error()),
 			)
 		}
+		s.removeVariants(*block.FilePath)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

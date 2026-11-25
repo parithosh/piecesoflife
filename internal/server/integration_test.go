@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1493,6 +1496,155 @@ func TestUploadServeRefusesDirectories(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "jpeg", rr.Body.String())
 	assert.Contains(t, rr.Header().Get("Cache-Control"), "private")
+}
+
+// TestPhotoCopies verifies resized photo copies: pages and ?w= fall back to
+// the original until the background worker has made them, they are served
+// under the original's authorisation (including public mementos), uploads
+// get them upright, transparent and small photos never get them, and
+// deleting a photo deletes them.
+func TestPhotoCopies(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	writePhoto := func(name string, img image.Image, asPNG bool) string {
+		path := filepath.Join(env.srv.config.UploadPath, "2026", "11", "0123456789abcdef_"+name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		var buf bytes.Buffer
+		if asPNG {
+			require.NoError(t, png.Encode(&buf, img))
+		} else {
+			require.NoError(t, jpeg.Encode(&buf, img, nil))
+		}
+		require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o644))
+		return path
+	}
+	owner := env.createUser(t, "Lia", "lia@example.com")
+	other := env.createUser(t, "Ravi", "ravi@example.com")
+	session := env.sessionCookie(t, owner.ID)
+	get := func(userID int64, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(env.sessionCookie(t, userID))
+		return env.do(t, req)
+	}
+	size := func(rr *httptest.ResponseRecorder) image.Point {
+		cfg, _, err := image.DecodeConfig(rr.Body)
+		require.NoError(t, err)
+		return image.Pt(cfg.Width, cfg.Height)
+	}
+
+	wide := writePhoto("wide.jpg", image.NewRGBA(image.Rect(0, 0, 3000, 2000)), false)
+	dayID, err := env.store.EnsureRambleDay(ctx, owner.ID, "2026-11-01")
+	require.NoError(t, err)
+	_, err = env.store.CreateRambleBlock(ctx, dayID, "photo", nil, &wide, nil)
+	require.NoError(t, err)
+	const wideURL = "/uploads/2026/11/0123456789abcdef_wide.jpg"
+
+	// Before any copies exist, ?w= serves the original, and the first render
+	// (which only then queues the photo) offers the original alone.
+	assert.Equal(t, image.Pt(3000, 2000), size(get(owner.ID, wideURL+"?w=1600")))
+	p := env.srv.photoImage(wide)
+	assert.Equal(t, wideURL, p.Src())
+	assert.Empty(t, p.Srcset())
+	assert.Empty(t, p.Placeholder)
+
+	env.srv.waitForVariants()
+
+	p = env.srv.photoImage(wide)
+	assert.Equal(t, wideURL+"?w=1600", p.Src())
+	assert.Equal(t, wideURL+"?w=800 800w, "+wideURL+"?w=1200 1200w, "+wideURL+"?w=1600 1600w, "+wideURL+" 3000w",
+		p.Srcset(), "the original stays a candidate for slots no copy covers")
+	assert.True(t, strings.HasPrefix(string(p.Placeholder), "data:image/jpeg;base64,"))
+
+	for _, tc := range []struct {
+		query string
+		want  image.Point
+	}{
+		{"?w=1600", image.Pt(1600, 1067)},
+		{"?w=1200", image.Pt(1200, 800)},
+		{"?w=800", image.Pt(800, 533)},
+		{"?w=24", image.Pt(24, 16)},
+		{"?w=999", image.Pt(3000, 2000)}, // not an offered size
+	} {
+		rr := get(owner.ID, wideURL+tc.query)
+		require.Equal(t, http.StatusOK, rr.Code, tc.query)
+		// Smaller sizes are scaled from the 1600 copy, so a height can round
+		// a pixel differently from the exact ratio.
+		got := size(rr)
+		assert.Equal(t, tc.want.X, got.X, tc.query)
+		assert.InDelta(t, tc.want.Y, got.Y, 1, tc.query)
+	}
+	assert.Equal(t, http.StatusNotFound, get(other.ID, wideURL+"?w=1600").Code,
+		"a copy must not bypass the original's authorisation")
+
+	// Transparent and small photos are never copied: a JPEG copy would paint
+	// transparency white, and a small one would only lose quality.
+	transparent := writePhoto("clear.png", image.NewNRGBA(image.Rect(0, 0, 1200, 1200)), true)
+	small := writePhoto("small.jpg", image.NewRGBA(image.Rect(0, 0, 600, 400)), false)
+	// Uploads queue every photo, whatever its size.
+	env.srv.queueVariants(transparent)
+	env.srv.queueVariants(small)
+	env.srv.waitForVariants()
+	assert.Empty(t, env.srv.photoImage(transparent).Srcset())
+	assert.Empty(t, env.srv.photoImage(small).Srcset())
+	for _, path := range []string{transparent, small} {
+		_, err := os.Stat(variantPath(env.srv.variantStem(path), placeholderSize))
+		assert.True(t, os.IsNotExist(err), "no copies at all for %s", path)
+	}
+
+	// A public memento serves copies of its own photo to anonymous viewers.
+	issueID, qIDs := env.seedIssue(t, "collecting", 5, 2026, 1)
+	respID, err := env.store.CreateResponse(ctx, owner.ID, qIDs[0])
+	require.NoError(t, err)
+	_, err = env.store.CreateBlock(ctx, respID, "photo", nil, &wide, nil, nil, 0)
+	require.NoError(t, err)
+
+	// An uploaded photo gets upright copies without anyone viewing it, and
+	// deleting it deletes them.
+	up := uploadMultipartBlock(t, env, session, respID, "photo", "tall.jpg", "image/jpeg",
+		jpegWithOrientation(t, 2000, 1000, 6))
+	require.Equal(t, http.StatusCreated, up.Code, up.Body.String())
+	env.srv.waitForVariants()
+	blocks, err := env.store.ListBlocksByResponse(ctx, respID)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+	uploaded := blocks[1]
+	copy800 := variantPath(env.srv.variantStem(*uploaded.FilePath), 800)
+	assert.Equal(t, image.Pt(400, 800), size(get(owner.ID, env.srv.uploadURL(*uploaded.FilePath)+"?w=800")))
+
+	csrfCookie, csrfHeader := csrfPair()
+	del := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/blocks/%d", uploaded.ID), nil)
+	del.AddCookie(session)
+	del.AddCookie(csrfCookie)
+	del.Header.Set("X-CSRF-Token", csrfHeader)
+	require.Equal(t, http.StatusNoContent, env.do(t, del).Code)
+	_, err = os.Stat(copy800)
+	assert.True(t, os.IsNotExist(err), "deleting a photo deletes its copies")
+
+	require.NoError(t, env.store.SubmitResponse(ctx, respID))
+	require.NoError(t, env.store.PublishIssue(ctx, issueID))
+	env.setPublicMementos(t, true)
+	resp, err := env.store.GetResponseByID(ctx, respID)
+	require.NoError(t, err)
+	rr := env.do(t, httptest.NewRequest(http.MethodGet,
+		env.srv.mementoFileURL(resp.ShareToken, wide)+"?w=800", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, 800, size(rr).X)
+
+	// A photo replaced in place, here with an older mtime as a restore from
+	// backup would give it, never shows the previous photo's copies.
+	writePhoto("wide.jpg", image.NewRGBA(image.Rect(0, 0, 1000, 2000)), false)
+	older := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(wide, older, older))
+	assert.Equal(t, image.Pt(1000, 2000), size(get(owner.ID, wideURL+"?w=800")))
+	assert.Equal(t, wideURL, env.srv.photoImage(wide).Src())
+	env.srv.waitForVariants()
+	assert.Equal(t, image.Pt(400, 800), size(get(owner.ID, wideURL+"?w=800")))
+
+	// The copies are not uploads: the integrity check doesn't count them.
+	report, err := env.store.CheckUploadIntegrity(ctx, env.srv.config.UploadPath)
+	require.NoError(t, err)
+	assert.Equal(t, 2, report.Orphaned, "only the two unreferenced test photos")
 }
 
 // TestResponsesAndEmailsHiddenFromMembers verifies members can't read

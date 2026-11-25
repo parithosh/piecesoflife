@@ -69,7 +69,12 @@
                                 data-covered-key="response:{{.ID}}"
                                 data-cover-note="{{if .CoverNote}}{{.CoverNote}}{{end}}"{{end}}>
                             <span class="covered-photo-frame">
-                                <img src="{{$src}}"
+                                {{$p := mementoPhoto $.Response.ShareToken .FilePath}}
+                                <img src="{{$p.Src}}" class="pl-progressive"
+                                     srcset="{{$p.Srcset}}" sizes="{{$p.Sizes 570 0}}"
+                                     style="--w: {{$p.Width}}; {{with $p.Placeholder}}background-image: url('{{.}}'){{end}}"
+                                     {{with $p.Width}}width="{{.}}" height="{{$p.Height}}"{{end}}
+                                     loading="lazy" decoding="async"
                                      alt="{{if .IsCovered}}Covered photo{{else if .Caption}}{{.Caption}}{{end}}"
                                      data-covered-alt="{{if .Caption}}{{.Caption}}{{end}}">
                                 {{if .IsCovered}}
