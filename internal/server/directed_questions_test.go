@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/parithosh/piecesoflife/internal/store"
 )
 
 // TestDirectedQuestionsEndToEnd exercises the full @mention question lifecycle:
@@ -274,4 +277,104 @@ func TestDirectedQuestionsEndToEnd(t *testing.T) {
 	assert.Contains(t, pubBody, "Pastel de nata every morning by the river.")
 	assert.Contains(t, pubBody, fmt.Sprintf(`data-response-id="%d"`, createdResp.ID))
 	assert.Contains(t, pubBody, `data-comment-count="1"`, "comments panel on directed answer shows comment count")
+}
+
+// TestAnswerTogetherEndToEnd: a member put in the hot seat twice about the
+// same thing answers both questions at once — one card while answering, one
+// answer under both questions once published — and only they can do it.
+func TestAnswerTogetherEndToEnd(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx := context.Background()
+
+	admin := env.createUserWithRole(t, "Admin", "admin@example.com", "admin")
+	ashwin := env.createUser(t, "Ashwin", "ashwin@example.com")
+	shrisha := env.createUser(t, "Shrisha", "shrisha@example.com")
+	pari := env.createUser(t, "Pari", "pari@example.com")
+
+	opens := time.Now().UTC().Add(48 * time.Hour)
+	issueID, err := env.store.CreateIssue(ctx, 1, nil, int(opens.Month()), opens.Year(), opens, opens.Add(7*24*time.Hour))
+	require.NoError(t, err)
+	const toys = "Ashwin how was your birthday? Did you 3D print more toys?"
+	const megha = "Ashwin how was your birthday? Did you celebrate it with Megha?"
+	q1, err := env.store.CreateSuggestedQuestion(ctx, 1, issueID, shrisha.ID, toys, nil, &ashwin.ID)
+	require.NoError(t, err)
+	q2, err := env.store.CreateSuggestedQuestion(ctx, 1, issueID, pari.ID, megha, nil, &ashwin.ID)
+	require.NoError(t, err)
+	require.NoError(t, env.store.SetIssueStatus(ctx, issueID, "collecting"))
+
+	call := func(userID int64, method, path, body string) *httptest.ResponseRecorder {
+		csrfCookie, csrfToken := csrfPair()
+		req := newJSONRequest(method, path, body)
+		req.AddCookie(env.sessionCookie(t, userID))
+		req.AddCookie(csrfCookie)
+		req.Header.Set("X-CSRF-Token", csrfToken)
+		return env.do(t, req)
+	}
+	respondPage := func() string {
+		rr := call(ashwin.ID, http.MethodGet, fmt.Sprintf("/issues/%d/respond", issueID), "")
+		require.Equal(t, http.StatusOK, rr.Code)
+		return rr.Body.String()
+	}
+	together := func(userID int64, ids ...int64) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string][]int64{"question_ids": ids})
+		return call(userID, http.MethodPost, "/api/questions/answer-together", string(body))
+	}
+
+	// Two separate cards, a "Group questions" control, and a tick box on
+	// each hot-seat card — none on the circle-wide question.
+	page := respondPage()
+	assert.Contains(t, page, "data-group-start>Group questions</button>")
+	assert.Equal(t, 2, strings.Count(page, `data-group-pick value=`))
+	assert.Contains(t, page, fmt.Sprintf(`data-group-pick value="%d"`, q2))
+
+	// Only Ashwin can combine his questions.
+	assert.Equal(t, http.StatusNotFound, together(shrisha.ID, q1, q2).Code)
+	assert.Equal(t, http.StatusBadRequest, together(ashwin.ID, q1).Code, "a group needs two")
+
+	rr := together(ashwin.ID, q2, q1)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	assert.JSONEq(t, fmt.Sprintf(`{"primary_id":%d}`, q1), rr.Body.String())
+
+	// One card holding both prompts, offering to separate the second; with
+	// nothing left to group, no grouping control. A stale tab can't start a
+	// second answer for the joined question.
+	page = respondPage()
+	assert.Equal(t, 1, strings.Count(page, `class="pl-q pl-q--directed question-section"`))
+	assert.NotContains(t, page, "data-group-start>Group questions</button>")
+	assert.Contains(t, page, megha)
+	assert.Contains(t, page, fmt.Sprintf(`data-answer-separately="%d"`, q2))
+	assert.Equal(t, http.StatusConflict,
+		call(ashwin.ID, http.MethodPost, "/api/responses", fmt.Sprintf(`{"question_id":%d}`, q2)).Code)
+	assert.Equal(t, http.StatusConflict, together(ashwin.ID, q2, q1).Code, "already together: stale page")
+
+	// The combined card has somewhere to type even though the primary's
+	// answer row (created on submit, say) has no text block yet.
+	blank := call(ashwin.ID, http.MethodPost, "/api/responses", fmt.Sprintf(`{"question_id":%d}`, q1))
+	require.Equal(t, http.StatusCreated, blank.Code, blank.Body.String())
+	page = respondPage()
+	card := page[strings.Index(page, `class="pl-q pl-q--directed question-section"`):]
+	assert.Contains(t, card[:strings.Index(card, "pl-q-actions")], `class="response-text"`)
+
+	// Ashwin answers once.
+	var resp struct{ ID int64 }
+	require.NoError(t, json.Unmarshal(blank.Body.Bytes(), &resp))
+	text := "A dragon, and Megha baked a cake."
+	_, err = env.store.AutosaveResponse(ctx, resp.ID, 1, []store.ResponseBlock{{Type: "text", Content: &text}})
+	require.NoError(t, err)
+	require.NoError(t, env.store.SubmitResponse(ctx, resp.ID))
+
+	// The admin can't remove the joined question: it has been answered.
+	assert.Equal(t, http.StatusConflict,
+		call(admin.ID, http.MethodDelete, fmt.Sprintf("/api/questions/%d", q2), "").Code)
+
+	// Published: both questions once, stacked over the one answer.
+	require.NoError(t, env.store.PublishIssue(ctx, issueID))
+	rr = call(pari.ID, http.MethodGet, fmt.Sprintf("/issues/%d/%02d", opens.Year(), int(opens.Month())), "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Equal(t, 1, strings.Count(body, `class="pl-peoples-q-line">`+template.HTMLEscapeString(megha)))
+	assert.Equal(t, 1, strings.Count(body, `class="pl-peoples-q-line">`+template.HTMLEscapeString(toys)))
+	assert.Equal(t, 1, strings.Count(body, "A dragon, and Megha baked a cake."))
+	assert.Equal(t, 1, strings.Count(body, `class="pl-peoples-item`))
+	assert.NotContains(t, body, "Shrisha", "askers stay anonymous")
 }

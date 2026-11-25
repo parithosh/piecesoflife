@@ -200,6 +200,11 @@ func (s *Server) handleCreateResponse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, err := s.store.CreateResponse(r.Context(), user.ID, req.QuestionID)
+	if errors.Is(err, store.ErrAnsweredTogether) {
+		writeError(w, http.StatusConflict, "answered_together",
+			"This question is now answered together with another — reload the page")
+		return
+	}
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "Failed to create response",
 			slog.Int64("user_id", user.ID),
@@ -1432,4 +1437,73 @@ func validateAvatarURL(raw string, devMode bool) (string, bool) {
 	}
 
 	return "", false
+}
+
+// handleAnswerTogether groups several of the caller's hot-seat questions so
+// one answer covers them all. The request names the cards the member ticked,
+// each by the question it showed on top; any other current grouping is a
+// stale page (409).
+// POST /api/questions/answer-together  {"question_ids": [<id>, <id>, …]}
+func (s *Server) handleAnswerTogether(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		QuestionIDs []int64 `json:"question_ids"`
+	}
+	if err := readJSON(r, &req); err != nil || len(req.QuestionIDs) < 2 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Tick at least two questions to group")
+		return
+	}
+
+	primary, err := s.store.AnswerTogether(r.Context(),
+		currentGroupID(r.Context()), UserFromContext(r.Context()).ID, req.QuestionIDs)
+	if err != nil {
+		s.writeAnswerTogetherError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int64{"primary_id": primary})
+}
+
+// handleAnswerSeparately detaches a hot-seat question from the primary the
+// member's page showed it under. The shared answer stays with the primary.
+// POST /api/questions/{id}/answer-separately  {"from": <primary id>}
+func (s *Server) handleAnswerSeparately(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.parseIDParam(w, r, "id", "question ID")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		From int64 `json:"from"`
+	}
+	if err := readJSON(r, &req); err != nil || req.From == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Say which question it is answered with")
+		return
+	}
+
+	if err := s.store.AnswerSeparately(r.Context(),
+		currentGroupID(r.Context()), UserFromContext(r.Context()).ID, id, req.From); err != nil {
+		s.writeAnswerTogetherError(w, r, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) writeAnswerTogetherError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, store.ErrQuestionNotYours):
+		writeError(w, http.StatusNotFound, "not_found", "Question not found")
+	case errors.Is(err, store.ErrNotCollecting):
+		writeError(w, http.StatusConflict, "not_collecting", "This issue is not accepting responses")
+	case errors.Is(err, store.ErrStaleGrouping):
+		writeError(w, http.StatusConflict, "stale",
+			"These questions changed since this page loaded — reload the page")
+	case errors.Is(err, store.ErrBothAnswered):
+		writeError(w, http.StatusUnprocessableEntity, "both_answered",
+			"You've written in more than one of these. Keep one answer, empty the others, then save the group.")
+	default:
+		s.logger.ErrorContext(r.Context(), "Failed to change answer grouping",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusInternalServerError, "server_error", "Something went wrong — try again")
+	}
 }

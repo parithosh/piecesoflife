@@ -50,6 +50,10 @@
       {{$answer := index $.Answers .ID}}
       <section class="pl-msub-q">
         <h3 class="pl-msub-q-title">{{.Text}}</h3>
+        {{range index $.JoinedQuestions .ID}}
+        <h3 class="pl-msub-q-title pl-msub-q-title--joined">{{.Text}}</h3>
+        {{end}}
+        {{if index $.JoinedQuestions .ID}}<p class="pl-msub-joined-note">Answered together</p>{{end}}
 
         {{if not $answer.Response.ID}}
           <p class="pl-msub-empty">No answer yet.</p>

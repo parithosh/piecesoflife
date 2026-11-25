@@ -9,16 +9,19 @@ import (
 
 // Question represents a question assigned to an issue.
 type Question struct {
-	ID             int64     `json:"id"`
-	IssueID        int64     `json:"issue_id"`
-	Text           string    `json:"text"`
-	Category       *string   `json:"category"`
-	Source         string    `json:"source"`
-	SubmittedBy    *int64    `json:"submitted_by"`
-	TargetUserID   *int64    `json:"target_user_id,omitempty"`
-	TargetUserName *string   `json:"target_user_name,omitempty"`
-	SortOrder      int       `json:"sort_order"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             int64   `json:"id"`
+	IssueID        int64   `json:"issue_id"`
+	Text           string  `json:"text"`
+	Category       *string `json:"category"`
+	Source         string  `json:"source"`
+	SubmittedBy    *int64  `json:"submitted_by"`
+	TargetUserID   *int64  `json:"target_user_id,omitempty"`
+	TargetUserName *string `json:"target_user_name,omitempty"`
+	// AnsweredWith is set on a hot-seat question its member answers
+	// together with another one (the primary, which holds the answer).
+	AnsweredWith *int64    `json:"answered_with,omitempty"`
+	SortOrder    int       `json:"sort_order"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // QuestionBank represents a pre-generated question in the bank.
@@ -63,13 +66,13 @@ func (s *Store) GetQuestionByID(
 
 	err := s.read.QueryRowContext(ctx,
 		`SELECT q.id, q.issue_id, q.text, q.category, q.source,
-		        q.submitted_by, q.target_user_id, tu.name,
+		        q.submitted_by, q.target_user_id, tu.name, q.answered_with,
 		        q.sort_order, q.created_at
 		 FROM questions q
 		 LEFT JOIN users tu ON tu.id = q.target_user_id
 		 WHERE q.id = ?`, id,
 	).Scan(&q.ID, &q.IssueID, &q.Text, &q.Category,
-		&q.Source, &q.SubmittedBy, &q.TargetUserID, &q.TargetUserName,
+		&q.Source, &q.SubmittedBy, &q.TargetUserID, &q.TargetUserName, &q.AnsweredWith,
 		&q.SortOrder, &q.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting question %d: %w", id, err)
@@ -84,7 +87,7 @@ func (s *Store) ListQuestionsByIssue(
 ) ([]Question, error) {
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT q.id, q.issue_id, q.text, q.category, q.source,
-		        q.submitted_by, q.target_user_id, tu.name,
+		        q.submitted_by, q.target_user_id, tu.name, q.answered_with,
 		        q.sort_order, q.created_at
 		 FROM questions q
 		 LEFT JOIN users tu ON tu.id = q.target_user_id
@@ -102,7 +105,7 @@ func (s *Store) ListQuestionsByIssue(
 		var q Question
 
 		err := rows.Scan(&q.ID, &q.IssueID, &q.Text, &q.Category,
-			&q.Source, &q.SubmittedBy, &q.TargetUserID, &q.TargetUserName,
+			&q.Source, &q.SubmittedBy, &q.TargetUserID, &q.TargetUserName, &q.AnsweredWith,
 			&q.SortOrder, &q.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scanning question: %w", err)
@@ -208,13 +211,26 @@ func (s *Store) ReorderQuestions(
 	return nil
 }
 
-// DeleteQuestion removes a question by ID.
+// ErrQuestionAnswered is returned by DeleteQuestion for a question someone
+// has answered, directly or through the question it is answered together
+// with: those are reworded, never removed.
+var ErrQuestionAnswered = errors.New("question has answers")
+
+// DeleteQuestion removes an unanswered question. The answered check is part
+// of the delete, so an answer saved concurrently can't be orphaned.
 func (s *Store) DeleteQuestion(ctx context.Context, id int64) error {
-	_, err := s.write.ExecContext(ctx,
-		"DELETE FROM questions WHERE id = ?", id,
+	result, err := s.write.ExecContext(ctx,
+		`DELETE FROM questions WHERE id = ? AND NOT EXISTS (
+		     SELECT 1 FROM responses r
+		     WHERE r.question_id = COALESCE(questions.answered_with, questions.id))`, id,
 	)
 	if err != nil {
 		return fmt.Errorf("deleting question %d: %w", id, err)
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("deleting question %d: %w", id, err)
+	} else if n == 0 {
+		return ErrQuestionAnswered
 	}
 
 	return nil
@@ -376,15 +392,16 @@ func (s *Store) DeleteBankQuestion(ctx context.Context, groupID, id int64) error
 
 // CountResponsesByQuestion returns, for each question of an issue, how many
 // response rows exist (drafts included — a draft goes just as stale as a
-// submitted answer if the question changes underneath it). Questions with no
-// responses are present with a zero count.
+// submitted answer if the question changes underneath it). A question
+// answered together with another counts its primary's responses. Questions
+// with no responses are present with a zero count.
 func (s *Store) CountResponsesByQuestion(
 	ctx context.Context, issueID int64,
 ) (map[int64]int, error) {
 	rows, err := s.read.QueryContext(ctx,
 		`SELECT q.id, COUNT(r.id)
 		 FROM questions q
-		 LEFT JOIN responses r ON r.question_id = q.id
+		 LEFT JOIN responses r ON r.question_id = COALESCE(q.answered_with, q.id)
 		 WHERE q.issue_id = ?
 		 GROUP BY q.id`,
 		issueID,

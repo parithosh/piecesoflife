@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -67,24 +68,52 @@ type MemberProgress struct {
 	Responded bool        `json:"responded"`
 }
 
+// newShareToken returns an unguessable token for a response's memento URL.
+func newShareToken() (string, error) {
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", fmt.Errorf("generating share token: %w", err)
+	}
+
+	return hex.EncodeToString(tokenBytes), nil
+}
+
+// ErrAnsweredTogether is returned by CreateResponse for a question its
+// member answers together with another: the answer belongs to the primary.
+var ErrAnsweredTogether = errors.New("question is answered together with another")
+
 // CreateResponse inserts a new draft response and returns its ID.
 func (s *Store) CreateResponse(
 	ctx context.Context, userID, questionID int64,
 ) (int64, error) {
-	tokenBytes := make([]byte, 16)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return 0, fmt.Errorf("generating share token: %w", err)
+	shareToken, err := newShareToken()
+	if err != nil {
+		return 0, err
 	}
 
-	shareToken := hex.EncodeToString(tokenBytes)
-
+	// The joined check is part of the insert, so a question joined by a
+	// concurrent request can never gain a second answer.
 	result, err := s.write.ExecContext(ctx,
 		`INSERT INTO responses (user_id, question_id, share_token)
-		 VALUES (?, ?, ?)`,
-		userID, questionID, shareToken,
+		 SELECT ?, id, ? FROM questions WHERE id = ? AND answered_with IS NULL`,
+		userID, shareToken, questionID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("creating response: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return 0, fmt.Errorf("creating response: %w", err)
+	} else if n == 0 {
+		var exists bool
+		if err := s.write.QueryRowContext(ctx,
+			"SELECT EXISTS (SELECT 1 FROM questions WHERE id = ?)", questionID,
+		).Scan(&exists); err != nil {
+			return 0, fmt.Errorf("creating response: %w", err)
+		}
+		if !exists {
+			return 0, fmt.Errorf("creating response: question %d: %w", questionID, sql.ErrNoRows)
+		}
+		return 0, ErrAnsweredTogether
 	}
 
 	id, err := result.LastInsertId()
@@ -699,4 +728,30 @@ func (s *Store) ReorderBlocks(
 	}
 
 	return nil
+}
+
+// HasAnswerContent reports whether a response's blocks hold anything a reader
+// would see — non-empty text, media, or a link. The one definition of an
+// answered prompt: the respond ledger, the published hot seat, and
+// AnswerTogether all use it.
+func HasAnswerContent(blocks []ResponseBlock) bool {
+	for i := range blocks {
+		b := blocks[i]
+		switch b.Type {
+		case "text":
+			if b.Content != nil && strings.TrimSpace(*b.Content) != "" {
+				return true
+			}
+		case "photo", "audio", "video":
+			if b.FilePath != nil && *b.FilePath != "" {
+				return true
+			}
+		case "link":
+			if b.LinkURL != nil && *b.LinkURL != "" {
+				return true
+			}
+		}
+	}
+
+	return false
 }

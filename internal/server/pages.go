@@ -90,8 +90,10 @@ type IssuePageData struct {
 	DirectedIdx             int
 	DumpIdx                 int
 	// DirectedQuestions are questions aimed at a single member (@mentioned),
-	// aggregated into "The hot seat" spread below the notebooks.
+	// aggregated into "The hot seat" spread below the notebooks. Only roots:
+	// JoinedQuestions holds the ones answered together with each.
 	DirectedQuestions []store.Question
+	JoinedQuestions   map[int64][]store.Question
 	// NextIssue is the pre-created upcoming round (nil when none). Members
 	// can send it question suggestions until it opens at NextIssueOpens.
 	NextIssue      *store.Issue
@@ -104,9 +106,13 @@ type RespondPageData struct {
 	PageData
 	Issue             store.Issue
 	Questions         []store.Question
-	DirectedQuestions []store.Question
-	PromptCount       int
-	Responses         map[int64]*store.ResponseWithBlocks
+	DirectedQuestions []store.Question // roots; see JoinedQuestions
+	// JoinedQuestions maps a hot-seat question to the ones its member
+	// answers together with it, shown as extra prompts on its card.
+	JoinedQuestions map[int64][]store.Question
+	HotSeatCount    int // hot-seat questions, counting joined ones
+	PromptCount     int
+	Responses       map[int64]*store.ResponseWithBlocks
 	// Progress powers the "in this round" ledger; may be nil if it could
 	// not be loaded. Answered/DaysLeft drive the ledger's segmented bar and
 	// closing-soon copy.
@@ -144,10 +150,13 @@ type ProfilePageData struct {
 type MementoPageData struct {
 	PageData
 
-	Response  store.Response
-	Blocks    []store.ResponseBlock
-	Author    store.User
-	Question  store.Question
+	Response store.Response
+	Blocks   []store.ResponseBlock
+	Author   store.User
+	Question store.Question
+	// Joined are the questions answered together with Question, stacked
+	// under it.
+	Joined    []store.Question
 	Issue     store.Issue
 	Canonical string
 
@@ -222,9 +231,10 @@ func (s *Server) handleIssueArchive(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Count answer slots: questions answered together count once.
 		visibleCount := 0
 		for _, q := range questions {
-			if questionVisibleToMember(q, user.ID) {
+			if questionVisibleToMember(q, user.ID) && q.AnsweredWith == nil {
 				visibleCount++
 			}
 		}
@@ -508,16 +518,21 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 
 	// Partition circle-wide questions from directed (@mentioned) questions so
 	// directed Q&As aggregate into "The hot seat" spread below Ramble
-	// rather than occupying solo single-answer pages. Only answered directed
-	// questions are published so nobody is called out for skipping a round.
+	// rather than occupying solo single-answer pages. Only directed
+	// questions answered with some content are published, so nobody is
+	// called out for skipping one (Submit creates blank rows for untouched
+	// cards). Questions answered together are published with their primary.
 	answeredQuestionIDs := make(map[int64]bool, len(responses))
 	for i := range responses {
-		answeredQuestionIDs[responses[i].Response.QuestionID] = true
+		if store.HasAnswerContent(responses[i].Blocks) {
+			answeredQuestionIDs[responses[i].Response.QuestionID] = true
+		}
 	}
 
+	directedRoots, joinedQuestions := groupAnsweredTogether(questions)
 	sharedQuestions := make([]store.Question, 0, len(questions))
 	directedQuestions := make([]store.Question, 0)
-	for _, q := range questions {
+	for _, q := range directedRoots {
 		if q.TargetUserID != nil {
 			if answeredQuestionIDs[q.ID] {
 				directedQuestions = append(directedQuestions, q)
@@ -584,6 +599,7 @@ func (s *Server) handleIssuePage(w http.ResponseWriter, r *http.Request) {
 		Issue:                   *targetIssue,
 		Questions:               sharedQuestions,
 		DirectedQuestions:       directedQuestions,
+		JoinedQuestions:         joinedQuestions,
 		Responses:               responses,
 		CommentCounts:           commentCounts,
 		PeopleCount:             len(people),
@@ -643,14 +659,15 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sharedQuestions := make([]store.Question, 0, len(allQuestions))
-	directedQuestions := make([]store.Question, 0)
+	mine := make([]store.Question, 0)
 	for _, q := range allQuestions {
 		if q.TargetUserID == nil {
 			sharedQuestions = append(sharedQuestions, q)
 		} else if *q.TargetUserID == user.ID {
-			directedQuestions = append(directedQuestions, q)
+			mine = append(mine, q)
 		}
 	}
+	directedQuestions, joinedQuestions := groupAnsweredTogether(mine)
 
 	// Load the current user's responses for this issue.
 	userResponses, err := s.store.ListUserResponsesForIssue(ctx, user.ID, issueID)
@@ -689,7 +706,7 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 			User:     *user,
 		}
 
-		if hasAnswerContent(blocks) {
+		if store.HasAnswerContent(blocks) {
 			answered++
 		}
 	}
@@ -723,6 +740,8 @@ func (s *Server) handleRespondPage(w http.ResponseWriter, r *http.Request) {
 		Issue:             *issue,
 		Questions:         sharedQuestions,
 		DirectedQuestions: directedQuestions,
+		JoinedQuestions:   joinedQuestions,
+		HotSeatCount:      len(mine),
 		PromptCount:       len(sharedQuestions) + len(directedQuestions),
 		Responses:         responseMap,
 		Progress:          progress,
@@ -1235,7 +1254,17 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ogTitle := fmt.Sprintf("%s on: %s", author.Name, question.Text)
+	// Questions answered together with this one read as one prompt.
+	var joined []store.Question
+	if siblings, qErr := s.store.ListQuestionsByIssue(ctx, question.IssueID); qErr == nil {
+		joined = groupJoinedWith(siblings, question.ID)
+	}
+	promptText := question.Text
+	for _, q := range joined {
+		promptText += " · " + q.Text
+	}
+
+	ogTitle := fmt.Sprintf("%s on: %s", author.Name, promptText)
 	ogDesc := summarizeBlocks(blocks, 220)
 
 	var ogImage string
@@ -1261,6 +1290,7 @@ func (s *Server) handleMemento(w http.ResponseWriter, r *http.Request) {
 		Blocks:        blocks,
 		Author:        *author,
 		Question:      *question,
+		Joined:        joined,
 		Issue:         *issue,
 		Canonical:     fmt.Sprintf("%s/m/%s", s.config.BaseURL, resp.ShareToken),
 		OGTitle:       ogTitle,
@@ -1658,29 +1688,4 @@ func (s *Server) mementoFileURL(shareToken, p string) string {
 	}
 
 	return fmt.Sprintf("/m/%s/file/%s", shareToken, strings.ReplaceAll(rel, sep, "/"))
-}
-
-// hasAnswerContent reports whether a response's blocks hold anything a reader
-// would see — non-empty text, media, or a link. Used to count meaningfully
-// answered prompts for the respond ledger's progress bar.
-func hasAnswerContent(blocks []store.ResponseBlock) bool {
-	for i := range blocks {
-		b := blocks[i]
-		switch b.Type {
-		case "text":
-			if b.Content != nil && strings.TrimSpace(*b.Content) != "" {
-				return true
-			}
-		case "photo", "audio", "video":
-			if b.FilePath != nil && *b.FilePath != "" {
-				return true
-			}
-		case "link":
-			if b.LinkURL != nil && *b.LinkURL != "" {
-				return true
-			}
-		}
-	}
-
-	return false
 }

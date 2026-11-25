@@ -581,10 +581,14 @@ function attachDump() {
         }
     });
 
-    grid.addEventListener('change', async ev => {
+    grid.addEventListener('change', ev => {
         const input = ev.target.closest('[data-dump-caption]');
         if (!input) return;
+        trackCaptionSave(input);
+    });
+    saveCaption = saveDumpCaption;
 
+    async function saveDumpCaption(input) {
         const caption = input.value.trim();
         input.disabled = true;
         try {
@@ -600,12 +604,45 @@ function attachDump() {
             // Render what the server stored, not what was typed — it trims.
             input.value = data.item?.caption || '';
             setStatus(input.value ? 'Caption saved ✓' : 'Caption cleared');
+            return true;
         } catch (err) {
             setStatus(err.message, true);
+            return false;
         } finally {
             input.disabled = false;
         }
+    }
+}
+
+// Dump caption saves (they start on blur): in flight, and captions whose
+// last save failed, so actions that reload the page can wait for them and
+// retry the failed ones (flushDumpCaptions).
+const captionSaves = new Set();
+const failedCaptions = new Set();
+let saveCaption = null; // set by attachDump
+
+function trackCaptionSave(input) {
+    const value = input.value;
+    const save = saveCaption(input).then(ok => {
+        if (ok) input.dataset.savedCaption = value.trim();
+        if (ok) failedCaptions.delete(input);
+        else failedCaptions.add(input);
+        return ok;
     });
+    captionSaves.add(save);
+    save.finally(() => captionSaves.delete(save));
+    return save;
+}
+
+// Resolves true once every caption is saved, including one still being
+// typed (focus may never leave the field, so its change event never fires).
+async function flushDumpCaptions() {
+    await Promise.all([...captionSaves]);
+    const unsaved = [...document.querySelectorAll('[data-dump-caption]')].filter(input =>
+        failedCaptions.has(input) ||
+        input.value.trim() !== (input.dataset.savedCaption ?? input.defaultValue.trim()));
+    await Promise.all(unsaved.map(trackCaptionSave));
+    return [...failedCaptions].every(i => !i.isConnected);
 }
 
 attachCoverEditors();
@@ -619,6 +656,7 @@ window.__polEditor = {
     attachCoverEditors,
     flushCoverEditors,
     setCoverEditorsLocked,
+    flushDumpCaptions,
 };
 
 // Run once on load.

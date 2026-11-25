@@ -319,12 +319,14 @@
 
             <div class="pl-peoples-list">
               {{range $dqIdx, $dq := .DirectedQuestions}}
-              <section class="pl-peoples-item{{if eq $dqIdx 0}} is-first{{end}}" aria-label="{{if $dq.TargetUserName}}For {{$dq.TargetUserName}}: {{end}}{{$dq.Text}}">
+              {{$joined := index $.JoinedQuestions $dq.ID}}
+              <section class="pl-peoples-item{{if eq $dqIdx 0}} is-first{{end}}" aria-label="{{if $dq.TargetUserName}}For {{$dq.TargetUserName}}: {{end}}{{$dq.Text}}{{range $joined}} · {{.Text}}{{end}}">
                 <div class="pl-peoples-head">
                   {{if $dq.TargetUserName}}
                   <span class="pl-peoples-for">For <strong>{{$dq.TargetUserName}}</strong></span>
                   {{end}}
-                  <h3 class="pl-peoples-q">{{$dq.Text}}</h3>
+                  {{/* Questions answered together read as one prompt. */}}
+                  <h3 class="pl-peoples-q">{{if $joined}}<span class="pl-peoples-q-line">{{$dq.Text}}</span>{{range $joined}}<span class="pl-peoples-q-line">{{.Text}}</span>{{end}}{{else}}{{$dq.Text}}{{end}}</h3>
                 </div>
 
                 {{$hasResp := false}}
